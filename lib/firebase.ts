@@ -1,5 +1,7 @@
-// Since we are replacing Firebase, we define a lightweight client-side persistent engine
-// that works completely offline in the browser, bypassing all filters, restrictions, and VPN requirements in Iran.
+// Server-synchronized persistent database client
+// Replaces Firebase Firestore with a robust offline-first sync engine.
+// Changes are instantly saved locally and synced in the background to the server-side JSON store.
+// Works seamlessly under any network constraints, VPNs, or filters in Iran.
 
 export const db = {};
 export const auth = {
@@ -20,7 +22,7 @@ export interface CollectionReference {
 
 export type AppReference = DocumentReference | CollectionReference;
 
-// Helper to normalize paths (remove leading/trailing slashes)
+// Helper to normalize paths
 function normalizePath(path: string): string {
   return path.replace(/^\/+|\/+$/g, '');
 }
@@ -38,31 +40,29 @@ export function doc(
   pathOrId: string, 
   id?: string
 ): DocumentReference {
-  let fullPath = '';
+  let fillPath = '';
   if (id !== undefined) {
-    // Called as doc(db, colPath, docId) or doc(colRef, docId)
     const parentPath = (parent && parent.path) ? parent.path : '';
     if (parentPath) {
-      fullPath = `${normalizePath(parentPath)}/${normalizePath(pathOrId)}/${normalizePath(id)}`;
+      fillPath = `${normalizePath(parentPath)}/${normalizePath(pathOrId)}/${normalizePath(id)}`;
     } else {
-      fullPath = `${normalizePath(pathOrId)}/${normalizePath(id)}`;
+      fillPath = `${normalizePath(pathOrId)}/${normalizePath(id)}`;
     }
   } else {
-    // Called as doc(db, docPath)
     const parentPath = parent && parent.path ? parent.path : '';
     if (parentPath) {
-      fullPath = `${normalizePath(parentPath)}/${normalizePath(pathOrId)}`;
+      fillPath = `${normalizePath(parentPath)}/${normalizePath(pathOrId)}`;
     } else {
-      fullPath = normalizePath(pathOrId);
+      fillPath = normalizePath(pathOrId);
     }
   }
   
-  const parts = fullPath.split('/');
+  const parts = fillPath.split('/');
   const docId = parts[parts.length - 1] || '';
   
   return {
     type: 'document',
-    path: fullPath,
+    path: fillPath,
     id: docId
   };
 }
@@ -85,7 +85,6 @@ function saveStore(store: Record<string, any>) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(store));
-    // Trigger storage event manually for the same tab listeners
     window.dispatchEvent(new Event('storage'));
   } catch (e) {
     console.error('Failed to write to local storage:', e);
@@ -103,19 +102,16 @@ let activeListeners: SnapshotListener[] = [];
 
 // Helper to trigger listeners for a list of modified paths
 function triggerListeners(changedPaths: string[]) {
-  // Trigger asynchronously to mirror real Firestore behavior and prevent synchronous recursion
   setTimeout(() => {
     activeListeners.forEach((listener) => {
       const ref = listener.ref;
       if (ref.type === 'document') {
-        // Trigger if this document's path is one of the changed paths
         if (changedPaths.includes(ref.path)) {
           const store = getStore();
           const data = store[ref.path];
           listener.callback(new DocSnapshot(ref.id, data));
         }
       } else if (ref.type === 'collection') {
-        // Trigger if any changed path belongs to this collection
         const isCollectionAffected = changedPaths.some((cp) => {
           return cp.startsWith(ref.path + '/') && cp.substring(ref.path.length + 1).indexOf('/') === -1;
         });
@@ -165,6 +161,16 @@ export class QuerySnapshot {
 
 // Retrieve single document
 export async function getDoc(docRef: DocumentReference): Promise<DocSnapshot> {
+  try {
+    const res = await fetch('/api/db');
+    if (res.ok) {
+      const serverStore = await res.json();
+      saveStore(serverStore);
+    }
+  } catch (err) {
+    console.error('Failed to refresh store in getDoc:', err);
+  }
+  
   const store = getStore();
   const data = store[docRef.path];
   return new DocSnapshot(docRef.id, data);
@@ -176,6 +182,7 @@ export async function setDoc(
   data: any, 
   options?: { merge?: boolean }
 ): Promise<void> {
+  // 1. Instantly update locally for outstanding response speed
   const store = getStore();
   const existing = store[docRef.path] || {};
   
@@ -187,14 +194,46 @@ export async function setDoc(
   
   saveStore(store);
   triggerListeners([docRef.path]);
+
+  // 2. Sync asynchronously to the central server
+  try {
+    await fetch('/api/db', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'set',
+        path: docRef.path,
+        data,
+        merge: options?.merge
+      })
+    });
+  } catch (err) {
+    console.error('Failed to sync setDoc to server:', err);
+  }
 }
 
 // Delete document
 export async function deleteDoc(docRef: DocumentReference): Promise<void> {
+  // 1. Instantly delete locally
   const store = getStore();
   delete store[docRef.path];
+  
   saveStore(store);
   triggerListeners([docRef.path]);
+
+  // 2. Sync to the central server
+  try {
+    await fetch('/api/db', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'delete',
+        path: docRef.path
+      })
+    });
+  } catch (err) {
+    console.error('Failed to sync deleteDoc to server:', err);
+  }
 }
 
 // Batch writes simulation
@@ -222,8 +261,16 @@ export function writeBatch(dbInstance?: any): WriteBatch {
     async commit() {
       const store = getStore();
       const changedPaths: string[] = [];
+      const operationsForServer: any[] = [];
       
       operations.forEach((op) => {
+        operationsForServer.push({
+          type: op.type,
+          path: op.ref.path,
+          data: op.data,
+          merge: op.options?.merge
+        });
+
         if (op.type === 'set') {
           const existing = store[op.ref.path] || {};
           if (op.options?.merge) {
@@ -242,10 +289,71 @@ export function writeBatch(dbInstance?: any): WriteBatch {
         }
       });
       
+      // 1. Save locally
       saveStore(store);
       triggerListeners(changedPaths);
+
+      // 2. Save on server
+      try {
+        await fetch('/api/db', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'batch',
+            operations: operationsForServer
+          })
+        });
+      } catch (err) {
+        console.error('Failed to sync writeBatch commit to server:', err);
+      }
     }
   };
+}
+
+// Periodic server-sync polling loop
+let pollingStarted = false;
+
+function startPolling() {
+  if (typeof window === 'undefined' || pollingStarted) return;
+  pollingStarted = true;
+
+  // Sync initially
+  syncWithServer();
+
+  // Poll every 3 seconds
+  setInterval(syncWithServer, 3000);
+}
+
+async function syncWithServer() {
+  try {
+    const res = await fetch('/api/db');
+    if (!res.ok) throw new Error('Failed to fetch store from server');
+    
+    const serverStore = await res.json();
+    const localStore = getStore();
+    const changedPaths: string[] = [];
+
+    // Find keys that are different or added on server
+    Object.keys(serverStore).forEach((key) => {
+      if (JSON.stringify(serverStore[key]) !== JSON.stringify(localStore[key])) {
+        changedPaths.push(key);
+      }
+    });
+
+    // Find keys that were deleted on server
+    Object.keys(localStore).forEach((key) => {
+      if (serverStore[key] === undefined) {
+        changedPaths.push(key);
+      }
+    });
+
+    if (changedPaths.length > 0) {
+      saveStore(serverStore);
+      triggerListeners(changedPaths);
+    }
+  } catch (err) {
+    console.error('Database sync error:', err);
+  }
 }
 
 // Listen to snapshot updates - TypeScript overloads
@@ -263,6 +371,9 @@ export function onSnapshot(
   ref: AppReference,
   callback: (snapshot: any) => void
 ): () => void {
+  // Start server polling loop lazily when snapshot listening begins
+  startPolling();
+
   const listenerId = Math.random().toString(36).substring(2, 9);
   
   const listener: SnapshotListener = {
@@ -273,9 +384,8 @@ export function onSnapshot(
   
   activeListeners.push(listener);
   
-  // Immediately execute the callback with the current state (async to simulate firestore)
+  // Immediately execute the callback with the current local state
   setTimeout(() => {
-    // Ensure the listener is still active before executing
     if (!activeListeners.some(l => l.id === listenerId)) return;
     
     const store = getStore();
@@ -297,10 +407,8 @@ export function onSnapshot(
 // Setup a global storage listener to support sync across different browser windows/tabs
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
-    // Only handle standard storage events for our key from other tabs to prevent circular recursion
     if (!e || e.key !== STORE_KEY) return;
     
-    // Defer execution to prevent synchronous call stack recursion
     setTimeout(() => {
       const store = getStore();
       activeListeners.forEach((listener) => {
