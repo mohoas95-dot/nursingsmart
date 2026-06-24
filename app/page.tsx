@@ -1317,38 +1317,6 @@ export default function Home() {
     reader.readAsText(file);
   };
 
-  // --- Reset/Restore Sepehr Personnel (Iranian Offline Storage Sync) ---
-  const handleRestoreSepehrPersonnel = () => {
-    try {
-      const raw = localStorage.getItem('hospital_scheduler_db');
-      const store = raw ? JSON.parse(raw) : {};
-      
-      // Delete all existing personnel and requests under root (which belongs to Sepehr)
-      Object.keys(store).forEach((key) => {
-        if (key.startsWith('personnel/') || key.startsWith('requests/')) {
-          delete store[key];
-        }
-      });
-      
-      // Add initial personnel
-      INITIAL_PERSONNEL.forEach((p, idx) => {
-        store[`personnel/${p.id}`] = { ...p, orderIndex: idx };
-      });
-      
-      // Add initial requests
-      INITIAL_REQUESTS.forEach((r) => {
-        store[`requests/${r.id}`] = r;
-      });
-      
-      localStorage.setItem('hospital_scheduler_db', JSON.stringify(store));
-      alert('تمامی اطلاعات پرسنل بخش سپهر (۱۶ نفر) به همراه درخواست‌های اولیه آن‌ها با موفقیت به سیستم ذخیره‌سازی ایرانی (آفلاین بدون فیلتر) منتقل و ذخیره شد!');
-      window.location.reload();
-    } catch (err) {
-      console.error(err);
-      alert('خطا در انتقال اطلاعات پرسنل به سیستم ذخیره‌سازی محلی.');
-    }
-  };
-
   // --- Holiday Management ---
   const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1714,14 +1682,14 @@ export default function Home() {
           <div className="mb-6 flex flex-col items-center">
             <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
               <img 
-                src="/logo.png" 
+                src="/logo.svg" 
                 alt="بیمارستان بعثت نهاجا" 
                 className="w-full h-full object-contain"
                 onError={(e) => {
                   const imgEl = e.currentTarget;
-                  if (imgEl.src.endsWith('/logo.png')) {
-                    imgEl.src = '/logo.svg';
-                  } else if (imgEl.src.endsWith('/logo.svg')) {
+                  if (imgEl.src.endsWith('/logo.svg')) {
+                    imgEl.src = '/logo.png';
+                  } else if (imgEl.src.endsWith('/logo.png')) {
                     imgEl.src = '/logo.jpg';
                   } else if (imgEl.src.endsWith('/logo.jpg')) {
                     imgEl.src = '/logo.jpeg';
@@ -4561,29 +4529,6 @@ export default function Home() {
                       />
                     </label>
                   </div>
-                </div>
-
-                {/* --- SEPEHR PERSONNEL RESTORE SECTION --- */}
-                <div className="border-t border-slate-100 pt-6 mt-6">
-                  <div className="flex items-center gap-3 mb-4">
-                    <span className="bg-emerald-50 text-emerald-600 p-2.5 rounded-xl">
-                      <UserCheck className="w-5 h-5" />
-                    </span>
-                    <div>
-                      <h4 className="text-sm font-black text-slate-900">انتقال همگی پرسنل بخش سپهر به سیستم ذخیره‌سازی محلی (ایرانی)</h4>
-                      <p className="text-[10px] text-slate-400 font-bold mt-0.5">
-                        بارگذاری مستقیم و کامل مشخصات تمام ۱۶ نفر پرسنل اصلی بخش سپهر (حدیثه ماهپروی، سید محمد حسین عاشق، رضا کاظمی و سایر همکاران) به همراه تمامی درخواست‌های شیفت اولیه آنها بر روی دیتابیس بدون نیاز به اینترنت و بدون فیلتر
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleRestoreSepehrPersonnel}
-                    className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold text-xs py-3.5 px-4 rounded-xl transition-all shadow-xs cursor-pointer"
-                  >
-                    <RefreshCw className="w-4 h-4" /> بازنشانی و بارگذاری کامل اطلاعات پرسنل بخش سپهر
-                  </button>
                 </div>
 
               </div>
