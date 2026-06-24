@@ -138,7 +138,6 @@ export default function Home() {
   const [requests, setRequests] = useState<ShiftRequest[]>([]);
   const [isPersonnelLoaded, setIsPersonnelLoaded] = useState<boolean>(false);
   const [isRequestsLoaded, setIsRequestsLoaded] = useState<boolean>(false);
-  const [isSettingsLoaded, setIsSettingsLoaded] = useState<boolean>(false);
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
   const [dbChecked, setDbChecked] = useState<boolean>(false);
 
@@ -302,7 +301,6 @@ export default function Home() {
     setTimeout(() => {
       setIsPersonnelLoaded(false);
       setIsRequestsLoaded(false);
-      setIsSettingsLoaded(false);
       setSchedule(null);
       setPersonnel([]);
       setRequests([]);
@@ -311,61 +309,45 @@ export default function Home() {
 
     // Listen to personnel (ordered by orderIndex)
     const unsubPersonnel = onSnapshot(getDeptCollectionRef('personnel', selectedDepartmentId), (snapshot) => {
-      try {
-        const list: Personnel[] = [];
-        snapshot.forEach(docSnap => {
-          list.push(docSnap.data() as Personnel);
-        });
-        list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-        setPersonnel(list);
-        setIsPersonnelLoaded(true);
-      } catch (err) {
-        console.error("Error in unsubPersonnel snapshot listener:", err);
-      }
+      const list: Personnel[] = [];
+      snapshot.forEach(docSnap => {
+        list.push(docSnap.data() as Personnel);
+      });
+      list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+      setPersonnel(list);
+      setIsPersonnelLoaded(true);
     });
 
     // Listen to requests
     const unsubRequests = onSnapshot(getDeptCollectionRef('requests', selectedDepartmentId), (snapshot) => {
-      try {
-        const list: ShiftRequest[] = [];
-        snapshot.forEach(docSnap => {
-          list.push(docSnap.data() as ShiftRequest);
-        });
-        setRequests(list);
-        setIsRequestsLoaded(true);
-      } catch (err) {
-        console.error("Error in unsubRequests snapshot listener:", err);
-      }
+      const list: ShiftRequest[] = [];
+      snapshot.forEach(docSnap => {
+        list.push(docSnap.data() as ShiftRequest);
+      });
+      setRequests(list);
+      setIsRequestsLoaded(true);
     });
 
     // Listen to settings
     const unsubSettings = onSnapshot(getDeptDocRef('settings', 'system', selectedDepartmentId), (docSnap) => {
-      try {
-        if (docSnap.exists()) {
-          const data = docSnap.data() as SystemSettings;
-          if (data && data.dutyHours && data.dutyHours.conscript === 200) {
-            const updated = {
-              ...data,
-              dutyHours: {
-                ...data.dutyHours,
-                conscript: 180
-              }
-            };
-            setSettings(updated);
-            setDoc(getDeptDocRef('settings', 'system', selectedDepartmentId), updated).catch(err => console.error("Error updating conscript hours:", err));
-          } else if (data) {
-            setSettings(data);
-          } else {
-            setSettings(INITIAL_SETTINGS);
-          }
+      if (docSnap.exists()) {
+        const data = docSnap.data() as SystemSettings;
+        if (data.dutyHours && data.dutyHours.conscript === 200) {
+          const updated = {
+            ...data,
+            dutyHours: {
+              ...data.dutyHours,
+              conscript: 180
+            }
+          };
+          setSettings(updated);
+          setDoc(getDeptDocRef('settings', 'system', selectedDepartmentId), updated).catch(err => console.error("Error updating conscript hours:", err));
         } else {
-          // Fallback for new departments if settings doc doesn't exist yet
-          setSettings(INITIAL_SETTINGS);
+          setSettings(data);
         }
-        setIsSettingsLoaded(true);
-      } catch (err) {
-        console.error("Error in unsubSettings snapshot listener:", err);
-        setIsSettingsLoaded(true); // set true anyway so we don't block render
+      } else {
+        // Fallback for new departments if settings doc doesn't exist yet
+        setSettings(INITIAL_SETTINGS);
       }
     });
 
@@ -401,7 +383,7 @@ export default function Home() {
   // Synchronized Firestore loading and real-time syncing of month-specific collections
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!isPersonnelLoaded || !isRequestsLoaded || !isSettingsLoaded || !isMonthLoaded || !dbChecked) return;
+    if (!isPersonnelLoaded || !isRequestsLoaded || !isMonthLoaded || !dbChecked) return;
 
     // Listen to holidays
     const unsubHolidays = onSnapshot(getDeptDocRef('holidays', `${currentYear}_${currentMonth}`, selectedDepartmentId), (docSnap) => {
@@ -494,7 +476,7 @@ export default function Home() {
       unsubFD();
       unsubSched();
     };
-  }, [currentYear, currentMonth, isPersonnelLoaded, isRequestsLoaded, isSettingsLoaded, isMonthLoaded, dbChecked, selectedDepartmentId]);
+  }, [currentYear, currentMonth, isPersonnelLoaded, isRequestsLoaded, isMonthLoaded, dbChecked, selectedDepartmentId]);
 
   const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
   const [newUsernameValue, setNewUsernameValue] = useState<string>('');
@@ -771,141 +753,136 @@ export default function Home() {
 
   // --- Authentication Handlers ---
   const handleLogin = async (roleType: 'admin' | 'headnurse' | 'personnel') => {
-    try {
-      setAuthError('');
-      if (roleType === 'admin') {
-        const uInput = toEnglishDigits(headnurseUsernameInput.trim());
-        const pInput = toEnglishDigits(headnursePasswordInput.trim());
-        if (uInput === 'admin' && pInput === 'admin') {
-          setRole('admin');
-          setSelectedPersonnelUser(null);
-          setActiveTab('schedule');
-          setHeadnurseUsernameInput('');
-          setHeadnursePasswordInput('');
-        } else {
-          setAuthError('اطلاعات ورود مدیر سیستم نادرست است.');
-        }
-      } else if (roleType === 'headnurse') {
-        const uInput = toEnglishDigits(headnurseUsernameInput.trim());
-        const pInput = toEnglishDigits(headnursePasswordInput.trim());
-        if (uInput === 'admin' && pInput === 'admin') {
-          setRole('admin');
-          setSelectedPersonnelUser(null);
-          setActiveTab('schedule');
-          setHeadnurseUsernameInput('');
-          setHeadnursePasswordInput('');
-          return;
-        }
+    setAuthError('');
+    if (roleType === 'admin') {
+      const uInput = toEnglishDigits(headnurseUsernameInput.trim());
+      const pInput = toEnglishDigits(headnursePasswordInput.trim());
+      if (uInput === 'admin' && pInput === 'admin') {
+        setRole('admin');
+        setSelectedPersonnelUser(null);
+        setActiveTab('schedule');
+        setHeadnurseUsernameInput('');
+        setHeadnursePasswordInput('');
+      } else {
+        setAuthError('اطلاعات ورود مدیر سیستم نادرست است.');
+      }
+    } else if (roleType === 'headnurse') {
+      const uInput = toEnglishDigits(headnurseUsernameInput.trim());
+      const pInput = toEnglishDigits(headnursePasswordInput.trim());
+      if (uInput === 'admin' && pInput === 'admin') {
+        setRole('admin');
+        setSelectedPersonnelUser(null);
+        setActiveTab('schedule');
+        setHeadnurseUsernameInput('');
+        setHeadnursePasswordInput('');
+        return;
+      }
 
-        const matchedDept = departments.find(d => d.id === selectedDepartmentId);
-        if (matchedDept) {
-          const dbUser = toEnglishDigits(matchedDept.username || 'headnurse');
-          const dbPass = toEnglishDigits(matchedDept.password || '123456');
-          
-          // Dynamic "First Login" credential creation
-          if (dbUser === 'headnurse' && dbPass === '123456') {
-            if (!uInput || pInput.length < 4) {
-              setAuthError('برای اولین ورود سرپرستار، نام کاربری دلخواه و رمز عبور (حداقل ۴ کاراکتر) خود را در کادرها تایپ کنید تا ثبت گردد.');
-              return;
-            }
+      const matchedDept = departments.find(d => d.id === selectedDepartmentId);
+      if (matchedDept) {
+        const dbUser = toEnglishDigits(matchedDept.username || 'headnurse');
+        const dbPass = toEnglishDigits(matchedDept.password || '123456');
+        
+        // Dynamic "First Login" credential creation
+        if (dbUser === 'headnurse' && dbPass === '123456') {
+          if (!uInput || pInput.length < 4) {
+            setAuthError('برای اولین ورود سرپرستار، نام کاربری دلخواه و رمز عبور (حداقل ۴ کاراکتر) خود را در کادرها تایپ کنید تا ثبت گردد.');
+            return;
+          }
 
-            try {
-              const updatedDept = {
-                ...matchedDept,
+          try {
+            const updatedDept = {
+              ...matchedDept,
+              username: uInput,
+              password: pInput
+            };
+            await setDoc(doc(db, 'departments', selectedDepartmentId), updatedDept, { merge: true });
+            
+            if (selectedDepartmentId === 'sepehr') {
+              await setDoc(doc(db, 'settings', 'credentials'), {
                 username: uInput,
                 password: pInput
-              };
-              await setDoc(doc(db, 'departments', selectedDepartmentId), updatedDept, { merge: true });
-              
-              if (selectedDepartmentId === 'sepehr') {
-                await setDoc(doc(db, 'settings', 'credentials'), {
-                  username: uInput,
-                  password: pInput
-                });
-              }
-
-              setHeadnurseUsername(uInput);
-              setHeadnursePassword(pInput);
-              setRole('headnurse');
-              setSelectedPersonnelUser(null);
-              setActiveTab('schedule');
-              
-              // Set fields for profile update
-              setProfileUsernameInput(uInput);
-              setProfilePasswordInput(pInput);
-              setProfileDeptNameInput(matchedDept.name);
-
-              setHeadnurseUsernameInput('');
-              setHeadnursePasswordInput('');
-              alert(`نام کاربری و کلمه عبور سرپرستار این بخش در اولین ورود با موفقیت تنظیم و ذخیره شد!`);
-            } catch (e) {
-              console.error(e);
-              setAuthError('خطا در ثبت نهایی کلمات عبور سرپرستار.');
+              });
             }
-          } else {
-            // Normal login match
-            if (uInput === dbUser && pInput === dbPass) {
-              setRole('headnurse');
-              setSelectedPersonnelUser(null);
-              setActiveTab('schedule');
-              
-              // Set fields for profile update
-              setProfileUsernameInput(dbUser);
-              setProfilePasswordInput(dbPass);
-              setProfileDeptNameInput(matchedDept.name);
 
-              setHeadnurseUsernameInput('');
-              setHeadnursePasswordInput('');
-            } else {
-              setAuthError('نام کاربری یا رمز عبور سرپرستار این بخش نادرست است.');
-            }
+            setHeadnurseUsername(uInput);
+            setHeadnursePassword(pInput);
+            setRole('headnurse');
+            setSelectedPersonnelUser(null);
+            setActiveTab('schedule');
+            
+            // Set fields for profile update
+            setProfileUsernameInput(uInput);
+            setProfilePasswordInput(pInput);
+            setProfileDeptNameInput(matchedDept.name);
+
+            setHeadnurseUsernameInput('');
+            setHeadnursePasswordInput('');
+            alert(`نام کاربری و کلمه عبور سرپرستار این بخش در اولین ورود با موفقیت تنظیم و ذخیره شد!`);
+          } catch (e) {
+            console.error(e);
+            setAuthError('خطا در ثبت نهایی کلمات عبور سرپرستار.');
           }
         } else {
-          setAuthError('بخش انتخابی یافت نشد.');
+          // Normal login match
+          if (uInput === dbUser && pInput === dbPass) {
+            setRole('headnurse');
+            setSelectedPersonnelUser(null);
+            setActiveTab('schedule');
+            
+            // Set fields for profile update
+            setProfileUsernameInput(dbUser);
+            setProfilePasswordInput(dbPass);
+            setProfileDeptNameInput(matchedDept.name);
+
+            setHeadnurseUsernameInput('');
+            setHeadnursePasswordInput('');
+          } else {
+            setAuthError('نام کاربری یا رمز عبور سرپرستار این بخش نادرست است.');
+          }
         }
-      } else if (roleType === 'personnel') {
-        const fInput = personnelFirstNameInput.trim();
-        const lInput = personnelLastNameInput.trim();
-        const pInput = toEnglishDigits(personnelPasswordInput.trim());
-
-        if (!fInput || !lInput) {
-          setAuthError('لطفاً نام و نام خانوادگی خود را به عنوان کادر درمان وارد کنید.');
-          return;
-        }
-
-        // Default password is '1234'
-        const checkPass = pInput || '1234';
-
-        const pMatch = personnel.find(p => {
-          if (!p.active) return false;
-          
-          const matchFirst = p.firstName.trim() === fInput;
-          const matchLast = p.lastName.trim() === lInput;
-          
-          const expectedPass = toEnglishDigits(p.password ? p.password.trim() : '1234');
-          return matchFirst && matchLast && expectedPass === checkPass;
-        });
-
-        if (!pMatch) {
-          setAuthError('پرسنلی با این مشخصات یافت نشد. دقت کنید نام، نام خانوادگی به فارسی و رمز اولیه پیش‌فرض ۱۲۳۴ است.');
-          return;
-        }
-
-        setSelectedPersonnelUser(pMatch);
-        setRole('personnel');
-        setActiveTab('schedule');
-        
-        // Set fields for profile update
-        setProfileUsernameInput(pMatch.lastName);
-        setProfilePasswordInput(pMatch.password || '1234');
-        
-        setPersonnelFirstNameInput('');
-        setPersonnelLastNameInput('');
-        setPersonnelPasswordInput('');
+      } else {
+        setAuthError('بخش انتخابی یافت نشد.');
       }
-    } catch (err) {
-      console.error("Error during handleLogin:", err);
-      setAuthError('خطای غیرمنتظره‌ای در فرآیند ورود به سیستم رخ داده است. مجدداً تلاش کنید.');
+    } else if (roleType === 'personnel') {
+      const fInput = personnelFirstNameInput.trim();
+      const lInput = personnelLastNameInput.trim();
+      const pInput = toEnglishDigits(personnelPasswordInput.trim());
+
+      if (!fInput || !lInput) {
+        setAuthError('لطفاً نام و نام خانوادگی خود را به عنوان کادر درمان وارد کنید.');
+        return;
+      }
+
+      // Default password is '1234'
+      const checkPass = pInput || '1234';
+
+      const pMatch = personnel.find(p => {
+        if (!p.active) return false;
+        
+        const matchFirst = p.firstName.trim() === fInput;
+        const matchLast = p.lastName.trim() === lInput;
+        
+        const expectedPass = toEnglishDigits(p.password ? p.password.trim() : '1234');
+        return matchFirst && matchLast && expectedPass === checkPass;
+      });
+
+      if (!pMatch) {
+        setAuthError('پرسنلی با این مشخصات یافت نشد. دقت کنید نام، نام خانوادگی به فارسی و رمز اولیه پیش‌فرض ۱۲۳۴ است.');
+        return;
+      }
+
+      setSelectedPersonnelUser(pMatch);
+      setRole('personnel');
+      setActiveTab('schedule');
+      
+      // Set fields for profile update
+      setProfileUsernameInput(pMatch.lastName);
+      setProfilePasswordInput(pMatch.password || '1234');
+      
+      setPersonnelFirstNameInput('');
+      setPersonnelLastNameInput('');
+      setPersonnelPasswordInput('');
     }
   };
 
@@ -1340,6 +1317,38 @@ export default function Home() {
     reader.readAsText(file);
   };
 
+  // --- Reset/Restore Sepehr Personnel (Iranian Offline Storage Sync) ---
+  const handleRestoreSepehrPersonnel = () => {
+    try {
+      const raw = localStorage.getItem('hospital_scheduler_db');
+      const store = raw ? JSON.parse(raw) : {};
+      
+      // Delete all existing personnel and requests under root (which belongs to Sepehr)
+      Object.keys(store).forEach((key) => {
+        if (key.startsWith('personnel/') || key.startsWith('requests/')) {
+          delete store[key];
+        }
+      });
+      
+      // Add initial personnel
+      INITIAL_PERSONNEL.forEach((p, idx) => {
+        store[`personnel/${p.id}`] = { ...p, orderIndex: idx };
+      });
+      
+      // Add initial requests
+      INITIAL_REQUESTS.forEach((r) => {
+        store[`requests/${r.id}`] = r;
+      });
+      
+      localStorage.setItem('hospital_scheduler_db', JSON.stringify(store));
+      alert('تمامی اطلاعات پرسنل بخش سپهر (۱۶ نفر) به همراه درخواست‌های اولیه آن‌ها با موفقیت به سیستم ذخیره‌سازی ایرانی (آفلاین بدون فیلتر) منتقل و ذخیره شد!');
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      alert('خطا در انتقال اطلاعات پرسنل به سیستم ذخیره‌سازی محلی.');
+    }
+  };
+
   // --- Holiday Management ---
   const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1691,17 +1700,6 @@ export default function Home() {
     );
   }
 
-  if (role !== 'guest' && (!isPersonnelLoaded || !isRequestsLoaded || !isSettingsLoaded || !isMonthLoaded)) {
-    return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 font-sans" dir="rtl">
-        <div className="text-center space-y-4">
-          <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto animate-pulse"></div>
-          <p className="text-sm font-black text-slate-600">در حال دریافت و همگام‌سازی اطلاعات بخش از پایگاه داده...</p>
-        </div>
-      </div>
-    );
-  }
-
   if (role === 'guest') {
     const activeDept = departments.find(d => d.id === selectedDepartmentId);
     const isNewDeptWithDefaults = activeDept?.username === 'headnurse' && activeDept?.password === '123456';
@@ -1716,14 +1714,14 @@ export default function Home() {
           <div className="mb-6 flex flex-col items-center">
             <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
               <img 
-                src="/logo.svg" 
+                src="/logo.png" 
                 alt="بیمارستان بعثت نهاجا" 
                 className="w-full h-full object-contain"
                 onError={(e) => {
                   const imgEl = e.currentTarget;
-                  if (imgEl.src.endsWith('/logo.svg')) {
-                    imgEl.src = '/logo.png';
-                  } else if (imgEl.src.endsWith('/logo.png')) {
+                  if (imgEl.src.endsWith('/logo.png')) {
+                    imgEl.src = '/logo.svg';
+                  } else if (imgEl.src.endsWith('/logo.svg')) {
                     imgEl.src = '/logo.jpg';
                   } else if (imgEl.src.endsWith('/logo.jpg')) {
                     imgEl.src = '/logo.jpeg';
@@ -4563,6 +4561,29 @@ export default function Home() {
                       />
                     </label>
                   </div>
+                </div>
+
+                {/* --- SEPEHR PERSONNEL RESTORE SECTION --- */}
+                <div className="border-t border-slate-100 pt-6 mt-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <span className="bg-emerald-50 text-emerald-600 p-2.5 rounded-xl">
+                      <UserCheck className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-black text-slate-900">انتقال همگی پرسنل بخش سپهر به سیستم ذخیره‌سازی محلی (ایرانی)</h4>
+                      <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                        بارگذاری مستقیم و کامل مشخصات تمام ۱۶ نفر پرسنل اصلی بخش سپهر (حدیثه ماهپروی، سید محمد حسین عاشق، رضا کاظمی و سایر همکاران) به همراه تمامی درخواست‌های شیفت اولیه آنها بر روی دیتابیس بدون نیاز به اینترنت و بدون فیلتر
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleRestoreSepehrPersonnel}
+                    className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold text-xs py-3.5 px-4 rounded-xl transition-all shadow-xs cursor-pointer"
+                  >
+                    <RefreshCw className="w-4 h-4" /> بازنشانی و بارگذاری کامل اطلاعات پرسنل بخش سپهر
+                  </button>
                 </div>
 
               </div>
