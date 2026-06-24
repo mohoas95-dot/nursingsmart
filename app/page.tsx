@@ -1275,14 +1275,20 @@ export default function Home() {
   };
 
   // --- Database Backup & Restore ---
-  const handleExportDatabase = () => {
+  const handleExportDatabase = async () => {
     try {
-      const raw = localStorage.getItem('hospital_scheduler_db');
-      if (!raw) {
-        alert('اطلاعاتی در پایگاه داده محلی یافت نشد.');
-        return;
-      }
-      const blob = new Blob([raw], { type: 'application/json' });
+      const res = await fetch('/api/db');
+      if (!res.ok) throw new Error('Network error');
+      const data = await res.json();
+      
+      // Convert to flat object format like the old storage
+      const exportObj: Record<string, any> = {};
+      data.forEach((row: any) => {
+        exportObj[row.path] = row.data;
+      });
+      
+      const text = JSON.stringify(exportObj, null, 2);
+      const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -1301,13 +1307,23 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const text = event.target?.result as string;
-        // Verify valid JSON
-        JSON.parse(text);
-        localStorage.setItem('hospital_scheduler_db', text);
-        alert('پایگاه داده محلی با موفقیت بازیابی شد! برای اعمال تغییرات صفحه دوباره بارگذاری خواهد شد.');
+        const parsed = JSON.parse(text);
+        
+        const operations: any[] = [];
+        Object.keys(parsed).forEach(key => {
+          operations.push({ type: 'set', path: key, data: parsed[key] });
+        });
+        
+        await fetch('/api/db', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operations })
+        });
+        
+        alert('پایگاه داده یکپارچه سرور با موفقیت بازیابی شد! برای اعمال تغییرات صفحه دوباره بارگذاری خواهد شد.');
         window.location.reload();
       } catch (err) {
         console.error(err);
@@ -1317,37 +1333,7 @@ export default function Home() {
     reader.readAsText(file);
   };
 
-  // --- Reset/Restore Sepehr Personnel (Iranian Offline Storage Sync) ---
-  const handleRestoreSepehrPersonnel = () => {
-    try {
-      const raw = localStorage.getItem('hospital_scheduler_db');
-      const store = raw ? JSON.parse(raw) : {};
-      
-      // Delete all existing personnel and requests under root (which belongs to Sepehr)
-      Object.keys(store).forEach((key) => {
-        if (key.startsWith('personnel/') || key.startsWith('requests/')) {
-          delete store[key];
-        }
-      });
-      
-      // Add initial personnel
-      INITIAL_PERSONNEL.forEach((p, idx) => {
-        store[`personnel/${p.id}`] = { ...p, orderIndex: idx };
-      });
-      
-      // Add initial requests
-      INITIAL_REQUESTS.forEach((r) => {
-        store[`requests/${r.id}`] = r;
-      });
-      
-      localStorage.setItem('hospital_scheduler_db', JSON.stringify(store));
-      alert('تمامی اطلاعات پرسنل بخش سپهر (۱۶ نفر) به همراه درخواست‌های اولیه آن‌ها با موفقیت به سیستم ذخیره‌سازی ایرانی (آفلاین بدون فیلتر) منتقل و ذخیره شد!');
-      window.location.reload();
-    } catch (err) {
-      console.error(err);
-      alert('خطا در انتقال اطلاعات پرسنل به سیستم ذخیره‌سازی محلی.');
-    }
-  };
+
 
   // --- Holiday Management ---
   const handleAddHoliday = async (e: React.FormEvent) => {
@@ -4563,28 +4549,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* --- SEPEHR PERSONNEL RESTORE SECTION --- */}
-                <div className="border-t border-slate-100 pt-6 mt-6">
-                  <div className="flex items-center gap-3 mb-4">
-                    <span className="bg-emerald-50 text-emerald-600 p-2.5 rounded-xl">
-                      <UserCheck className="w-5 h-5" />
-                    </span>
-                    <div>
-                      <h4 className="text-sm font-black text-slate-900">انتقال همگی پرسنل بخش سپهر به سیستم ذخیره‌سازی محلی (ایرانی)</h4>
-                      <p className="text-[10px] text-slate-400 font-bold mt-0.5">
-                        بارگذاری مستقیم و کامل مشخصات تمام ۱۶ نفر پرسنل اصلی بخش سپهر (حدیثه ماهپروی، سید محمد حسین عاشق، رضا کاظمی و سایر همکاران) به همراه تمامی درخواست‌های شیفت اولیه آنها بر روی دیتابیس بدون نیاز به اینترنت و بدون فیلتر
-                      </p>
-                    </div>
-                  </div>
 
-                  <button
-                    type="button"
-                    onClick={handleRestoreSepehrPersonnel}
-                    className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold text-xs py-3.5 px-4 rounded-xl transition-all shadow-xs cursor-pointer"
-                  >
-                    <RefreshCw className="w-4 h-4" /> بازنشانی و بارگذاری کامل اطلاعات پرسنل بخش سپهر
-                  </button>
-                </div>
 
               </div>
             </div>
