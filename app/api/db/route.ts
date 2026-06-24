@@ -1,167 +1,73 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { INITIAL_PERSONNEL } from '../../../lib/mockData';
+import { db } from '../../../src/db/index.ts';
+import { documents } from '../../../src/db/schema.ts';
+import { eq, inArray, like } from 'drizzle-orm';
 
-const DB_FILE = path.join(process.cwd(), 'hospital_db.json');
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  const path = url.searchParams.get('path');
+  const isCollection = url.searchParams.get('isCollection') === 'true';
 
-// Default initial settings to seed
-const INITIAL_SETTINGS = {
-  monthlyHours: 176,
-  requiredNursesPerShift: {
-    morning: 4,
-    evening: 4,
-    night: 3
-  },
-  shiftLeadersCount: {
-    morning: 1,
-    evening: 1,
-    night: 1
-  },
-  consecutiveShiftsLimit: 3,
-  weekendDutyLimit: 2,
-  nursePerPatientRatio: 5,
-  hasEmergencyReserve: true,
-  allowPreferencesSync: true,
-  allowOvertimeRequest: true,
-  activeDepartmentId: 'dep-sepehr',
-  departments: [
-    { id: 'dep-sepehr', name: 'بخش سپهر' }
-  ]
-};
-
-// Initial shift requests to seed
-const INITIAL_REQUESTS = [
-  { id: 'req1', personnelId: 'p2', date: '1405-04-05', shiftType: 'off', status: 'approved', notes: 'درخواست مرخصی سالانه' },
-  { id: 'req2', personnelId: 'p3', date: '1405-04-12', shiftType: 'night', status: 'approved', notes: 'درخواست شیفت شب ثابت' }
-];
-
-// Helper to seed the default store structure
-function getSeedStore(): Record<string, any> {
-  const store: Record<string, any> = {};
-  
-  // Seed system settings
-  store['settings/system'] = INITIAL_SETTINGS;
-  
-  // Seed default login credentials
-  store['settings/credentials'] = { username: 'headnurse', password: '123456' };
-  
-  // Seed personnel
-  INITIAL_PERSONNEL.forEach((p, idx) => {
-    store[`personnel/${p.id}`] = { ...p, orderIndex: idx };
-  });
-  
-  // Seed requests
-  INITIAL_REQUESTS.forEach((r) => {
-    store[`requests/${r.id}`] = r;
-  });
-
-  return store;
-}
-
-// Safely read the JSON database from disk, seeding if necessary
-function readDB(): Record<string, any> {
-  if (!fs.existsSync(DB_FILE)) {
-    const seed = getSeedStore();
-    writeDB(seed);
-    return seed;
-  }
   try {
-    const raw = fs.readFileSync(DB_FILE, 'utf-8');
-    const store = JSON.parse(raw);
-    if (!store || Object.keys(store).length === 0) {
-      const seed = getSeedStore();
-      writeDB(seed);
-      return seed;
+    if (path) {
+      if (isCollection) {
+        // Return all documents starting with path/ and no deeper subcollections
+        // Actually, we can just use `like` and filter in memory for exact depth to be safe
+        const allDocs = await db.select().from(documents).where(like(documents.path, `${path}/%`));
+        const filtered = allDocs.filter(d => {
+           const remainder = d.path.substring(path.length + 1);
+           return remainder.indexOf('/') === -1;
+        });
+        return NextResponse.json(filtered);
+      } else {
+        const doc = await db.select().from(documents).where(eq(documents.path, path)).limit(1);
+        if (doc.length > 0) {
+          return NextResponse.json(doc[0]);
+        }
+        return NextResponse.json(null);
+      }
+    } else {
+      // Return all documents
+      const allDocs = await db.select().from(documents);
+      return NextResponse.json(allDocs);
     }
-    return store;
-  } catch (err) {
-    console.error('Error reading hospital_db.json, returning seeded data:', err);
-    const seed = getSeedStore();
-    writeDB(seed);
-    return seed;
+  } catch (error: any) {
+    console.error('DB GET Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-}
-
-// Safely write the JSON database to disk
-function writeDB(store: Record<string, any>) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(store, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing to hospital_db.json:', err);
-  }
-}
-
-export async function GET() {
-  const store = readDB();
-  return NextResponse.json(store);
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action } = body;
+    const { operations } = body; 
+    // operations: Array<{ type: 'set' | 'delete', path: string, data?: any }>
 
-    if (!action) {
-      return NextResponse.json({ error: 'Missing action parameter' }, { status: 400 });
-    }
-
-    const store = readDB();
-
-    if (action === 'set') {
-      const { path: docPath, data, merge } = body;
-      if (!docPath) {
-        return NextResponse.json({ error: 'Missing path' }, { status: 400 });
-      }
-      
-      const existing = store[docPath] || {};
-      if (merge) {
-        store[docPath] = { ...existing, ...data };
-      } else {
-        store[docPath] = data;
-      }
-      writeDB(store);
-      return NextResponse.json({ success: true, store });
-
-    } else if (action === 'delete') {
-      const { path: docPath } = body;
-      if (!docPath) {
-        return NextResponse.json({ error: 'Missing path' }, { status: 400 });
-      }
-
-      delete store[docPath];
-      writeDB(store);
-      return NextResponse.json({ success: true, store });
-
-    } else if (action === 'batch') {
-      const { operations } = body;
-      if (!Array.isArray(operations)) {
-        return NextResponse.json({ error: 'Operations must be an array' }, { status: 400 });
-      }
-
-      operations.forEach((op: any) => {
-        const { type, path: docPath, data, merge } = op;
-        if (!docPath) return;
-
-        if (type === 'set') {
-          const existing = store[docPath] || {};
-          if (merge) {
-            store[docPath] = { ...existing, ...data };
-          } else {
-            store[docPath] = data;
-          }
-        } else if (type === 'delete') {
-          delete store[docPath];
+    // We can run this in a transaction
+    await db.transaction(async (tx) => {
+      for (const op of operations) {
+        if (op.type === 'set') {
+          // upsert
+          await tx.insert(documents).values({
+            path: op.path,
+            data: op.data,
+            updatedAt: new Date(),
+          }).onConflictDoUpdate({
+            target: documents.path,
+            set: {
+              data: op.data,
+              updatedAt: new Date(),
+            }
+          });
+        } else if (op.type === 'delete') {
+          await tx.delete(documents).where(eq(documents.path, op.path));
         }
-      });
+      }
+    });
 
-      writeDB(store);
-      return NextResponse.json({ success: true, store });
-    }
-
-    return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
-  } catch (err: any) {
-    console.error('Error in POST /api/db:', err);
-    return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('DB POST Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
