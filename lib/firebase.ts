@@ -41,8 +41,12 @@ export function doc(
   let fullPath = '';
   if (id !== undefined) {
     // Called as doc(db, colPath, docId) or doc(colRef, docId)
-    const parentPath = typeof parent === 'string' ? parent : (parent.path || '');
-    fullPath = `${normalizePath(parentPath)}/${normalizePath(pathOrId)}`;
+    const parentPath = (parent && parent.path) ? parent.path : '';
+    if (parentPath) {
+      fullPath = `${normalizePath(parentPath)}/${normalizePath(pathOrId)}/${normalizePath(id)}`;
+    } else {
+      fullPath = `${normalizePath(pathOrId)}/${normalizePath(id)}`;
+    }
   } else {
     // Called as doc(db, docPath)
     const parentPath = parent && parent.path ? parent.path : '';
@@ -99,26 +103,29 @@ let activeListeners: SnapshotListener[] = [];
 
 // Helper to trigger listeners for a list of modified paths
 function triggerListeners(changedPaths: string[]) {
-  activeListeners.forEach((listener) => {
-    const ref = listener.ref;
-    if (ref.type === 'document') {
-      // Trigger if this document's path is one of the changed paths
-      if (changedPaths.includes(ref.path)) {
-        const store = getStore();
-        const data = store[ref.path];
-        listener.callback(new DocSnapshot(ref.id, data));
+  // Trigger asynchronously to mirror real Firestore behavior and prevent synchronous recursion
+  setTimeout(() => {
+    activeListeners.forEach((listener) => {
+      const ref = listener.ref;
+      if (ref.type === 'document') {
+        // Trigger if this document's path is one of the changed paths
+        if (changedPaths.includes(ref.path)) {
+          const store = getStore();
+          const data = store[ref.path];
+          listener.callback(new DocSnapshot(ref.id, data));
+        }
+      } else if (ref.type === 'collection') {
+        // Trigger if any changed path belongs to this collection
+        const isCollectionAffected = changedPaths.some((cp) => {
+          return cp.startsWith(ref.path + '/') && cp.substring(ref.path.length + 1).indexOf('/') === -1;
+        });
+        if (isCollectionAffected) {
+          const docs = getCollectionDocs(ref.path);
+          listener.callback(new QuerySnapshot(docs));
+        }
       }
-    } else if (ref.type === 'collection') {
-      // Trigger if any changed path belongs to this collection
-      const isCollectionAffected = changedPaths.some((cp) => {
-        return cp.startsWith(ref.path + '/') && cp.substring(ref.path.length + 1).indexOf('/') === -1;
-      });
-      if (isCollectionAffected) {
-        const docs = getCollectionDocs(ref.path);
-        listener.callback(new QuerySnapshot(docs));
-      }
-    }
-  });
+    });
+  }, 0);
 }
 
 // Read documents belonging to a collection
