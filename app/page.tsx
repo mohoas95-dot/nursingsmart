@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { db } from '../lib/firebase';
 import { 
+  db,
   collection, 
   doc, 
   getDoc,
@@ -10,7 +10,7 @@ import {
   setDoc, 
   deleteDoc, 
   writeBatch 
-} from 'firebase/firestore';
+} from '../lib/firebase';
 import { 
   getJalaliMonthDays, 
   generateJalaliMonthCalendar, 
@@ -101,12 +101,7 @@ function toEnglishDigits(str: string): string {
 
 export default function Home() {
   // --- Dynamic Department routing helper ---
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('hospital_selected_dept_id') || 'sepehr';
-    }
-    return 'sepehr';
-  });
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>('sepehr');
 
   const [departments, setDepartments] = useState<Department[]>([]);
 
@@ -151,7 +146,7 @@ export default function Home() {
   const [currentMonth, setCurrentMonth] = useState<number>(3); // Khordad
 
   const [isMounted, setIsMounted] = useState<boolean>(false);
-  const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(() => typeof window === 'undefined');
+  const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(false);
 
   const [customHolidays, setCustomHolidays] = useState<{ [day: number]: string }>(INITIAL_HOLIDAYS_1405_03);
   const [firstDayOfWeekIndex, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
@@ -182,6 +177,7 @@ export default function Home() {
   useEffect(() => {
     const savedYear = localStorage.getItem('hospital_current_year');
     const savedMonth = localStorage.getItem('hospital_current_month');
+    const savedDeptId = localStorage.getItem('hospital_selected_dept_id');
     setTimeout(() => {
       setIsMounted(true);
       if (savedYear) {
@@ -189,6 +185,9 @@ export default function Home() {
       }
       if (savedMonth) {
         setCurrentMonth(Number(savedMonth));
+      }
+      if (savedDeptId) {
+        setSelectedDepartmentId(savedDeptId);
       }
       setIsMonthLoaded(true);
     }, 0);
@@ -1275,6 +1274,49 @@ export default function Home() {
     }
   };
 
+  // --- Database Backup & Restore ---
+  const handleExportDatabase = () => {
+    try {
+      const raw = localStorage.getItem('hospital_scheduler_db');
+      if (!raw) {
+        alert('اطلاعاتی در پایگاه داده محلی یافت نشد.');
+        return;
+      }
+      const blob = new Blob([raw], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `hospital_scheduler_backup_${currentYear}_${currentMonth}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert('خطا در پشتیبان‌گیری از دیتابیس.');
+    }
+  };
+
+  const handleImportDatabase = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        // Verify valid JSON
+        JSON.parse(text);
+        localStorage.setItem('hospital_scheduler_db', text);
+        alert('پایگاه داده محلی با موفقیت بازیابی شد! برای اعمال تغییرات صفحه دوباره بارگذاری خواهد شد.');
+        window.location.reload();
+      } catch (err) {
+        console.error(err);
+        alert('خطا در خواندن فایل پشتیبان. لطفاً مطمئن شوید فایل معتبر است.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // --- Holiday Management ---
   const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1954,7 +1996,7 @@ export default function Home() {
               <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
             </h3>
             <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              {`هشدار: شما در حال حذف کامل بخش "${departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}" هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.`}
+              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
             </p>
             
             <div className="space-y-4 text-right">
@@ -4452,6 +4494,43 @@ export default function Home() {
                   </div>
                 )}
 
+                {/* --- DATABASE BACKUP & RESTORE SECTION --- */}
+                <div className="border-t border-slate-100 pt-6 mt-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <span className="bg-indigo-50 text-indigo-600 p-2.5 rounded-xl">
+                      <Download className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <h4 className="text-sm font-black text-slate-900">پشتیبان‌گیری و انتقال داده‌ها (آفلاین بدون فیلتر)</h4>
+                      <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                        نسخه‌برداری کامل از اطلاعات تمام بخش‌ها، پرسنل، درخواست‌ها و زمان‌بندی‌ها در یک فایل مجزا جهت استفاده آفلاین یا انتقال به سیستم‌های دیگر
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <button
+                      type="button"
+                      onClick={handleExportDatabase}
+                      className="flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-xs py-3.5 px-4 rounded-xl transition-all shadow-xs cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" /> پشتیبان‌گیری و خروجی گرفتن از کل دیتابیس (JSON)
+                    </button>
+
+                    <label
+                      className="flex items-center justify-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs py-3.5 px-4 rounded-xl transition-all shadow-xs cursor-pointer text-center"
+                    >
+                      <RefreshCw className="w-4 h-4" /> بازیابی و وارد کردن دیتابیس پشتیبان (JSON)
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleImportDatabase}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </div>
+
               </div>
             </div>
           )}
@@ -4967,7 +5046,7 @@ export default function Home() {
               <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
             </h3>
             <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              {`هشدار: شما در حال حذف کامل بخش "${departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}" هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.`}
+              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
             </p>
             
             <div className="space-y-4 text-right">
