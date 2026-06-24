@@ -130,8 +130,8 @@ export function solveNursingSchedule(
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): MonthlySchedule {
-  try {
-    const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
+  
+  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
   const activePersonnel = personnelList.filter(p => p.active);
   
@@ -401,31 +401,11 @@ export function solveNursingSchedule(
   // Let's loop through days and resolve coverage.
   
   for (let d = 1; d <= totalDays; d++) {
-    const isHoliday = calendar[d - 1]?.isHoliday || false;
-    const demand = isHoliday 
-      ? (settings?.demand?.holiday || {
-          morningNurse: 5,
-          morningAssistant: 2,
-          afternoonNurse: 4,
-          afternoonAssistant: 2,
-          afternoonLeader: 1,
-          nightNurse: 4,
-          nightAssistant: 2,
-          nightLeader: 1
-        }) 
-      : (settings?.demand?.weekday || {
-          morningNurse: 6,
-          morningAssistant: 4,
-          afternoonNurse: 4,
-          afternoonAssistant: 2,
-          afternoonLeader: 1,
-          nightNurse: 4,
-          nightAssistant: 2,
-          nightLeader: 1
-        });
+    const isHoliday = calendar[d - 1].isHoliday;
+    const demand = isHoliday ? settings.demand.holiday : settings.demand.weekday;
 
     // A. Fill Nurse Assistant Shifts
-    const morningAssistantDemand = demand?.morningAssistant ?? 2;
+    const morningAssistantDemand = demand.morningAssistant;
     const afternoonAssistantDemand = demand.afternoonAssistant;
     const nightAssistantDemand = demand.nightAssistant;
 
@@ -1096,23 +1076,13 @@ export function solveNursingSchedule(
   const verification = verifyCoverageAndLeaders(year, month, activePersonnel, assignments, settings, customHolidays, firstDayOfWeekIndex, requests);
   const combinedWarnings = Array.from(new Set([...warnings, ...verification.warnings]));
 
-    return {
-      year,
-      month,
-      assignments,
-      shiftLeaders: verification.shiftLeaders,
-      warnings: combinedWarnings
-    };
-  } catch (err) {
-    console.error("Error solving nursing schedule:", err);
-    return {
-      year,
-      month,
-      assignments: {},
-      shiftLeaders: {},
-      warnings: ["خطا در بهینه‌سازی خودکار برنامه شیفت‌ها. لطفاً تنظیمات یا درخواست‌ها را بررسی کنید."]
-    };
-  }
+  return {
+    year,
+    month,
+    assignments,
+    shiftLeaders: verification.shiftLeaders,
+    warnings: combinedWarnings
+  };
 }
 
 export function verifyCoverageAndLeaders(
@@ -1125,9 +1095,8 @@ export function verifyCoverageAndLeaders(
   firstDayOfWeekIndex?: number,
   requests: ShiftRequest[] = []
 ): { warnings: string[], shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } } {
-  try {
-    const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
-    const totalDays = calendar.length;
+  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
+  const totalDays = calendar.length;
   const warnings: string[] = [];
   const shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } = {};
   for (let i = 1; i <= totalDays; i++) shiftLeaders[i] = {};
@@ -1139,28 +1108,8 @@ export function verifyCoverageAndLeaders(
   const supervisor = activePersonnel.find(p => p.position === 'supervisor');
 
   for (let d = 1; d <= totalDays; d++) {
-    const isHoliday = calendar[d - 1]?.isHoliday || false;
-    const demand = isHoliday 
-      ? (settings?.demand?.holiday || {
-          morningNurse: 5,
-          morningAssistant: 2,
-          afternoonNurse: 4,
-          afternoonAssistant: 2,
-          afternoonLeader: 1,
-          nightNurse: 4,
-          nightAssistant: 2,
-          nightLeader: 1
-        }) 
-      : (settings?.demand?.weekday || {
-          morningNurse: 6,
-          morningAssistant: 4,
-          afternoonNurse: 4,
-          afternoonAssistant: 2,
-          afternoonLeader: 1,
-          nightNurse: 4,
-          nightAssistant: 2,
-          nightLeader: 1
-        });
+    const isHoliday = calendar[d - 1].isHoliday;
+    const demand = isHoliday ? settings.demand.holiday : settings.demand.weekday;
 
     // Check Assistant Demand
     let mAssignedAsst = assistants.filter(a => assignments[a.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[a.id][d])).length;
@@ -1339,11 +1288,7 @@ export function verifyCoverageAndLeaders(
     }
   });
 
-    return { warnings: Array.from(new Set(warnings)), shiftLeaders };
-  } catch (err) {
-    console.error("Error verifying coverage and leaders:", err);
-    return { warnings: ["خطا در راستی‌آزمایی پوشش شیفت‌ها و تعیین سرشیفت."], shiftLeaders: {} };
-  }
+  return { warnings: Array.from(new Set(warnings)), shiftLeaders };
 }
 
 // Generate the Worked, Overtime, Deficit, Experience, and Productivity reports
@@ -1357,9 +1302,9 @@ export function generatePersonnelReports(
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): PersonnelReportResult[] {
-  try {
-    const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
-    const totalDays = calendar.length;
+  
+  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
+  const totalDays = calendar.length;
 
   return personnelList.map(p => {
     let mCount = 0;
@@ -1372,7 +1317,7 @@ export function generatePersonnelReports(
     let offCount = 0;
     let leaveCount = 0;
 
-    const pAssignments = schedule?.assignments?.[p.id] || {};
+    const pAssignments = schedule.assignments[p.id] || {};
     const assignmentsList: ShiftType[] = [];
 
     for (let d = 1; d <= totalDays; d++) {
@@ -1448,12 +1393,7 @@ export function generatePersonnelReports(
     }
 
     // 5. Setup config duty hours of the month
-    const effectiveDutyHoursConfig = monthlyDutyHours || settings?.dutyHours || {
-      official: 165,
-      contract: 180,
-      conscript: 180,
-      overtime: 150
-    };
+    const effectiveDutyHoursConfig = monthlyDutyHours || settings.dutyHours;
     let dutyHours = 0;
     if (p.employmentType === 'official') dutyHours = effectiveDutyHoursConfig.official;
     else if (p.employmentType === 'contract') dutyHours = effectiveDutyHoursConfig.contract;
@@ -1506,10 +1446,6 @@ export function generatePersonnelReports(
       productivityEligible
     };
   });
-  } catch (err) {
-    console.error("Error generating personnel reports:", err);
-    return [];
-  }
 }
 
 // Auto-calculate duty hours based on formula
