@@ -296,18 +296,23 @@ export function onSnapshot(
 
 // Setup a global storage listener to support sync across different browser windows/tabs
 if (typeof window !== 'undefined') {
-  window.addEventListener('storage', () => {
-    // When localStorage changes, trigger all active listeners with the new values
-    const store = getStore();
-    activeListeners.forEach((listener) => {
-      const ref = listener.ref;
-      if (ref.type === 'document') {
-        const data = store[ref.path];
-        listener.callback(new DocSnapshot(ref.id, data));
-      } else {
-        const docs = getCollectionDocs(ref.path);
-        listener.callback(new QuerySnapshot(docs));
-      }
-    });
+  window.addEventListener('storage', (e) => {
+    // Only handle standard storage events for our key from other tabs to prevent circular recursion
+    if (!e || e.key !== STORE_KEY) return;
+    
+    // Defer execution to prevent synchronous call stack recursion
+    setTimeout(() => {
+      const store = getStore();
+      activeListeners.forEach((listener) => {
+        const ref = listener.ref;
+        if (ref.type === 'document') {
+          const data = store[ref.path];
+          listener.callback(new DocSnapshot(ref.id, data));
+        } else {
+          const docs = getCollectionDocs(ref.path);
+          listener.callback(new QuerySnapshot(docs));
+        }
+      });
+    }, 0);
   });
 }
