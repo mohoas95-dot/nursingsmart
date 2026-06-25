@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { db } from '../lib/firebase';
 import { 
+  db,
   collection, 
   doc, 
   getDoc,
@@ -10,7 +10,7 @@ import {
   setDoc, 
   deleteDoc, 
   writeBatch 
-} from 'firebase/firestore';
+} from '../lib/firebase';
 import { 
   getJalaliMonthDays, 
   generateJalaliMonthCalendar, 
@@ -1954,7 +1954,7 @@ export default function Home() {
               <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
             </h3>
             <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              هشدار: شما در حال حذف کامل بخش "{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}" هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
+              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
             </p>
             
             <div className="space-y-4 text-right">
@@ -4967,7 +4967,7 @@ export default function Home() {
               <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
             </h3>
             <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              هشدار: شما در حال حذف کامل بخش "{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}" هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
+              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
             </p>
             
             <div className="space-y-4 text-right">
