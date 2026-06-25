@@ -3,6 +3,7 @@
   "appId": "1:732516768976:web:c6d4e66eaacfbd414852d5",
   "apiKey": "AIzaSyD-7ZBsjOI7ipHn_Lejp1KiF092bFdKDCI",
   "authDomain": "absolute-eye-ldzcr.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-14c85672-779a-484a-b7a3-7efb62cb4fb0",
   "storageBucket": "absolute-eye-ldzcr.firebasestorage.app",
   "messagingSenderId": "732516768976",
   "measurementId": ""
