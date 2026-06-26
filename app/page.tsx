@@ -1773,14 +1773,14 @@ export default function Home() {
 
           <h2 className="text-2xl font-black text-slate-900 mb-2 font-sans text-center">سامانه هوشمند برنامه‌ریزی شیفت های پرستاری - بیمارستان بعثت نهاجا</h2>
           <p className="text-slate-500 text-xs max-w-xl mx-auto mb-8 font-bold leading-relaxed">
-            سیستم توزیع عادلانه کشیک‌ها مبتنی بر هوش بالینی و الگوریتم‌های رصد قوانین تعهدات پرسنل. لطفا برای ورود، بخش مورد نظر و نقش کاربری خود را تایید نمایید.
+            سیستم توزیع عادلانه شیفت ها مبتنی بر هوش مصنوعی و الگوریتم‌های رصد قوانین بیمارستان. لطفا برای ورود، بخش مورد نظر و نوع کاربری خود را تایید نمایید.
           </p>
 
           {/* Department Selection & Creation Row */}
           <div className="max-w-xl mx-auto mb-8 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-right space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex-1">
-                <label className="block text-[11px] font-black text-slate-500 mb-1.5">선택 بخش پرستاری فعال (مبنای ثبت اطلاعات)</label>
+                <label className="block text-[11px] font-black text-slate-500 mb-1.5"> بخش پرستاری فعال (مبنای ثبت اطلاعات)</label>
                 <select 
                   value={selectedDepartmentId}
                   onChange={(e) => {
