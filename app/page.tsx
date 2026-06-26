@@ -1,16 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { db } from '../lib/firebase';
-import { 
-  collection, 
-  doc, 
-  getDoc,
-  onSnapshot, 
-  setDoc, 
-  deleteDoc, 
-  writeBatch 
-} from 'firebase/firestore';
+import { AppDatabaseState } from '../lib/s3Storage';
 import { 
   getJalaliMonthDays, 
   generateJalaliMonthCalendar, 
@@ -110,22 +101,11 @@ export default function Home() {
 
   const [departments, setDepartments] = useState<Department[]>([]);
 
-  // Helpers to Route collections and documents dynamically
-  const getDeptCollectionRef = (colName: string, deptId: string) => {
-    if (deptId === 'sepehr') {
-      return collection(db, colName);
-    } else {
-      return collection(db, `departments/${deptId}/${colName}`);
-    }
-  };
-
-  const getDeptDocRef = (colName: string, docName: string, deptId: string) => {
-    if (deptId === 'sepehr') {
-      return doc(db, colName, docName);
-    } else {
-      return doc(db, `departments/${deptId}/${colName}`, docName);
-    }
-  };
+  // S3 Database states
+  const [fullDbState, setFullDbState] = useState<AppDatabaseState | null>(null);
+  const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [storageInfo, setStorageInfo] = useState<{ isConfigured: boolean; bucket: string; endpoint: string; source: string } | null>(null);
 
   // Profile forms and inputs
   const [profileUsernameInput, setProfileUsernameInput] = useState<string>('');
@@ -226,258 +206,201 @@ export default function Home() {
   // State for dismissed warnings list per month
   const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
 
-  // 1. Safe, One-time DB Initialization (checks if database is new, seeds if so, otherwise leaves custom data alone)
+  const [isSavingDb, setIsSavingDb] = useState<boolean>(false);
+
+  const getFreshDbCopy = (): AppDatabaseState => {
+    return fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
+  };
+
+  const saveDbState = async (updatedDb: AppDatabaseState) => {
+    setFullDbState(updatedDb);
+    
+    const deptId = selectedDepartmentId || 'sepehr';
+    const deptInfo = updatedDb.deptData[deptId] || {
+      personnel: [],
+      requests: [],
+      settings_system: INITIAL_SETTINGS,
+      settings_credentials: { username: 'headnurse', password: '123456' },
+      holidays: {},
+      firstDayOfWeek: {},
+      schedules: {},
+    };
+    
+    setDepartments(updatedDb.departments || []);
+    setPersonnel(deptInfo.personnel || []);
+    setRequests(deptInfo.requests || []);
+    setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
+    setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
+    setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
+    
+    const hKey = `${currentYear}_${currentMonth}`;
+    const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
+    setCustomHolidays(holidaysInfo.days || {});
+    setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
+    
+    const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
+    setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
+    
+    const sched = deptInfo.schedules?.[hKey] || null;
+    setSchedule(sched);
+    if (sched) {
+      setDismissedWarnings(sched.dismissedWarnings || []);
+      const isFin = !!sched.finalized;
+      setFinalizedMonths(prev => {
+        const key = `${currentYear}_${currentMonth}`;
+        if (isFin) {
+          if (!prev.includes(key)) return [...prev, key];
+        } else {
+          return prev.filter(k => k !== key);
+        }
+        return prev;
+      });
+    } else {
+      try {
+        const solved = solveNursingSchedule(
+          currentYear, 
+          currentMonth, 
+          deptInfo.personnel || [], 
+          deptInfo.requests || [], 
+          deptInfo.settings_system || INITIAL_SETTINGS, 
+          holidaysInfo.days || {}, 
+          fdIdx === -1 ? undefined : fdIdx,
+          holidaysInfo.monthlyDutyHours || null
+        );
+        setSchedule({
+          year: currentYear,
+          month: currentMonth,
+          assignments: solved.assignments || {},
+          shiftLeaders: solved.shiftLeaders || {},
+          warnings: solved.warnings || []
+        });
+        setDismissedWarnings([]);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    try {
+      setIsSavingDb(true);
+      const res = await fetch('/api/storage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: updatedDb })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        console.error("S3 Object Storage save failed: ", data.error);
+      }
+    } catch (err) {
+      console.error("Network error saving to S3 Object Storage:", err);
+    } finally {
+      setIsSavingDb(false);
+    }
+  };
+
+  // Load whole state from S3 on mount or department/month change
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const initDb = async () => {
+    const loadDatabase = async () => {
       try {
-        const systemDocRef = doc(db, 'settings', 'system');
-        const systemDoc = await getDoc(systemDocRef);
+        setIsPersonnelLoaded(false);
+        setIsRequestsLoaded(false);
         
-        if (!systemDoc.exists()) {
-          // Brand new database! Seed everything once.
-          const batch = writeBatch(db);
-          
-          // Seed settings
-          batch.set(systemDocRef, INITIAL_SETTINGS);
-          
-          // Seed credentials
-          batch.set(doc(db, 'settings', 'credentials'), { username: 'headnurse', password: '123456' });
-          
-          // Seed personnel
-          INITIAL_PERSONNEL.forEach((p, idx) => {
-            batch.set(doc(db, 'personnel', p.id), { ...p, orderIndex: idx });
+        const res = await fetch('/api/storage');
+        const data = await res.json();
+        
+        if (data.success && data.state) {
+          setFullDbState(data.state);
+          setStorageInfo({
+            isConfigured: data.isConfigured,
+            bucket: data.bucket,
+            endpoint: data.endpoint,
+            source: data.source
           });
           
-          // Seed requests
-          INITIAL_REQUESTS.forEach((r) => {
-            batch.set(doc(db, 'requests', r.id), r);
-          });
+          const updatedDb = data.state as AppDatabaseState;
+          setDepartments(updatedDb.departments || []);
           
-          await batch.commit();
+          const deptId = selectedDepartmentId || 'sepehr';
+          if (!updatedDb.deptData[deptId]) {
+            updatedDb.deptData[deptId] = {
+              personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+              requests: INITIAL_REQUESTS,
+              settings_system: INITIAL_SETTINGS,
+              settings_credentials: { username: 'headnurse', password: '123456' },
+              holidays: {},
+              firstDayOfWeek: {},
+              schedules: {},
+            };
+          }
+          
+          const deptInfo = updatedDb.deptData[deptId];
+          setPersonnel(deptInfo.personnel || []);
+          setRequests(deptInfo.requests || []);
+          setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
+          setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
+          setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
+          
+          const hKey = `${currentYear}_${currentMonth}`;
+          const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
+          setCustomHolidays(holidaysInfo.days || {});
+          setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
+          
+          const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
+          setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
+          
+          const sched = deptInfo.schedules?.[hKey] || null;
+          setSchedule(sched);
+          if (sched) {
+            setDismissedWarnings(sched.dismissedWarnings || []);
+            const isFin = !!sched.finalized;
+            setFinalizedMonths(prev => {
+              const key = `${currentYear}_${currentMonth}`;
+              if (isFin) {
+                if (!prev.includes(key)) return [...prev, key];
+              } else {
+                return prev.filter(k => k !== key);
+              }
+              return prev;
+            });
+          } else {
+            try {
+              const solved = solveNursingSchedule(
+                currentYear, 
+                currentMonth, 
+                deptInfo.personnel || [], 
+                deptInfo.requests || [], 
+                deptInfo.settings_system || INITIAL_SETTINGS, 
+                holidaysInfo.days || {}, 
+                fdIdx === -1 ? undefined : fdIdx,
+                holidaysInfo.monthlyDutyHours || null
+              );
+              setSchedule({
+                year: currentYear,
+                month: currentMonth,
+                assignments: solved.assignments || {},
+                shiftLeaders: solved.shiftLeaders || {},
+                warnings: solved.warnings || []
+              });
+              setDismissedWarnings([]);
+            } catch (e) {
+              console.error(e);
+            }
+          }
         }
       } catch (err) {
-        console.error("Error checking/seeding database:", err);
+        console.error("Error loading database from Iranian Object Storage S3:", err);
       } finally {
-        setDbChecked(true); // Now safe to listen to snapshots
+        setIsPersonnelLoaded(true);
+        setIsRequestsLoaded(true);
+        setIsMonthLoaded(true);
+        setDbChecked(true);
       }
     };
-
-    initDb();
-  }, []);
-
-  // Listen to the master departments list
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!dbChecked) return;
-
-    const unsubD = onSnapshot(collection(db, 'departments'), (snapshot) => {
-      const list: Department[] = [];
-      snapshot.forEach((docSnap) => {
-        list.push(docSnap.data() as Department);
-      });
-      // Ensure Sepehr is present as the default
-      if (!list.some(d => d.id === 'sepehr')) {
-        const sepehrDept: Department = {
-          id: 'sepehr',
-          name: 'بخش سپهر',
-          username: headnurseUsername || 'headnurse',
-          password: headnursePassword || '123456'
-        };
-        setDoc(doc(db, 'departments', 'sepehr'), sepehrDept).catch(err => console.error("Error seeding Sepehr department:", err));
-        list.push(sepehrDept);
-      }
-      setDepartments(list);
-    });
-
-    return () => unsubD();
-  }, [dbChecked, headnurseUsername, headnursePassword]);
-
-  // Synchronized Firestore loading and real-time syncing of global collections
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!dbChecked) return;
-
-    setTimeout(() => {
-      setIsPersonnelLoaded(false);
-      setIsRequestsLoaded(false);
-      setSchedule(null);
-      setPersonnel([]);
-      setRequests([]);
-      setDismissedWarnings([]);
-    }, 0);
-
-    // Listen to personnel (ordered by orderIndex)
-    const unsubPersonnel = onSnapshot(getDeptCollectionRef('personnel', selectedDepartmentId), (snapshot) => {
-      const list: Personnel[] = [];
-      snapshot.forEach(docSnap => {
-        list.push(docSnap.data() as Personnel);
-      });
-      list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-      setPersonnel(list);
-      setIsPersonnelLoaded(true);
-    });
-
-    // Listen to requests
-    const unsubRequests = onSnapshot(getDeptCollectionRef('requests', selectedDepartmentId), (snapshot) => {
-      const list: ShiftRequest[] = [];
-      snapshot.forEach(docSnap => {
-        list.push(docSnap.data() as ShiftRequest);
-      });
-      setRequests(list);
-      setIsRequestsLoaded(true);
-    });
-
-    // Listen to settings
-    const unsubSettings = onSnapshot(getDeptDocRef('settings', 'system', selectedDepartmentId), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as SystemSettings;
-        if (data.dutyHours && data.dutyHours.conscript === 200) {
-          const updated = {
-            ...data,
-            dutyHours: {
-              ...data.dutyHours,
-              conscript: 180
-            }
-          };
-          setSettings(updated);
-          setDoc(getDeptDocRef('settings', 'system', selectedDepartmentId), updated).catch(err => console.error("Error updating conscript hours:", err));
-        } else {
-          setSettings(data);
-        }
-      } else {
-        // Fallback for new departments if settings doc doesn't exist yet
-        setSettings(INITIAL_SETTINGS);
-      }
-    });
-
-    // Listen to credentials
-    const unsubCreds = onSnapshot(getDeptDocRef('settings', 'credentials', selectedDepartmentId), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data) {
-          setHeadnurseUsername(data.username || 'headnurse');
-          setHeadnursePassword(data.password || '123456');
-        }
-      } else {
-        // Find credentials from the active department document
-        const activeDept = departments.find(d => d.id === selectedDepartmentId);
-        if (activeDept) {
-          setHeadnurseUsername(activeDept.username || 'headnurse');
-          setHeadnursePassword(activeDept.password || '123456');
-        } else {
-          setHeadnurseUsername('headnurse');
-          setHeadnursePassword('123456');
-        }
-      }
-    });
-
-    return () => {
-      unsubPersonnel();
-      unsubRequests();
-      unsubSettings();
-      unsubCreds();
-    };
-  }, [dbChecked, selectedDepartmentId, departments]);
-
-  // Synchronized Firestore loading and real-time syncing of month-specific collections
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!isPersonnelLoaded || !isRequestsLoaded || !isMonthLoaded || !dbChecked) return;
-
-    // Listen to holidays
-    const unsubHolidays = onSnapshot(getDeptDocRef('holidays', `${currentYear}_${currentMonth}`, selectedDepartmentId), (docSnap) => {
-      if (!docSnap.exists()) {
-        const initialHol = (currentYear === 1405 && currentMonth === 3) ? INITIAL_HOLIDAYS_1405_03 : {};
-        // Read-only fallback: update React state but do NOT write to database
-        setCustomHolidays(initialHol);
-        setMonthlyDutyHours(null);
-      } else {
-        const data = docSnap.data();
-        setCustomHolidays(data?.days || {});
-        setMonthlyDutyHours(data?.monthlyDutyHours || null);
-      }
-    });
-
-    // Listen to firstDayOfWeek
-    const unsubFD = onSnapshot(getDeptDocRef('firstDayOfWeek', `${currentYear}_${currentMonth}`, selectedDepartmentId), (docSnap) => {
-      if (!docSnap.exists()) {
-        // Read-only fallback: update React state but do NOT write to database
-        setFirstDayOfWeekIndex(undefined);
-      } else {
-        const idx = docSnap.data()?.index;
-        setFirstDayOfWeekIndex(idx === -1 ? undefined : idx);
-      }
-    });
-
-    // Listen to schedules
-    const unsubSched = onSnapshot(getDeptDocRef('schedules', `${currentYear}_${currentMonth}`, selectedDepartmentId), (docSnap) => {
-      const currentPersonnel = personnelRef.current;
-      
-      if (!docSnap.exists()) {
-        if (currentPersonnel.length === 0) {
-          setSchedule(null);
-          return;
-        } // Wait until basic metadata has finished loading to solve
-        
-        try {
-          // Read-only fallback: Solve in memory and show in UI but do NOT write to database automatically
-          const solved = solveNursingSchedule(
-            currentYear, 
-            currentMonth, 
-            currentPersonnel, 
-            requestsRef.current, 
-            settingsRef.current, 
-            holidaysRef.current, 
-            firstDayRef.current,
-            monthlyDutyHoursRef.current
-          );
-          setSchedule({
-            year: currentYear,
-            month: currentMonth,
-            assignments: solved.assignments || {},
-            shiftLeaders: solved.shiftLeaders || {},
-            warnings: solved.warnings || []
-          });
-          setDismissedWarnings([]);
-          
-          setFinalizedMonths(prev => prev.filter(k => k !== `${currentYear}_${currentMonth}`));
-        } catch (err) {
-          console.error("Failed to automatically solve schedule in memory:", err);
-        }
-      } else {
-        const data = docSnap.data();
-        if (data) {
-          setSchedule({
-            year: data.year,
-            month: data.month,
-            assignments: data.assignments || {},
-            shiftLeaders: data.shiftLeaders || {},
-            warnings: data.warnings || []
-          });
-          setDismissedWarnings(data.dismissedWarnings || []);
-          
-          const isFin = !!data.finalized;
-          setFinalizedMonths(prev => {
-            const key = `${currentYear}_${currentMonth}`;
-            if (isFin) {
-              if (!prev.includes(key)) return [...prev, key];
-            } else {
-              return prev.filter(k => k !== key);
-            }
-            return prev;
-          });
-        }
-      }
-    });
-
-    return () => {
-      unsubHolidays();
-      unsubFD();
-      unsubSched();
-    };
-  }, [currentYear, currentMonth, isPersonnelLoaded, isRequestsLoaded, isMonthLoaded, dbChecked, selectedDepartmentId]);
+    
+    loadDatabase();
+  }, [selectedDepartmentId, currentYear, currentMonth]);
 
   const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
   const [newUsernameValue, setNewUsernameValue] = useState<string>('');
@@ -507,6 +430,7 @@ export default function Home() {
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
   const [editingRequest, setEditingRequest] = useState<ShiftRequest | null>(null);
+  const [editingCell, setEditingCell] = useState<{ pId: string; day: number } | null>(null);
   const [reqPersonnelId, setReqPersonnelId] = useState<string>('');
   const [reqType, setReqType] = useState<'shift' | 'OFF' | 'leave' | 'pattern' | 'avoid_shift'>('shift');
   const [reqPreferredShift, setReqPreferredShift] = useState<'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L'>('M');
@@ -564,11 +488,6 @@ export default function Home() {
   const [showDeptDeleteAuth, setShowDeptDeleteAuth] = useState<boolean>(false);
   const [deleteDeptAuthUser, setDeleteDeptAuthUser] = useState<string>('');
   const [deleteDeptAuthPass, setDeleteDeptAuthPass] = useState<string>('');
-
-  // Inline schedule manual edit cell
-  const [editingCell, setEditingCell] = useState<{ pId: string; day: number } | null>(null);
-
-  // Save changes to Firestore database helper
   const saveState = async (
     updatedP: Personnel[], 
     updatedR: ShiftRequest[], 
@@ -596,19 +515,7 @@ export default function Home() {
         setMonthlyDutyHours(calculatedMonthlyDutyHours);
       }
 
-      // 1. Write settings (do NOT mutate the global dutyHours here!)
-      await setDoc(getDeptDocRef('settings', 'system', selectedDepartmentId), updatedS);
-
-      // 2. Write custom holidays for the current month
-      await setDoc(getDeptDocRef('holidays', `${currentYear}_${currentMonth}`, selectedDepartmentId), { 
-        days: updatedH,
-        ...(calculatedMonthlyDutyHours ? { monthlyDutyHours: calculatedMonthlyDutyHours } : {})
-      }, { merge: true });
-
-      // 3. Write first day of week index if provided
-      await setDoc(getDeptDocRef('firstDayOfWeek', `${currentYear}_${currentMonth}`, selectedDepartmentId), { index: activeFd });
-
-      // 4. Calculate schedule and write to schedules
+      // Calculate schedule
       const isLocked = finalizedMonths.includes(`${currentYear}_${currentMonth}`);
       let solved: MonthlySchedule;
 
@@ -623,11 +530,51 @@ export default function Home() {
         solved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
       }
 
-      await setDoc(getDeptDocRef('schedules', `${currentYear}_${currentMonth}`, selectedDepartmentId), {
-        ...solved,
-        finalized: isLocked,
-        dismissedWarnings: dismissedWarnings
-      });
+      // Prepare updated full state
+      const nextDb = getFreshDbCopy();
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const updatedDept = {
+        ...oldDept,
+        personnel: updatedP,
+        requests: updatedR,
+        settings_system: updatedS,
+        holidays: {
+          ...oldDept.holidays,
+          [`${currentYear}_${currentMonth}`]: {
+            days: updatedH,
+            monthlyDutyHours: calculatedMonthlyDutyHours || null
+          }
+        },
+        firstDayOfWeek: {
+          ...oldDept.firstDayOfWeek,
+          [`${currentYear}_${currentMonth}`]: activeFd
+        },
+        schedules: {
+          ...oldDept.schedules,
+          [`${currentYear}_${currentMonth}`]: {
+            ...solved,
+            finalized: isLocked,
+            dismissedWarnings: dismissedWarnings
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+
+      // Persist S3 State
+      await saveDbState(nextDb);
     } catch (error) {
       console.error("Error in saveState:", error);
       alert("خطا در ذخیره‌سازی داده‌ها: " + (error instanceof Error ? error.message : String(error)));
@@ -643,12 +590,8 @@ export default function Home() {
     updated[index] = updated[newIndex];
     updated[newIndex] = temp;
 
-    const batch = writeBatch(db);
-    updated.forEach((p, idx) => {
-      batch.set(getDeptDocRef('personnel', p.id, selectedDepartmentId), { ...p, orderIndex: idx }, { merge: true });
-    });
-    await batch.commit();
-    await saveState(updated, requests, settings, customHolidays);
+    const withOrder = updated.map((p, idx) => ({ ...p, orderIndex: idx }));
+    await saveState(withOrder, requests, settings, customHolidays);
   };
 
   const changePersonnelPosition = async (index: number, targetPos: number) => {
@@ -658,57 +601,98 @@ export default function Home() {
     const [movedItem] = updated.splice(index, 1);
     updated.splice(targetIndex, 0, movedItem);
 
-    const batch = writeBatch(db);
-    updated.forEach((p, idx) => {
-      batch.set(getDeptDocRef('personnel', p.id, selectedDepartmentId), { ...p, orderIndex: idx }, { merge: true });
-    });
-    await batch.commit();
-    await saveState(updated, requests, settings, customHolidays);
+    const withOrder = updated.map((p, idx) => ({ ...p, orderIndex: idx }));
+    await saveState(withOrder, requests, settings, customHolidays);
   };
 
   // Run the smart constraints CP-SAT mimic engine with loading animation
   const handleRunOptimizer = () => {
     const key = `${currentYear}_${currentMonth}`;
-    if (finalizedMonths.includes(key)) {
+    let wasLocked = finalizedMonths.includes(key);
+    if (wasLocked) {
       const confirmUnlock = confirm('برنامه این ماه ثبت نهایی و قفل شده است. آیا مایلید قفل لیست را باز کرده و بازتولید هوشمند را اجرا کنید؟');
       if (!confirmUnlock) return;
-      
-      const updateFinalized = async () => {
-        try {
-          await setDoc(getDeptDocRef('schedules', key, selectedDepartmentId), { finalized: false }, { merge: true });
-        } catch (error) {
-          console.error("Error unlocking schedule:", error);
-          alert("خطا در باز کردن قفل جدول: " + (error instanceof Error ? error.message : String(error)));
-        }
-      };
-      updateFinalized();
     }
 
     setIsSolving(true);
     setTimeout(async () => {
       try {
         const solved = solveNursingSchedule(currentYear, currentMonth, personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
-        const schedRef = getDeptDocRef('schedules', `${currentYear}_${currentMonth}`, selectedDepartmentId);
-        await setDoc(schedRef, {
-          ...solved,
-          finalized: false,
-          dismissedWarnings: dismissedWarnings
-        });
-      } catch (error) {
-        console.error("Error running optimizer:", error);
-        alert("خطا در اجرای بهینه‌سازی: " + (error instanceof Error ? error.message : String(error)));
+        
+        const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+        if (!nextDb.deptData) nextDb.deptData = {};
+        
+        const deptId = selectedDepartmentId || 'sepehr';
+        const oldDept = nextDb.deptData[deptId] || {
+          personnel: [],
+          requests: [],
+          settings_system: INITIAL_SETTINGS,
+          settings_credentials: { username: 'headnurse', password: '123456' },
+          holidays: {},
+          firstDayOfWeek: {},
+          schedules: {},
+        };
+
+        const updatedDept = {
+          ...oldDept,
+          schedules: {
+            ...oldDept.schedules,
+            [`${currentYear}_${currentMonth}`]: {
+              ...solved,
+              finalized: false,
+              dismissedWarnings: dismissedWarnings
+            }
+          }
+        };
+
+        nextDb.deptData[deptId] = updatedDept;
+        await saveDbState(nextDb);
+      } catch (err) {
+        console.error("Solver error:", err);
       } finally {
         setIsSolving(false);
       }
-    }, 1200);
+    }, 1500);
   };
 
   const handleFinalizeMonth = async () => {
     if (role === 'personnel') return;
     try {
       const key = `${currentYear}_${currentMonth}`;
-      const schedRef = getDeptDocRef('schedules', key, selectedDepartmentId);
-      await setDoc(schedRef, { finalized: true }, { merge: true });
+      
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const existingSched = oldDept.schedules?.[key];
+      if (!existingSched) {
+        alert("جدول شیفتی برای نهایی‌سازی یافت نشد.");
+        return;
+      }
+
+      const updatedDept = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...existingSched,
+            finalized: true
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
       alert(`لیست شیفت‌های ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت ثبت نهایی شد و قفل گردید.`);
     } catch (error) {
       console.error("Error finalizing month:", error);
@@ -720,8 +704,40 @@ export default function Home() {
     if (role === 'personnel') return;
     try {
       const key = `${currentYear}_${currentMonth}`;
-      const schedRef = getDeptDocRef('schedules', key, selectedDepartmentId);
-      await setDoc(schedRef, { finalized: false }, { merge: true });
+      
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const existingSched = oldDept.schedules?.[key];
+      if (!existingSched) {
+        alert("جدول شیفتی یافت نشد.");
+        return;
+      }
+
+      const updatedDept = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...existingSched,
+            finalized: false
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
       alert(`قفل لیست شیفت‌های ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت باز شد.`);
     } catch (error) {
       console.error("Error unlocking month:", error);
@@ -733,12 +749,42 @@ export default function Home() {
     try {
       const updated = [...dismissedWarnings, warnText];
       const key = `${currentYear}_${currentMonth}`;
-      const schedRef = getDeptDocRef('schedules', key, selectedDepartmentId);
-      await setDoc(schedRef, { dismissedWarnings: updated }, { merge: true });
+      
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const existingSched = oldDept.schedules?.[key];
+      if (!existingSched) return;
+
+      const updatedDept = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...existingSched,
+            dismissedWarnings: updated
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
     } catch (error) {
       console.error("Error dismissing warning:", error);
     }
   };
+
 
   const handleSelectMonth = (mNum: number) => {
     setIsSolving(true);
@@ -797,14 +843,28 @@ export default function Home() {
               username: uInput,
               password: pInput
             };
-            await setDoc(doc(db, 'departments', selectedDepartmentId), updatedDept, { merge: true });
             
-            if (selectedDepartmentId === 'sepehr') {
-              await setDoc(doc(db, 'settings', 'credentials'), {
-                username: uInput,
-                password: pInput
-              });
+            const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+            if (!nextDb.deptData) nextDb.deptData = {};
+            
+            nextDb.departments = (nextDb.departments || []).map(d => d.id === selectedDepartmentId ? updatedDept : d);
+            
+            const deptId = selectedDepartmentId || 'sepehr';
+            if (!nextDb.deptData[deptId]) {
+              nextDb.deptData[deptId] = {
+                personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+                requests: INITIAL_REQUESTS,
+                settings_system: INITIAL_SETTINGS,
+                settings_credentials: { username: uInput, password: pInput },
+                holidays: {},
+                firstDayOfWeek: {},
+                schedules: {},
+              };
+            } else {
+              nextDb.deptData[deptId].settings_credentials = { username: uInput, password: pInput };
             }
+            
+            await saveDbState(nextDb);
 
             setHeadnurseUsername(uInput);
             setHeadnursePassword(pInput);
@@ -892,19 +952,32 @@ export default function Home() {
       const uVal = newUsernameValue.trim();
       const pVal = newPasswordValue.trim();
       
-      await setDoc(getDeptDocRef('settings', 'credentials', selectedDepartmentId), {
-        username: uVal,
-        password: pVal
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      if (!nextDb.deptData[deptId]) {
+        nextDb.deptData[deptId] = {
+          personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+          requests: INITIAL_REQUESTS,
+          settings_system: INITIAL_SETTINGS,
+          settings_credentials: { username: uVal, password: pVal },
+          holidays: {},
+          firstDayOfWeek: {},
+          schedules: {},
+        };
+      } else {
+        nextDb.deptData[deptId].settings_credentials = { username: uVal, password: pVal };
+      }
+
+      nextDb.departments = (nextDb.departments || []).map(d => {
+        if (d.id === selectedDepartmentId) {
+          return { ...d, username: uVal, password: pVal };
+        }
+        return d;
       });
 
-      const matchedDept = departments.find(d => d.id === selectedDepartmentId);
-      if (matchedDept) {
-        await setDoc(doc(db, 'departments', selectedDepartmentId), {
-          ...matchedDept,
-          username: uVal,
-          password: pVal
-        }, { merge: true });
-      }
+      await saveDbState(nextDb);
 
       setHeadnurseUsername(uVal);
       setHeadnursePassword(pVal);
@@ -977,7 +1050,6 @@ export default function Home() {
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader
         };
-        await setDoc(getDeptDocRef('personnel', editingPersonnel.id, selectedDepartmentId), pData);
         updatedList = personnel.map(p => p.id === editingPersonnel.id ? pData : p);
       } else {
         const newId = `p_${Date.now()}`;
@@ -993,9 +1065,9 @@ export default function Home() {
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
           username: formLastName.trim(), // Default username is LastName
-          password: '1234'                 // Default personnel password is 1234
+          password: '1234',                 // Default personnel password is 1234
+          orderIndex: personnel.length
         };
-        await setDoc(getDeptDocRef('personnel', newId, selectedDepartmentId), { ...pData, orderIndex: personnel.length });
         updatedList = [...personnel, pData];
       }
 
@@ -1009,14 +1081,6 @@ export default function Home() {
 
   const handleDeletePersonnel = async (id: string) => {
     try {
-      await deleteDoc(getDeptDocRef('personnel', id, selectedDepartmentId));
-      
-      // Clean up related requests in Firestore
-      const pReqs = requests.filter(r => r.personnelId === id);
-      for (const r of pReqs) {
-        await deleteDoc(getDeptDocRef('requests', r.id, selectedDepartmentId));
-      }
-
       const updatedP = personnel.filter(p => p.id !== id);
       const updatedR = requests.filter(r => r.personnelId !== id);
       await saveState(updatedP, updatedR, settings, customHolidays);
@@ -1086,12 +1150,6 @@ export default function Home() {
         // Replace temporary draft id with real id
         const finalId = reqData.id.startsWith('draft_') ? `req_${Date.now()}_${Math.random().toString(36).substr(2, 5)}` : reqData.id;
         const finalReq = { ...reqData, id: finalId };
-        
-        const cleanedReqData = Object.fromEntries(
-          Object.entries(finalReq).filter(([_, v]) => v !== undefined)
-        ) as any;
-
-        await setDoc(getDeptDocRef('requests', finalReq.id, selectedDepartmentId), cleanedReqData);
         updatedR.push(finalReq);
       }
 
@@ -1115,10 +1173,6 @@ export default function Home() {
       return;
     }
     try {
-      const pReqs = requests.filter(r => r.personnelId === personId);
-      for (const r of pReqs) {
-        await deleteDoc(getDeptDocRef('requests', r.id, selectedDepartmentId));
-      }
       const updatedR = requests.filter(r => r.personnelId !== personId);
       await saveState(personnel, updatedR, settings, customHolidays);
     } catch (e) {
@@ -1149,12 +1203,6 @@ export default function Home() {
           selectedDays: reqScope === 'custom_days' ? reqSelectedDays : undefined
         };
 
-        const cleanedReqData = Object.fromEntries(
-          Object.entries(reqData).filter(([_, v]) => v !== undefined)
-        ) as any;
-
-        await setDoc(getDeptDocRef('requests', reqData.id, selectedDepartmentId), cleanedReqData);
-        
         const updatedR = requests.map(r => r.id === editingRequest.id ? reqData : r);
         await saveState(personnel, updatedR, settings, customHolidays);
         setShowAddRequestModal(false);
@@ -1172,7 +1220,6 @@ export default function Home() {
 
   const handleDeleteRequest = async (id: string) => {
     try {
-      await deleteDoc(getDeptDocRef('requests', id, selectedDepartmentId));
       const updatedR = requests.filter(r => r.id !== id);
       await saveState(personnel, updatedR, settings, customHolidays);
     } catch (error) {
@@ -1198,16 +1245,38 @@ export default function Home() {
 
       const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
 
-      const schedRef = getDeptDocRef('schedules', `${currentYear}_${currentMonth}`, selectedDepartmentId);
-      await setDoc(schedRef, {
-        year: currentYear,
-        month: currentMonth,
-        assignments: updatedAssignments,
-        shiftLeaders: verification.shiftLeaders,
-        warnings: verification.warnings,
-        finalized: false,
-        dismissedWarnings: dismissedWarnings
-      });
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const updatedDept = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [`${currentYear}_${currentMonth}`]: {
+            year: currentYear,
+            month: currentMonth,
+            assignments: updatedAssignments,
+            shiftLeaders: verification.shiftLeaders,
+            warnings: verification.warnings,
+            finalized: false,
+            dismissedWarnings: dismissedWarnings
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
 
       setEditingCell(null);
     } catch (error) {
@@ -1243,21 +1312,37 @@ export default function Home() {
     }
 
     try {
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
       if (role === 'headnurse') {
-        const activeDeptRef = doc(db, 'departments', selectedDepartmentId);
-        const credsRef = getDeptDocRef('settings', 'credentials', selectedDepartmentId);
+        const uVal = profileUsernameInput.trim();
+        const pVal = profilePasswordInput.trim();
+        const dName = profileDeptNameInput.trim();
 
-        await setDoc(activeDeptRef, {
-          username: profileUsernameInput.trim(),
-          password: profilePasswordInput.trim(),
-          name: profileDeptNameInput.trim()
-        }, { merge: true });
-
-        await setDoc(credsRef, {
-          username: profileUsernameInput.trim(),
-          password: profilePasswordInput.trim()
+        nextDb.departments = (nextDb.departments || []).map(d => {
+          if (d.id === selectedDepartmentId) {
+            return { ...d, username: uVal, password: pVal, name: dName };
+          }
+          return d;
         });
 
+        if (!nextDb.deptData[deptId]) {
+          nextDb.deptData[deptId] = {
+            personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+            requests: INITIAL_REQUESTS,
+            settings_system: INITIAL_SETTINGS,
+            settings_credentials: { username: uVal, password: pVal },
+            holidays: {},
+            firstDayOfWeek: {},
+            schedules: {},
+          };
+        } else {
+          nextDb.deptData[deptId].settings_credentials = { username: uVal, password: pVal };
+        }
+
+        await saveDbState(nextDb);
         alert('پروفایل سرپرستار بخش با موفقیت ارتقا یافت و ذخیره شد.');
       } else if (role === 'personnel' && selectedPersonnelUser) {
         const pData = {
@@ -1265,7 +1350,23 @@ export default function Home() {
           password: profilePasswordInput.trim()
         };
 
-        await setDoc(getDeptDocRef('personnel', selectedPersonnelUser.id, selectedDepartmentId), pData);
+        const updatedP = personnel.map(p => p.id === selectedPersonnelUser.id ? pData : p);
+        
+        if (!nextDb.deptData[deptId]) {
+          nextDb.deptData[deptId] = {
+            personnel: updatedP,
+            requests: requests,
+            settings_system: settings,
+            settings_credentials: { username: headnurseUsername, password: headnursePassword },
+            holidays: {},
+            firstDayOfWeek: {},
+            schedules: {},
+          };
+        } else {
+          nextDb.deptData[deptId].personnel = updatedP;
+        }
+
+        await saveDbState(nextDb);
         setSelectedPersonnelUser(pData);
         alert('اطلاعات امنیتی پرسنل با موفقیت به‌روزرسانی شد.');
       }
@@ -1911,17 +2012,27 @@ export default function Home() {
                     };
 
                     try {
-                      // 1. Save department structure
-                      await setDoc(doc(db, 'departments', newId), customDeptData);
+                      const nextDb = getFreshDbCopy();
+                      if (!nextDb.departments) nextDb.departments = [];
+                      if (!nextDb.deptData) nextDb.deptData = {};
 
-                      // 2. Initialize default configurations for this department
-                      await setDoc(doc(db, `departments/${newId}/settings`, 'system'), INITIAL_SETTINGS);
-                      await setDoc(doc(db, `departments/${newId}/settings`, 'credentials'), {
-                        username: newDeptHeadnurseUsername.trim(),
-                        password: newDeptHeadnursePassword.trim()
-                      });
+                      nextDb.departments = [...nextDb.departments, customDeptData];
+                      nextDb.deptData[newId] = {
+                        personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+                        requests: INITIAL_REQUESTS,
+                        settings_system: INITIAL_SETTINGS,
+                        settings_credentials: {
+                          username: newDeptHeadnurseUsername.trim(),
+                          password: newDeptHeadnursePassword.trim()
+                        },
+                        holidays: {},
+                        firstDayOfWeek: {},
+                        schedules: {},
+                      };
 
-                      // 3. Select department and reset inputs
+                      await saveDbState(nextDb);
+
+                      // Select department and reset inputs
                       setSelectedDepartmentId(newId);
                       if (typeof window !== 'undefined') {
                         localStorage.setItem('hospital_selected_dept_id', newId);
@@ -1954,7 +2065,7 @@ export default function Home() {
               <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
             </h3>
             <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              هشدار: شما در حال حذف کامل بخش "{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}" هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
+              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
             </p>
             
             <div className="space-y-4 text-right">
@@ -1986,7 +2097,15 @@ export default function Home() {
                   const matchedDept = departments.find(d => d.id === selectedDepartmentId);
                   if (matchedDept && matchedDept.username === deleteDeptAuthUser && matchedDept.password === deleteDeptAuthPass) {
                     try {
-                      await deleteDoc(doc(db, 'departments', selectedDepartmentId));
+                      const nextDb = getFreshDbCopy();
+                      if (!nextDb.departments) nextDb.departments = [];
+                      if (!nextDb.deptData) nextDb.deptData = {};
+
+                      nextDb.departments = nextDb.departments.filter(d => d.id !== selectedDepartmentId);
+                      delete nextDb.deptData[selectedDepartmentId];
+
+                      await saveDbState(nextDb);
+
                       alert(`بخش با موفقیت حذف شد.`);
                       setSelectedDepartmentId('sepehr');
                       setShowDeptDeleteAuth(false);
@@ -2247,6 +2366,12 @@ export default function Home() {
             </h1>
             <div className="hidden md:flex text-xs font-black text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100">
               {departments.find(d => d.id === selectedDepartmentId)?.name || 'بخش سپهر'}
+            </div>
+            {/* Iranian Object Storage Status Badge */}
+            <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-black text-blue-700 bg-blue-50 px-2.5 py-1.5 rounded-full border border-blue-100">
+              <span className={`w-2 h-2 rounded-full ${isSavingDb ? 'bg-orange-500 animate-pulse' : (isLoadingDb ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500')}`} />
+              <span>پشتیبان‌گیری ابری:</span>
+              <span className="font-mono text-[9px] text-blue-600 bg-blue-100/60 px-1.5 py-0.5 rounded-md">Arvan S3</span>
             </div>
           </div>
           
@@ -3103,10 +3228,6 @@ export default function Home() {
 
                           let updatedR = [...requests];
                           for (const reqData of newRequests) {
-                            const cleanedReqData = Object.fromEntries(
-                              Object.entries(reqData).filter(([_, v]) => v !== undefined)
-                            ) as any;
-                            await setDoc(doc(db, 'requests', reqData.id), cleanedReqData);
                             updatedR.push(reqData);
                           }
 
@@ -3324,8 +3445,6 @@ export default function Home() {
                                     <button
                                       onClick={async () => {
                                         const updatedReq = { ...r, isEssential: !r.isEssential };
-                                        await setDoc(doc(db, 'requests', r.id), updatedReq);
-                                        // Optimistically update our local state to reflect instantly before Firestore triggers snapshot
                                         const updatedList = requests.map(item => item.id === r.id ? updatedReq : item);
                                         await saveState(personnel, updatedList, settings, customHolidays);
                                       }}
@@ -3986,10 +4105,34 @@ export default function Home() {
                             dutyToSave.contract = contract_calc;
                           }
 
-                          await setDoc(getDeptDocRef('holidays', `${currentYear}_${currentMonth}`, selectedDepartmentId), {
-                            days: customHolidays,
-                            monthlyDutyHours: dutyToSave
-                          }, { merge: true });
+                          const nextDb = getFreshDbCopy();
+                          if (!nextDb.deptData) nextDb.deptData = {};
+                          
+                          const deptId = selectedDepartmentId || 'sepehr';
+                          const oldDept = nextDb.deptData[deptId] || {
+                            personnel: [],
+                            requests: [],
+                            settings_system: INITIAL_SETTINGS,
+                            settings_credentials: { username: 'headnurse', password: '123456' },
+                            holidays: {},
+                            firstDayOfWeek: {},
+                            schedules: {},
+                          };
+
+                          const updatedDept = {
+                            ...oldDept,
+                            holidays: {
+                              ...oldDept.holidays,
+                              [`${currentYear}_${currentMonth}`]: {
+                                days: customHolidays,
+                                monthlyDutyHours: dutyToSave
+                              }
+                            }
+                          };
+
+                          nextDb.deptData[deptId] = updatedDept;
+                          await saveDbState(nextDb);
+
                           setMonthlyDutyHours(dutyToSave);
                           alert('ساعت موظفی این ماه بر اساس تقویم و تنظیمات نهایی شد و در داشبورد پرسنل برای همین ماه نمایش داده خواهد شد.');
                         } catch (e) {
@@ -4955,82 +5098,6 @@ export default function Home() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* --- CUSTOM MODAL: DEPARTMENT DELETE AUTH --- */}
-      {showDeptDeleteAuth && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in" id="dept-delete-auth-modal" dir="rtl">
-          <div className="bg-white rounded-[24px] shadow-2xl p-6 md:p-8 w-full max-w-[420px] animate-scale-in border border-slate-100 relative">
-            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2 mb-3">
-              <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
-            </h3>
-            <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              هشدار: شما در حال حذف کامل بخش "{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}" هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
-            </p>
-            
-            <div className="space-y-4 text-right">
-              <div>
-                <label className="block text-[10px] font-black text-slate-600 mb-1">نام کاربری سرپرستار بخش</label>
-                <input 
-                  type="text" 
-                  value={deleteDeptAuthUser}
-                  onChange={(e) => setDeleteDeptAuthUser(e.target.value)}
-                  className="w-full text-xs font-bold bg-slate-50 border border-slate-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl px-3 py-2.5 text-slate-800 font-sans"
-                  placeholder="نام کاربری"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-slate-600 mb-1">رمز عبور سرپرستار بخش</label>
-                <input 
-                  type="password" 
-                  value={deleteDeptAuthPass}
-                  onChange={(e) => setDeleteDeptAuthPass(e.target.value)}
-                  className="w-full text-xs font-bold bg-slate-50 border border-slate-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl px-3 py-2.5 text-slate-800 font-mono"
-                  placeholder="رمز عبور"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2 mt-8">
-              <button 
-                onClick={async () => {
-                  const matchedDept = departments.find(d => d.id === selectedDepartmentId);
-                  if (matchedDept && matchedDept.username === deleteDeptAuthUser && matchedDept.password === deleteDeptAuthPass) {
-                    try {
-                      await deleteDoc(doc(db, 'departments', selectedDepartmentId));
-                      alert(`بخش با موفقیت حذف شد.`);
-                      setSelectedDepartmentId('sepehr');
-                      setShowDeptDeleteAuth(false);
-                      setDeleteDeptAuthUser('');
-                      setDeleteDeptAuthPass('');
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('hospital_selected_dept_id', 'sepehr');
-                      }
-                    } catch (err) {
-                      console.error("Error deleting department:", err);
-                      alert("خطا در حذف بخش.");
-                    }
-                  } else {
-                    alert('نام کاربری یا رمز عبور سرپرستار بخش نادرست است. عملیات لغو شد.');
-                  }
-                }}
-                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all font-sans cursor-pointer shadow-sm border border-rose-700"
-              >
-                تایید و حذف قطعی بخش
-              </button>
-              <button 
-                onClick={() => {
-                  setShowDeptDeleteAuth(false);
-                  setDeleteDeptAuthUser('');
-                  setDeleteDeptAuthPass('');
-                }}
-                className="flex-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-bold text-xs py-2.5 rounded-xl transition-all cursor-pointer font-sans"
-              >
-                انصراف
-              </button>
-            </div>
           </div>
         </div>
       )}
