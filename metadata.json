@@ -1,0 +1,6 @@
+{
+  "name": "سامانه هوشمند برنامه‌ریزی شیفت پرستاری",
+  "description": "سامانه وب کامل و حرفه‌ای برای مدیریت و برنامه‌ریزی خودکار شیفت پرسنل پرستاری بیمارستان با موتور زمان‌بندی هوشمند",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,113 @@
+{
+  "entities": {
+    "Personnel": {
+      "title": "Personnel",
+      "description": "Hospital staff member details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "personalCode": { "type": "string" },
+        "jobGroup": { "type": "string", "enum": ["nurse", "assistant"] },
+        "position": { "type": "string", "enum": ["supervisor", "staff", "general", "none"] },
+        "employmentType": { "type": "string", "enum": ["official", "contract", "conscript", "overtime"] },
+        "experienceYears": { "type": "integer" },
+        "active": { "type": "boolean" },
+        "canBeShiftLeader": { "type": "boolean" }
+      },
+      "required": ["id", "firstName", "lastName", "personalCode", "jobGroup", "position", "employmentType", "experienceYears", "active", "canBeShiftLeader"]
+    },
+    "ShiftRequest": {
+      "title": "ShiftRequest",
+      "description": "A staff request for leaves, offs, or shifts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "personnelId": { "type": "string" },
+        "requestType": { "type": "string", "enum": ["shift", "OFF", "leave", "pattern", "avoid_shift"] },
+        "preferredShift": { "type": "string" },
+        "patternSteps": { "type": "array" },
+        "isEssential": { "type": "boolean" },
+        "scope": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "selectedDays": { "type": "array" }
+      },
+      "required": ["id", "personnelId", "requestType", "isEssential", "scope"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Hospital scheduling requirements and rules",
+      "type": "object",
+      "properties": {
+        "dutyHours": { "type": "object" },
+        "demand": { "type": "object" }
+      },
+      "required": ["dutyHours", "demand"]
+    },
+    "MonthlySchedule": {
+      "title": "MonthlySchedule",
+      "description": "Completed assignments, warnings, and shift leaders for a specific month",
+      "type": "object",
+      "properties": {
+        "year": { "type": "integer" },
+        "month": { "type": "integer" },
+        "assignments": { "type": "object" },
+        "shiftLeaders": { "type": "object" },
+        "warnings": { "type": "array" },
+        "finalized": { "type": "boolean" },
+        "dismissedWarnings": { "type": "array" }
+      },
+      "required": ["year", "month", "assignments", "shiftLeaders", "warnings"]
+    },
+    "Holidays": {
+      "title": "Holidays",
+      "description": "Custom holidays and their titles for a given month",
+      "type": "object",
+      "properties": {
+        "year": { "type": "integer" },
+        "month": { "type": "integer" },
+        "days": { "type": "object" }
+      },
+      "required": ["year", "month", "days"]
+    },
+    "FirstDayOfWeek": {
+      "title": "FirstDayOfWeek",
+      "description": "First day of the week index for a specific month",
+      "type": "object",
+      "properties": {
+        "year": { "type": "integer" },
+        "month": { "type": "integer" },
+        "index": { "type": "integer" }
+      },
+      "required": ["year", "month", "index"]
+    }
+  },
+  "firestore": {
+    "/personnel/{personnelId}": {
+      "schema": "Personnel",
+      "description": "Personnel profiles"
+    },
+    "/requests/{requestId}": {
+      "schema": "ShiftRequest",
+      "description": "Leave, OFF, and preference requests"
+    },
+    "/settings/system": {
+      "schema": "SystemSettings",
+      "description": "System-wide duty and demand rules"
+    },
+    "/schedules/{yearMonth}": {
+      "schema": "MonthlySchedule",
+      "description": "Grid shift assignments and leaders by year and month"
+    },
+    "/holidays/{yearMonth}": {
+      "schema": "Holidays",
+      "description": "Custom holidays designated for a specific month"
+    },
+    "/firstDayOfWeek/{yearMonth}": {
+      "schema": "FirstDayOfWeek",
+      "description": "The custom start of week index for calendar formatting"
+    }
+  }
+}
