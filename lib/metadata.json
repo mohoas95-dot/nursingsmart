@@ -1,0 +1,6 @@
+{
+  "name": "My App",
+  "description": "Rebuilt Next.js Application",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
