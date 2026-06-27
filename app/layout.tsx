@@ -10,7 +10,14 @@ const vazirmatn = Vazirmatn({
 
 export const metadata: Metadata = {
   title: 'سامانه هوشمند برنامه‌ریزی شیفت پرستاری بیمارستان',
-  description: 'سیستم هوشمند تخصیص خودکار و عادلانه شیفت پرسنل با موتور الگوریتمی پیشرفته بر پایه قوانین وزارت بهداشت و بن‌بست‌شکنی هوشمند',
+  description: 'سیستم هوشمند تخصیص خودکار و عادلانه شیفت پرسنل با موتور الگوریتمی پیشرفته و هوشمند',
+  manifest: '/manifest.json',
+  themeColor: '#000000',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'NursePlan',
+  },
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
