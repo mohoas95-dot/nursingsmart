@@ -12,6 +12,7 @@ export const metadata: Metadata = {
   title: 'سامانه هوشمند برنامه‌ریزی شیفت پرستاری بیمارستان',
   description: 'سیستم هوشمند تخصیص خودکار و عادلانه شیفت پرسنل با موتور الگوریتمی پیشرفته و هوشمند',
   themeColor: '#000000',
+  manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
