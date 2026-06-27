@@ -1,7 +1,7 @@
 {
-  "name": "NursePlan",
+  "name": "سامانه هوشمند برنامه‌ریزی شیفت پرستاری",
   "short_name": "NursePlan",
-  "description": "سامانه مدیریت شیفت پرستاری",
+  "description": "سیستم هوشمند تخصیص خودکار و عادلانه شیفت پرسنل بر پایه قوانین وزارت بهداشت",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
