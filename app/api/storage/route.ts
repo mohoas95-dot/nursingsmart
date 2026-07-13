@@ -38,13 +38,36 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const success = await writeState(body.state);
+    const incomingState = body.state;
+
+    // ================= [ لایه محافظتی نوین و ضد اسپم ] =================
+    if (incomingState.departments && Array.isArray(incomingState.departments)) {
+      const seenNames = new Set<string>();
+      
+      // فیلتر کردن آرایه برای جلوگیری از ثبت نام‌های تکراری (مثل اسپم شدن "سپهر")
+      incomingState.departments = incomingState.departments.filter((dept: any) => {
+        if (!dept || !dept.name) return false;
+        
+        const normalizedName = dept.name.trim();
+        
+        // اگر این نام قبلاً در این درخواست دیده شده باشد، آن را حذف کن
+        if (seenNames.has(normalizedName)) {
+          return false; 
+        }
+        
+        seenNames.add(normalizedName);
+        return true;
+      });
+    }
+    // ===================================================================
+
+    const success = await writeState(incomingState);
 
     return NextResponse.json({
       success,
       isConfigured,
       message: success 
-        ? 'Database state saved successfully to Iranian S3 storage.' 
+        ? 'Database state saved successfully to Iranian S3 storage (Sanitized).' 
         : 'S3 not configured or write failed, data saved to temporary memory.'
     });
   } catch (err: any) {
