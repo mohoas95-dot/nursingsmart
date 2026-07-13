@@ -2012,37 +2012,35 @@ export default function Home() {
                     };
 
                     try {
-                      const nextDb = getFreshDbCopy();
-                      if (!nextDb.departments) nextDb.departments = [];
-                      if (!nextDb.deptData) nextDb.deptData = {};
+  // ۱. به محض کلیک، لودینگ سراسری کل صفحه را روشن کن
+  setIsSaving(true);
 
-                      nextDb.departments = [...nextDb.departments, customDeptData];
-                      nextDb.deptData[newId] = {
-                        personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-                        requests: INITIAL_REQUESTS,
-                        settings_system: INITIAL_SETTINGS,
-                        settings_credentials: {
-                          username: newDeptHeadnurseUsername.trim(),
-                          password: newDeptHeadnursePassword.trim()
-                        },
-                        holidays: {},
-                        firstDayOfWeek: {},
-                        schedules: {},
-                      };
+  const nextDb = getFreshDbCopy();
+  if (!nextDb.departments) nextDb.departments = [];
+  if (!nextDb.deptData) nextDb.deptData = {};
 
-                      await saveDbState(nextDb);
+  // ... (کدهای میانی خودت که در تصویر هست بدون تغییر بمانند) ...
 
-                      // Select department and reset inputs
-                      setSelectedDepartmentId(newId);
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('hospital_selected_dept_id', newId);
-                      }
+  await saveDbState(nextDb);
 
-                      setShowAddDeptModal(false);
-                      setNewDeptName('');
-                      setNewDeptHeadnurseUsername('');
-                      setNewDeptHeadnursePassword('');
-                      alert(`بخش جدید «${customDeptData.name}» با موفقیت در دیتابیس بعثت نهاجا تشکیل شد!`);
+  setSelectedDepartmentId(newId);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('hospital_selected_dept_id', newId);
+  }
+
+  setShowAddDeptModal(false);
+  setNewDeptName('');
+  setNewDeptHeadnurseUsername('');
+  setNewDeptHeadnursePassword('');
+  alert(`بخش جدید "${customDeptData.name}" با موفقیت در دیتابیس نهایی تشکیل شد.`);
+} catch (err) {
+  console.error(err);
+  alert('خطا در تعریف مستقل بخش جدید.');
+} finally {
+  // ۲. کار که تمام شد، لودینگ را در کل سایت خاموش کن
+  setIsSaving(false);
+}
+
                     } catch (err) {
                       console.error(err);
                       alert('خطا در تعریف مستقل بخش جدید.');
@@ -5097,10 +5095,20 @@ export default function Home() {
                   <Check className="w-4 h-4 text-white" /> ثبت نهایی درخواست‌ها
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
+            // خط 5098 شما از قبل این است:
+    </form>
+  </div>
+</div>
+) : null; // 👈 این بخش شرطی شماست که در خط 5101 عکس تمام شده
+
+{/* 🟢 لودینگ سراسری دقیقاً در این نقطه قرار می‌گیرد */}
+{isSaving && (
+  <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(4px)', zIndex: 99999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', color: 'white', direction: 'rtl' }}>
+    <span className="animate-spin inline-block w-12 h-12 border-4 border-white border-t-transparent rounded-full"></span>
+    <div style={{ fontWeight: 'bold', fontSize: '18px' }}>در حال همگام‌سازی اطلاعات با سرور...</div>
+    <div style={{ fontSize: '13px', opacity: 0.8 }}>لطفاً شکیبا باشید و صفحه را رفرش نکنید.</div>
+  </div>
+)}
 
     </div>
   );
