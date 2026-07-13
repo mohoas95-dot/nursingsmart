@@ -31,27 +31,72 @@ export async function POST(req: NextRequest) {
     const { isConfigured } = getS3Client();
     const body = await req.json();
     
-    if (!body || !body.state) {
-      return NextResponse.json({
-        success: false,
-        error: 'Missing required state object in request body'
-      }, { status: 400 });
+    if (!body) {
+      return NextResponse.json({ success: false, error: 'درخواست معتبر نیست' }, { status: 400 });
     }
 
-    const success = await writeState(body.state);
+    // ۱. خواندن وضعیت فعلی دیتابیس مستقیم از S3 آروان
+    const { state } = await readState();
+
+    if (!state) {
+      return NextResponse.json({ success: false, error: 'پایگاه داده لود نشد' }, { status: 500 });
+    }
+
+    // ۲. بررسی نوع دیتای ورودی برای جلوگیری از خطای همزمانی یا پریدن بخش‌ها
+    if (body.state && body.state.departments) {
+      // اگر فرانت‌اِند کل دیتابیس را فرستاده بود، آن را جایگزین کن
+      state.departments = body.state.departments;
+      if (body.state.deptData) {
+        state.deptData = { ...state.deptData, ...body.state.deptData };
+      }
+    } else if (body.newDepartment) {
+      // اگر فرانت‌اِند فقط بخش جدید را فرستاده بود
+      const { newDepartment } = body;
+      
+      // بررسی تکراری نبودن نام بخش جدید
+      const isDuplicate = state.departments.some(
+        (d: any) => d.name.trim() === newDepartment.name.trim()
+      );
+      
+      if (isDuplicate) {
+        return NextResponse.json({
+          success: false,
+          error: `بخش "${newDepartment.name}" از قبل وجود دارد.`
+        }, { status: 400 });
+      }
+
+      // اضافه کردن بخش جدید به لیست قبلی‌ها به صورت امن
+      state.departments.push(newDepartment);
+      
+      // ساختن فضای دیتای خالی برای بخش جدید تا پرسنل بتوانند وارد شوند
+      if (newDepartment.id) {
+        state.deptData[newDepartment.id] = {
+          personnel: [],
+          requests: [],
+          settings_system: {},
+          settings_credentials: { username: newDepartment.username, password: newDepartment.password },
+          holidays: {},
+          firstDayOfWeek: {},
+          schedules: {}
+        };
+      }
+    }
+
+    // ۳. ذخیره نهایی و امن روی آروان
+    const success = await writeState(state);
 
     return NextResponse.json({
       success,
       isConfigured,
       message: success 
-        ? 'Database state saved successfully to Iranian S3 storage.' 
-        : 'S3 not configured or write failed, data saved to temporary memory.'
+        ? 'تغییرات با موفقیت و امنیت کامل روی S3 ذخیره شد.' 
+        : 'ذخیره‌سازی با خطا مواجه شد.'
     });
   } catch (err: any) {
     console.error('API storage write error:', err);
     return NextResponse.json({
       success: false,
-      error: err.message || 'Internal server error while writing database state'
+      error: err.message || 'خطای داخلی سرور در ذخیره‌سازی داده'
     }, { status: 500 });
   }
 }
