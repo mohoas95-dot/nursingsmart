@@ -17,10 +17,7 @@ export async function GET() {
     });
   } catch (err: any) {
     console.error('API storage read error:', err);
-    return NextResponse.json({
-      success: false,
-      error: err.message || 'Internal server error'
-    }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'خطای سرور در خواندن داده' }, { status: 500 });
   }
 }
 
@@ -29,53 +26,47 @@ export async function POST(req: NextRequest) {
     const { isConfigured } = getS3Client();
     const body = await req.json();
     
-    if (!body || !body.state) {
-      return NextResponse.json({
-        success: false,
-        error: 'Missing required state object in request body'
-      }, { status: 400 });
+    // اگر دیتایی فرستاده نشده باشد
+    if (!body) {
+      return NextResponse.json({ success: false, error: 'درخواست معتبر نیست' }, { status: 400 });
     }
 
-    // ================= [ لکه‌گیری و فیلتر ملایم دیتای ارسالی فرانت‌اِند ] =================
-    if (body.state.departments && Array.isArray(body.state.departments)) {
-      const seenIds = new Set<string>();
+    // استخراج دیتای وضعیت (State) چه داخل شیء state باشد و چه مستقیم فرستاده شده باشد
+    let targetState = body.state ? body.state : body;
+
+    if (!targetState || !targetState.departments) {
+      return NextResponse.json({ success: false, error: 'ساختار داده نامعتبر است' }, { status: 400 });
+    }
+
+    // بررسی و حذف بخش‌های کاملاً هم‌نام یا اسپم‌شده از لیست نهایی قبل از ذخیره
+    if (Array.isArray(targetState.departments)) {
       const seenNames = new Set<string>();
-
-      body.state.departments = body.state.departments.filter((dept: any) => {
-        if (!dept || !dept.name || !dept.id) return false;
-        
+      
+      targetState.departments = targetState.departments.filter((dept: any) => {
+        if (!dept || !dept.name) return false;
         const normalizedName = dept.name.trim();
-        const normalizedId = dept.id.toString().trim();
-
-        // اگر آیدی یا نام تکراری بود (مثل اسپم شدن مهر)، آن را حذف کن
-        if (seenIds.has(normalizedId) || seenNames.has(normalizedName)) {
-          return false;
+        
+        if (seenNames.has(normalizedName)) {
+          return false; // حذف تکراری‌ها
         }
-
-        seenIds.add(normalizedId);
         seenNames.add(normalizedName);
         return true;
       });
     }
-    // ===================================================================
 
-    // ذخیره مستقیم دیتای فیلتر شده (دقیقاً با همان متد اصلی خودت)
-    const success = await writeState(body.state);
+    // ذخیره‌سازی نهایی دیتای واکسینه شده روی S3 ابر آروان
+    const success = await writeState(targetState);
 
-    // پاسخ دقیق و استانداردی که فرانت‌اِند برای نشان دادن پیام موفقیت منتظرش است
+    // ارسال پاسخ دقیقاً با ساختار استانداردی که فرانت‌اِند شما طلب می‌کند
     return NextResponse.json({
       success,
       isConfigured,
-      message: success 
-        ? 'Database state saved successfully to Iranian S3 storage.' 
-        : 'S3 not configured or write failed, data saved to temporary memory.'
+      state: targetState,
+      message: 'تغییرات با موفقیت ثبت و همگام‌سازی شد.'
     });
 
   } catch (err: any) {
     console.error('API storage write error:', err);
-    return NextResponse.json({
-      success: false,
-      error: err.message || 'Internal server error'
-    }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'خطای سرور در ذخیره‌سازی' }, { status: 500 });
   }
 }
