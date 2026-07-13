@@ -5093,16 +5093,14 @@ className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   id="btn-save-req"
                 >
-                  <Check className="w-4 h-4 text-white" /> ثبت نهایی درخواست‌ها
-                </button>
-              </div>
-            // خط 5098 شما از قبل این است:
+                            <Check className="w-4 h-4 text-white" /> ثبت نهایی درخواست‌ها
+        </button>
+      </div>
     </form>
   </div>
 </div>
-) : null; // 👈 این بخش شرطی شماست که در خط 5101 عکس تمام شده
+) : null;
 
-{/* 🟢 لودینگ سراسری دقیقاً در این نقطه قرار می‌گیرد */}
 {isSaving && (
   <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(4px)', zIndex: 99999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', color: 'white', direction: 'rtl' }}>
     <span className="animate-spin inline-block w-12 h-12 border-4 border-white border-t-transparent rounded-full"></span>
