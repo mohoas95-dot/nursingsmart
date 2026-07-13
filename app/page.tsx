@@ -515,25 +515,9 @@ export default function Home() {
         setMonthlyDutyHours(calculatedMonthlyDutyHours);
       }
 
-      // Calculate schedule
-      const isLocked = finalizedMonths.includes(`${currentYear}_${currentMonth}`);
-      let solved: MonthlySchedule;
-
-      if (isLocked && schedule) {
-        const verification = verifyCoverageAndLeaders(currentYear, currentMonth, updatedP, schedule.assignments, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, updatedR);
-        solved = {
-          ...schedule,
-          shiftLeaders: verification.shiftLeaders,
-          warnings: verification.warnings
-        };
-      } else {
-        solved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
-      }
-
-      // Prepare updated full state
       const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
-      
+
       const deptId = selectedDepartmentId || 'sepehr';
       const oldDept = nextDb.deptData[deptId] || {
         personnel: [],
@@ -544,6 +528,56 @@ export default function Home() {
         firstDayOfWeek: {},
         schedules: {},
       };
+
+      const monthKey = `${currentYear}_${currentMonth}`;
+      const currentMonthSchedule =
+        schedule && schedule.year === currentYear && schedule.month === currentMonth
+          ? schedule
+          : oldDept.schedules?.[monthKey] || null;
+
+      // Calculate schedule
+      const isLocked = finalizedMonths.includes(monthKey);
+      let solved: MonthlySchedule;
+
+      if (currentMonthSchedule) {
+        const totalDays = getJalaliMonthDays(currentYear, currentMonth);
+        const preservedAssignments = updatedP.reduce((acc, person) => {
+          const personAssignments = currentMonthSchedule.assignments?.[person.id] || {};
+          const normalizedAssignments: { [day: number]: ShiftType } = {};
+
+          for (let d = 1; d <= totalDays; d++) {
+            const existingShift = personAssignments[d];
+            if (existingShift) {
+              normalizedAssignments[d] = existingShift;
+            }
+          }
+
+          acc[person.id] = normalizedAssignments;
+          return acc;
+        }, {} as { [pId: string]: { [day: number]: ShiftType } });
+
+        const verification = verifyCoverageAndLeaders(
+          currentYear,
+          currentMonth,
+          updatedP,
+          preservedAssignments,
+          updatedS,
+          updatedH,
+          activeFd === -1 ? undefined : activeFd,
+          updatedR
+        );
+
+        solved = {
+          ...currentMonthSchedule,
+          year: currentYear,
+          month: currentMonth,
+          assignments: preservedAssignments,
+          shiftLeaders: verification.shiftLeaders,
+          warnings: verification.warnings
+        };
+      } else {
+        solved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
+      }
 
       const updatedDept = {
         ...oldDept,
@@ -563,7 +597,7 @@ export default function Home() {
         },
         schedules: {
           ...oldDept.schedules,
-          [`${currentYear}_${currentMonth}`]: {
+          [monthKey]: {
             ...solved,
             finalized: isLocked,
             dismissedWarnings: dismissedWarnings
