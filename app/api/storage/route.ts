@@ -1,4 +1,4 @@
-Import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { readState, writeState, getS3Client } from '../../../lib/s3Storage';
 
 export async function GET() {
