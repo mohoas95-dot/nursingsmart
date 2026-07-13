@@ -5101,10 +5101,41 @@ className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs
 </div>
 
 {isSaving && (
-  <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.7)', backdropFilter: 'blur(4px)', zIndex: 99999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', color: 'white', direction: 'rtl' }}>
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(15,23,42,.7)",
+      backdropFilter: "blur(4px)",
+      zIndex: 99999,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "16px",
+      color: "white",
+      direction: "rtl",
+    }}
+  >
     <span className="animate-spin inline-block w-12 h-12 border-4 border-white border-t-transparent rounded-full"></span>
-    <div style={{ fontWeight: 'bold', fontSize: '18px' }}>در حال همگام‌سازی اطلاعات با سرور...</div>
-    <div style={{ fontSize: '13px', opacity: 0.8 }}>لطفاً شکیبا باشید و صفحه را رفرش نکنید.</div>
+
+    <div
+      style={{
+        fontWeight: "bold",
+        fontSize: "18px",
+      }}
+    >
+      در حال همگام‌سازی اطلاعات با سرور...
+    </div>
+
+    <div
+      style={{
+        fontSize: "13px",
+        opacity: 0.8,
+      }}
+    >
+      لطفاً صفحه را نبندید.
+    </div>
   </div>
 )}
 
