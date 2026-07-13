@@ -1998,62 +1998,59 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={async () => {
-                    if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || newDeptHeadnursePassword.trim().length < 4) {
-                      alert('لطفا تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
-                      return;
-                    }
-
-                    const newId = `dept_${Date.now()}`;
-                    const customDeptData: Department = {
-                      id: newId,
-                      name: newDeptName.trim(),
-                      username: newDeptHeadnurseUsername.trim(),
-                      password: newDeptHeadnursePassword.trim()
-                    };
-
-                    try {
-  // ۱. به محض کلیک، لودینگ سراسری کل صفحه را روشن کن
-  setIsSaving(true);
-
-  const nextDb = getFreshDbCopy();
-  if (!nextDb.departments) nextDb.departments = [];
-  if (!nextDb.deptData) nextDb.deptData = {};
-
-  // ... (کدهای میانی خودت که در تصویر هست بدون تغییر بمانند) ...
-
-  await saveDbState(nextDb);
-
-  setSelectedDepartmentId(newId);
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('hospital_selected_dept_id', newId);
+  if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || !newDeptHeadnursePassword.trim()) {
+    alert('لطفاً تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
+    return;
   }
 
-  setShowAddDeptModal(false);
-  setNewDeptName('');
-  setNewDeptHeadnurseUsername('');
-  setNewDeptHeadnursePassword('');
-  alert(`بخش جدید "${customDeptData.name}" با موفقیت در دیتابیس نهایی تشکیل شد.`);
-} catch (err) {
-  console.error(err);
-  alert('خطا در تعریف مستقل بخش جدید.');
-} finally {
-  // ۲. کار که تمام شد، لودینگ را در کل سایت خاموش کن
-  setIsSaving(false);
-}
+  const newId = `dept_${Date.now()}`;
+  const customDeptData: Department = {
+    id: newId,
+    name: newDeptName.trim(),
+    username: newDeptHeadnurseUsername.trim(),
+    password: newDeptHeadnursePassword.trim(),
+  };
 
-                    } catch (err) {
-                      console.error(err);
-                      alert('خطا در تعریف مستقل بخش جدید.');
-                    }
-                  }}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2 rounded-xl transition-all shadow-md"
-                >
-                  تایید و پیکربندی مستقل
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+  try {
+    setIsSaving(true);
+
+    const nextDb = getFreshDbCopy();
+    if (!nextDb.departments) nextDb.departments = [];
+    if (!nextDb.deptData) nextDb.deptData = {};
+
+    nextDb.departments = [...nextDb.departments, customDeptData];
+    nextDb.deptData[newId] = {
+      personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+      requests: INITIAL_REQUESTS,
+      settings_system: INITIAL_SETTINGS,
+      settings_credentials: {
+        username: newDeptHeadnurseUsername.trim(),
+        password: newDeptHeadnursePassword.trim(),
+      },
+      holidays: {},
+      firstDayOfWeek: {},
+      schedules: {},
+    };
+
+    await saveDbState(nextDb);
+
+    setSelectedDepartmentId(newId);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hospital_selected_dept_id', newId);
+    }
+
+    setShowAddDeptModal(false);
+    setNewDeptName('');
+    setNewDeptHeadnurseUsername('');
+    setNewDeptHeadnursePassword('');
+    alert(`بخش جدید "${customDeptData.name}" با موفقیت در دیتابیس نهایی تشکیل شد.`);
+  } catch (err) {
+    console.error(err);
+    alert('خطا در تعریف مستقل بخش جدید.');
+  } finally {
+    setIsSaving(false);
+  }
+}}
 
       {/* --- CUSTOM MODAL: DEPARTMENT DELETE AUTH --- */}
       {showDeptDeleteAuth && (
