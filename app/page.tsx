@@ -1996,8 +1996,8 @@ export default function Home() {
                   انصراف
                 </button>
                 <button
-                  type="button"
-                  onClick={async () => {
+  type="button"
+  onClick={async () => {
   if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || !newDeptHeadnursePassword.trim()) {
     alert('لطفاً تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
     return;
@@ -2051,6 +2051,10 @@ export default function Home() {
     setIsSaving(false);
   }
 }}
+className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-all duration-200 flex items-center justify-center gap-1.5"
+>
+تایید و پیکربندی مستقل
+</button>
 
       {/* --- CUSTOM MODAL: DEPARTMENT DELETE AUTH --- */}
       {showDeptDeleteAuth && (
