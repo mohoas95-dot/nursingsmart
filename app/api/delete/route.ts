@@ -2,31 +2,41 @@ import { NextResponse } from 'next/server';
 
 export async function GET() {
   try {
-    // از آنجا که پکیج دقیق دیتابیس شما در این فایل نیست،
-    // برای اینکه پروژه بدون خطا دپلوی شود، یک اسکریپت پویا می‌نویسیم.
-    
-    // لطفاً خط زیر را نگاه کنید؛ بقیه فایل‌های پروژه شما (مثلاً در پوشه lib) 
-    // متغیر اتصال به دیتابیس را چطور ایمپورت کرده‌اند؟ 
-    // اگر فایلی به نام db در پروژه دارید، کد زیر آن را فراخوانی می‌کند:
-    const { db } = require('@/lib/db'); 
+    // ترفند جدید: از متغیر سراسری یا مسیرهای احتمالی دیگر دیتابیس استفاده می‌کنیم
+    let db: any;
 
-    if (db && typeof db.query === 'function') {
-      // اگر دیتابیس شما از نوع SQL معمولی باشد (مثل PostgreSQL یا MySQL):
-      await db.query(`DELETE FROM "Department" WHERE name = 'سپهر'`);
-    } else if (db && typeof db.department?.deleteMany === 'function') {
-      // اگر متغیر دیتابیس نام دیگری داشته باشد:
-      await db.department.deleteMany({ where: { name: 'سپهر' } });
-    } else {
-      throw new Error("متغیر دیتابیس شناسایی نشد. لطفا ساختار lib/db را بررسی کنید.");
+    try {
+      // شانس اول: بررسی اینکه آیا متغیر دیتابیس در ریشه اصلی یا پوشه‌های دیگر پروژه اکسپورت شده؟
+      db = require('@/prisma')?.prisma || require('@/prisma')?.db || globalThis.prisma;
+    } catch {
+      db = null;
     }
+
+    // اگر دیتابیس پیدا نشد، از آبجکت سراسری برنامه کمک می‌گیریم
+    const database = db || (global as any).prisma || (global as any).db;
+
+    if (!database) {
+      throw new Error("تیم فنی: متغیر دیتابیس شما در مسیرهای پیش‌فرض پیدا نشد. لطفاً نام فایل اصلی اتصال دیتابیس خود را چک کنید.");
+    }
+
+    // اجرای دستور حذف دقیق اسپم‌ها
+    const result = await database.department.deleteMany({
+      where: { name: 'سپهر' }
+    });
 
     return NextResponse.json({
       success: true,
-      message: "دستور حذف با موفقیت به دیتابیس ارسال شد."
+      message: "پاک‌سازی اسپم‌ها بالاخره با موفقیت انجام شد",
+      deletedCount: result.count
     });
+
   } catch (err: any) {
     return NextResponse.json(
-      { success: false, error: err.message },
+      { 
+        success: false, 
+        error: "خطای سیستمی", 
+        details: err?.message || err 
+      }, 
       { status: 500 }
     );
   }
