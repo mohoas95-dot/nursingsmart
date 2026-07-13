@@ -1996,65 +1996,66 @@ export default function Home() {
                   انصراف
                 </button>
                 <button
-  type="button"
-  onClick={async () => {
-  if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || !newDeptHeadnursePassword.trim()) {
-    alert('لطفاً تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
-    return;
-  }
+                  type="button"
+                  onClick={async () => {
+                    if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || newDeptHeadnursePassword.trim().length < 4) {
+                      alert('لطفا تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
+                      return;
+                    }
 
-  const newId = `dept_${Date.now()}`;
-  const customDeptData: Department = {
-    id: newId,
-    name: newDeptName.trim(),
-    username: newDeptHeadnurseUsername.trim(),
-    password: newDeptHeadnursePassword.trim(),
-  };
+                    const newId = `dept_${Date.now()}`;
+                    const customDeptData: Department = {
+                      id: newId,
+                      name: newDeptName.trim(),
+                      username: newDeptHeadnurseUsername.trim(),
+                      password: newDeptHeadnursePassword.trim()
+                    };
 
-  try {
-    setIsSaving(true);
+                    try {
+                      const nextDb = getFreshDbCopy();
+                      if (!nextDb.departments) nextDb.departments = [];
+                      if (!nextDb.deptData) nextDb.deptData = {};
 
-    const nextDb = getFreshDbCopy();
-    if (!nextDb.departments) nextDb.departments = [];
-    if (!nextDb.deptData) nextDb.deptData = {};
+                      nextDb.departments = [...nextDb.departments, customDeptData];
+                      nextDb.deptData[newId] = {
+                        personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+                        requests: INITIAL_REQUESTS,
+                        settings_system: INITIAL_SETTINGS,
+                        settings_credentials: {
+                          username: newDeptHeadnurseUsername.trim(),
+                          password: newDeptHeadnursePassword.trim()
+                        },
+                        holidays: {},
+                        firstDayOfWeek: {},
+                        schedules: {},
+                      };
 
-    nextDb.departments = [...nextDb.departments, customDeptData];
-    nextDb.deptData[newId] = {
-      personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-      requests: INITIAL_REQUESTS,
-      settings_system: INITIAL_SETTINGS,
-      settings_credentials: {
-        username: newDeptHeadnurseUsername.trim(),
-        password: newDeptHeadnursePassword.trim(),
-      },
-      holidays: {},
-      firstDayOfWeek: {},
-      schedules: {},
-    };
+                      await saveDbState(nextDb);
 
-    await saveDbState(nextDb);
+                      // Select department and reset inputs
+                      setSelectedDepartmentId(newId);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('hospital_selected_dept_id', newId);
+                      }
 
-    setSelectedDepartmentId(newId);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('hospital_selected_dept_id', newId);
-    }
-
-    setShowAddDeptModal(false);
-    setNewDeptName('');
-    setNewDeptHeadnurseUsername('');
-    setNewDeptHeadnursePassword('');
-    alert(`بخش جدید "${customDeptData.name}" با موفقیت در دیتابیس نهایی تشکیل شد.`);
-  } catch (err) {
-    console.error(err);
-    alert('خطا در تعریف مستقل بخش جدید.');
-  } finally {
-    setIsSaving(false);
-  }
-}}
-className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-all duration-200 flex items-center justify-center gap-1.5"
->
-تایید و پیکربندی مستقل
-</button>
+                      setShowAddDeptModal(false);
+                      setNewDeptName('');
+                      setNewDeptHeadnurseUsername('');
+                      setNewDeptHeadnursePassword('');
+                      alert(`بخش جدید «${customDeptData.name}» با موفقیت در دیتابیس بعثت نهاجا تشکیل شد!`);
+                    } catch (err) {
+                      console.error(err);
+                      alert('خطا در تعریف مستقل بخش جدید.');
+                    }
+                  }}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2 rounded-xl transition-all shadow-md"
+                >
+                  تایید و پیکربندی مستقل
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* --- CUSTOM MODAL: DEPARTMENT DELETE AUTH --- */}
       {showDeptDeleteAuth && (
@@ -5092,52 +5093,14 @@ className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs
                   type="submit"
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   id="btn-save-req"
-                >       
-            <Check className="w-4 h-4 text-white" /> ثبت نهایی درخواست‌ها
-        </button>
-      </div>
-    </form>
-  </div>
-{isSaving && (
-  <div
-    style={{
-      position: "fixed",
-      inset: 0,
-      background: "rgba(15,23,42,.7)",
-      backdropFilter: "blur(4px)",
-      zIndex: 99999,
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: "16px",
-      color: "white",
-      direction: "rtl",
-    }}
-  >
-    <span className="animate-spin inline-block w-12 h-12 border-4 border-white border-t-transparent rounded-full"></span>
-
-    <div
-      style={{
-        fontWeight: "bold",
-        fontSize: "18px",
-      }}
-    >
-      در حال همگام‌سازی اطلاعات با سرور...
-    </div>
-
-    <div
-      style={{
-        fontSize: "13px",
-        opacity: 0.8,
-      }}
-    >
-      لطفاً صفحه را نبندید.
-    </div>
-  </div>
-)}
-</div>
-
+                >
+                  <Check className="w-4 h-4 text-white" /> ثبت نهایی درخواست‌ها
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );
