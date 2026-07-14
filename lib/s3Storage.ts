@@ -13,6 +13,7 @@ export interface AppDatabaseState {
     [deptId: string]: {
       personnel: any[];
       requests: any[];
+      activeYear?: number;
       settings_system: any;
       settings_credentials: any;
       holidays: { [year_month: string]: { days: { [day: number]: string }; monthlyDutyHours: any } };
@@ -37,6 +38,7 @@ export function getInitialState(): AppDatabaseState {
       sepehr: {
         personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
         requests: INITIAL_REQUESTS,
+        activeYear: 1405,
         settings_system: INITIAL_SETTINGS,
         settings_credentials: { username: 'headnurse', password: '123456' },
         holidays: {},
