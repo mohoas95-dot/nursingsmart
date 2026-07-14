@@ -888,15 +888,11 @@ export default function Home() {
 
 
   const handleSelectMonth = (mNum: number) => {
-    setIsSolving(true);
     setCurrentMonth(mNum);
     if (typeof window !== 'undefined') {
       localStorage.setItem('hospital_current_month', String(mNum));
       localStorage.setItem('hospital_current_year', String(currentYear));
     }
-    setTimeout(() => {
-      setIsSolving(false);
-    }, 400);
   };
 
   // --- Authentication Handlers ---
