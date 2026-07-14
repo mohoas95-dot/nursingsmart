@@ -11,6 +11,7 @@ import {
   formatJalaliDateString 
 } from '../lib/jalali';
 import { 
+  JobGroup,
   Personnel, 
   SystemSettings, 
   ShiftRequest, 
@@ -182,7 +183,7 @@ export default function Home() {
     return [];
   }, [personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
 
-  const [isSolving, setIsSolving] = useState<boolean>(false);
+  const [solvingTarget, setSolvingTarget] = useState<JobGroup | null>(null);
 
   // User Authentication & Roles
   // roles: 'admin' | 'headnurse' | 'personnel' | 'guest'
@@ -488,12 +489,40 @@ export default function Home() {
   const [showDeptDeleteAuth, setShowDeptDeleteAuth] = useState<boolean>(false);
   const [deleteDeptAuthUser, setDeleteDeptAuthUser] = useState<string>('');
   const [deleteDeptAuthPass, setDeleteDeptAuthPass] = useState<string>('');
+  type ScheduleUpdateStrategy = {
+    mode?: 'preserve_current' | 'refresh_personnel' | 'refresh_group' | 'full_resolve';
+    personnelIds?: string[];
+    jobGroup?: JobGroup;
+  };
+
+  const normalizeScheduleAssignments = (
+    sourceAssignments: MonthlySchedule['assignments'] | undefined,
+    targetPersonnel: Personnel[]
+  ): MonthlySchedule['assignments'] => {
+    const totalDays = getJalaliMonthDays(currentYear, currentMonth);
+    return targetPersonnel.reduce((acc, person) => {
+      const personAssignments = sourceAssignments?.[person.id] || {};
+      const normalizedAssignments: { [day: number]: ShiftType } = {};
+
+      for (let d = 1; d <= totalDays; d++) {
+        const existingShift = personAssignments[d];
+        if (existingShift) {
+          normalizedAssignments[d] = existingShift;
+        }
+      }
+
+      acc[person.id] = normalizedAssignments;
+      return acc;
+    }, {} as MonthlySchedule['assignments']);
+  };
+
   const saveState = async (
     updatedP: Personnel[], 
     updatedR: ShiftRequest[], 
     updatedS: SystemSettings, 
     updatedH: { [day: number]: string },
-    fdIndex?: number
+    fdIndex?: number,
+    strategy: ScheduleUpdateStrategy = { mode: 'preserve_current' }
   ) => {
     try {
       const activeFd = fdIndex !== undefined ? fdIndex : (firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1);
@@ -539,28 +568,40 @@ export default function Home() {
       const isLocked = finalizedMonths.includes(monthKey);
       let solved: MonthlySchedule;
 
-      if (currentMonthSchedule) {
-        const totalDays = getJalaliMonthDays(currentYear, currentMonth);
-        const preservedAssignments = updatedP.reduce((acc, person) => {
-          const personAssignments = currentMonthSchedule.assignments?.[person.id] || {};
-          const normalizedAssignments: { [day: number]: ShiftType } = {};
+      if (currentMonthSchedule && strategy.mode !== 'full_resolve') {
+        const preservedAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
+        let nextAssignments = preservedAssignments;
 
-          for (let d = 1; d <= totalDays; d++) {
-            const existingShift = personAssignments[d];
-            if (existingShift) {
-              normalizedAssignments[d] = existingShift;
-            }
+        if (strategy.mode === 'refresh_personnel' || strategy.mode === 'refresh_group') {
+          const freshSolved = solveNursingSchedule(
+            currentYear,
+            currentMonth,
+            updatedP,
+            updatedR,
+            updatedS,
+            updatedH,
+            activeFd === -1 ? undefined : activeFd,
+            calculatedMonthlyDutyHours
+          );
+
+          nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
+
+          const targetPersonnelIds = strategy.mode === 'refresh_personnel'
+            ? Array.from(new Set(strategy.personnelIds || []))
+            : updatedP
+                .filter(person => person.jobGroup === strategy.jobGroup)
+                .map(person => person.id);
+
+          for (const personnelId of targetPersonnelIds) {
+            nextAssignments[personnelId] = { ...(freshSolved.assignments[personnelId] || {}) };
           }
-
-          acc[person.id] = normalizedAssignments;
-          return acc;
-        }, {} as { [pId: string]: { [day: number]: ShiftType } });
+        }
 
         const verification = verifyCoverageAndLeaders(
           currentYear,
           currentMonth,
           updatedP,
-          preservedAssignments,
+          nextAssignments,
           updatedS,
           updatedH,
           activeFd === -1 ? undefined : activeFd,
@@ -571,7 +612,7 @@ export default function Home() {
           ...currentMonthSchedule,
           year: currentYear,
           month: currentMonth,
-          assignments: preservedAssignments,
+          assignments: nextAssignments,
           shiftLeaders: verification.shiftLeaders,
           warnings: verification.warnings
         };
@@ -640,18 +681,39 @@ export default function Home() {
   };
 
   // Run the smart constraints CP-SAT mimic engine with loading animation
-  const handleRunOptimizer = () => {
+  const handleRunOptimizer = (jobGroup: JobGroup) => {
     const key = `${currentYear}_${currentMonth}`;
     let wasLocked = finalizedMonths.includes(key);
     if (wasLocked) {
-      const confirmUnlock = confirm('برنامه این ماه ثبت نهایی و قفل شده است. آیا مایلید قفل لیست را باز کرده و بازتولید هوشمند را اجرا کنید؟');
+      const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
+      const confirmUnlock = confirm(`برنامه این ماه ثبت نهایی و قفل شده است. آیا مایلید قفل لیست را باز کرده و بازتولید هوشمند ${groupTitle} را اجرا کنید؟`);
       if (!confirmUnlock) return;
     }
 
-    setIsSolving(true);
+    setSolvingTarget(jobGroup);
     setTimeout(async () => {
       try {
         const solved = solveNursingSchedule(currentYear, currentMonth, personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
+        const baseAssignments = normalizeScheduleAssignments(schedule?.assignments, personnel);
+        const mergedAssignments = schedule
+          ? { ...baseAssignments }
+          : normalizeScheduleAssignments(solved.assignments, personnel);
+
+        const targetPersonnel = personnel.filter(p => p.jobGroup === jobGroup);
+        for (const person of targetPersonnel) {
+          mergedAssignments[person.id] = { ...(solved.assignments[person.id] || {}) };
+        }
+
+        const verification = verifyCoverageAndLeaders(
+          currentYear,
+          currentMonth,
+          personnel,
+          mergedAssignments,
+          settings,
+          customHolidays,
+          firstDayOfWeekIndex,
+          requests
+        );
         
         const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
         if (!nextDb.deptData) nextDb.deptData = {};
@@ -672,7 +734,12 @@ export default function Home() {
           schedules: {
             ...oldDept.schedules,
             [`${currentYear}_${currentMonth}`]: {
-              ...solved,
+              ...(schedule || solved),
+              year: currentYear,
+              month: currentMonth,
+              assignments: mergedAssignments,
+              shiftLeaders: verification.shiftLeaders,
+              warnings: verification.warnings,
               finalized: false,
               dismissedWarnings: dismissedWarnings
             }
@@ -684,7 +751,7 @@ export default function Home() {
       } catch (err) {
         console.error("Solver error:", err);
       } finally {
-        setIsSolving(false);
+        setSolvingTarget(null);
       }
     }, 1500);
   };
@@ -1105,7 +1172,7 @@ export default function Home() {
         updatedList = [...personnel, pData];
       }
 
-      await saveState(updatedList, requests, settings, customHolidays);
+      await saveState(updatedList, requests, settings, customHolidays, undefined, { mode: 'full_resolve' });
       setShowAddPersonnelModal(false);
     } catch (error) {
       console.error("Error saving personnel:", error);
@@ -1117,7 +1184,7 @@ export default function Home() {
     try {
       const updatedP = personnel.filter(p => p.id !== id);
       const updatedR = requests.filter(r => r.personnelId !== id);
-      await saveState(updatedP, updatedR, settings, customHolidays);
+      await saveState(updatedP, updatedR, settings, customHolidays, undefined, { mode: 'full_resolve' });
     } catch (error) {
       console.error("Error deleting personnel:", error);
       alert("خطا در حذف پرسنل: " + (error instanceof Error ? error.message : String(error)));
@@ -1187,7 +1254,17 @@ export default function Home() {
         updatedR.push(finalReq);
       }
 
-      await saveState(personnel, updatedR, settings, customHolidays);
+      await saveState(
+        personnel,
+        updatedR,
+        settings,
+        customHolidays,
+        undefined,
+        {
+          mode: 'refresh_personnel',
+          personnelIds: Array.from(new Set(finalRequestsToSave.map(req => req.personnelId)))
+        }
+      );
       setShowAddRequestModal(false);
       
       // Reset states
@@ -1208,7 +1285,10 @@ export default function Home() {
     }
     try {
       const updatedR = requests.filter(r => r.personnelId !== personId);
-      await saveState(personnel, updatedR, settings, customHolidays);
+      await saveState(personnel, updatedR, settings, customHolidays, undefined, {
+        mode: 'refresh_personnel',
+        personnelIds: [personId]
+      });
     } catch (e) {
       console.error("Error deleting all requests:", e);
       alert("خطا در حذف درخواست‌ها: " + (e instanceof Error ? e.message : String(e)));
@@ -1238,7 +1318,17 @@ export default function Home() {
         };
 
         const updatedR = requests.map(r => r.id === editingRequest.id ? reqData : r);
-        await saveState(personnel, updatedR, settings, customHolidays);
+        await saveState(
+          personnel,
+          updatedR,
+          settings,
+          customHolidays,
+          undefined,
+          {
+            mode: 'refresh_personnel',
+            personnelIds: Array.from(new Set([editingRequest.personnelId, pid]))
+          }
+        );
         setShowAddRequestModal(false);
         setEditingRequest(null);
         setReqSelectedDays([]);
@@ -1254,8 +1344,19 @@ export default function Home() {
 
   const handleDeleteRequest = async (id: string) => {
     try {
+      const deletedRequest = requests.find(r => r.id === id);
       const updatedR = requests.filter(r => r.id !== id);
-      await saveState(personnel, updatedR, settings, customHolidays);
+      await saveState(
+        personnel,
+        updatedR,
+        settings,
+        customHolidays,
+        undefined,
+        deletedRequest ? {
+          mode: 'refresh_personnel',
+          personnelIds: [deletedRequest.personnelId]
+        } : { mode: 'preserve_current' }
+      );
     } catch (error) {
       console.error("Error deleting request:", error);
       alert("خطا در حذف درخواست: " + (error instanceof Error ? error.message : String(error)));
@@ -1323,7 +1424,7 @@ export default function Home() {
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await saveState(personnel, requests, settings, customHolidays);
+      await saveState(personnel, requests, settings, customHolidays, undefined, { mode: 'full_resolve' });
       alert('تنظیمات موظفی و نیاز نیرویی با موفقیت ذخیره شد.');
     } catch (error) {
       console.error("Error saving settings:", error);
@@ -1417,7 +1518,7 @@ export default function Home() {
     try {
       const updated = { ...customHolidays, [holidayDayInput]: holidayTitleInput.trim() };
       setCustomHolidays(updated);
-      await saveState(personnel, requests, settings, updated);
+      await saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
       setHolidayTitleInput('');
       alert('تعطیلات با موفقیت ثبت شد.');
     } catch (error) {
@@ -1430,7 +1531,7 @@ export default function Home() {
       const updated = { ...customHolidays };
       delete updated[day];
       setCustomHolidays(updated);
-      await saveState(personnel, requests, settings, updated);
+      await saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
     } catch (error) {
       console.error("Error removing holiday:", error);
     }
@@ -2493,15 +2594,26 @@ export default function Home() {
                 </div>
               )}
               {role !== 'personnel' && (
-                <button
-                  onClick={handleRunOptimizer}
-                  disabled={isSolving}
-                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-indigo-500/10 cursor-pointer"
-                  id="btn-run-solver"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSolving ? 'animate-spin' : ''}`} />
-                  {isSolving ? 'در حال بهینه‌سازی و حل بن‌بست...' : 'بازتولید نهایی هوشمند برنامه (Solver)'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => handleRunOptimizer('nurse')}
+                    disabled={solvingTarget !== null}
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-indigo-500/10 cursor-pointer"
+                    id="btn-run-solver-nurse"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${solvingTarget === 'nurse' ? 'animate-spin' : ''}`} />
+                    {solvingTarget === 'nurse' ? 'در حال بازتولید هوشمند پرستاران...' : 'بازتولید هوشمند پرستاران'}
+                  </button>
+                  <button
+                    onClick={() => handleRunOptimizer('assistant')}
+                    disabled={solvingTarget !== null}
+                    className="flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-teal-500/10 cursor-pointer"
+                    id="btn-run-solver-assistant"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${solvingTarget === 'assistant' ? 'animate-spin' : ''}`} />
+                    {solvingTarget === 'assistant' ? 'در حال بازتولید هوشمند کمک‌بهیاران...' : 'بازتولید هوشمند کمک‌بهیاران'}
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -3265,7 +3377,10 @@ export default function Home() {
                             updatedR.push(reqData);
                           }
 
-                          await saveState(personnel, updatedR, settings, customHolidays);
+                          await saveState(personnel, updatedR, settings, customHolidays, undefined, {
+                            mode: 'refresh_personnel',
+                            personnelIds: [targetPId]
+                          });
                           alert("درخواست‌های هوشمند با موفقیت ثبت شدند!");
                           setAiProposedRequests([]);
                           setAiPromptInput('');
@@ -3480,7 +3595,10 @@ export default function Home() {
                                       onClick={async () => {
                                         const updatedReq = { ...r, isEssential: !r.isEssential };
                                         const updatedList = requests.map(item => item.id === r.id ? updatedReq : item);
-                                        await saveState(personnel, updatedList, settings, customHolidays);
+                                        await saveState(personnel, updatedList, settings, customHolidays, undefined, {
+                                          mode: 'refresh_personnel',
+                                          personnelIds: [r.personnelId]
+                                        });
                                       }}
                                       className={`px-3 py-1.5 rounded-full text-[10px] font-black transition-all border cursor-pointer ${
                                         r.isEssential 
@@ -4043,7 +4161,7 @@ export default function Home() {
                               localStorage.setItem(`hospital_first_day_of_week_index_${currentYear}_${currentMonth}`, String(idx));
                               localStorage.setItem('hospital_first_day_of_week_index', String(idx));
                             }
-                            saveState(personnel, requests, settings, customHolidays, idx);
+                            saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
                           }}
                           className={`px-2 py-1.5 rounded-xl border text-[10px] font-extrabold cursor-pointer transition-all ${
                             isSelected 
@@ -4092,7 +4210,7 @@ export default function Home() {
                               updated[d.day] = 'تعطیل کاربری با یک کلیک';
                             }
                             setCustomHolidays(updated);
-                            saveState(personnel, requests, settings, updated);
+                            saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
                           }}
                           className={`p-1 rounded-lg border text-[10px] font-black transition-all cursor-pointer flex flex-col items-center justify-center min-h-[38px] ${
                             isRed 
@@ -4237,7 +4355,7 @@ export default function Home() {
                               localStorage.setItem(`hospital_first_day_of_week_index_${currentYear}_${currentMonth}`, String(idx));
                               localStorage.setItem('hospital_first_day_of_week_index', String(idx));
                             }
-                            saveState(personnel, requests, settings, customHolidays, idx);
+                            saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
                           }}
                           className={`px-3 py-2 rounded-xl border text-xs font-black cursor-pointer transition-all flex flex-col items-center justify-center gap-1 ${
                             isSelected 
@@ -4308,7 +4426,7 @@ export default function Home() {
                                       delete updated[d.day];
                                     }
                                     setCustomHolidays(updated);
-                                    saveState(personnel, requests, settings, updated);
+                                    saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
                                   }}
                                   className="w-4 h-4 accent-emerald-600 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed"
                                   id={`check-holiday-${d.day}`}
@@ -4351,7 +4469,7 @@ export default function Home() {
                                     if (updated[d.day] !== undefined) {
                                       updated[d.day] = val;
                                       setCustomHolidays(updated);
-                                      saveState(personnel, requests, settings, updated);
+                                      saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
                                     }
                                   }}
                                   className={`w-full text-[10px] px-2.5 py-1 rounded-lg border focus:outline-none transition-all ${
@@ -4420,7 +4538,7 @@ export default function Home() {
                               } : {})
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays);
+                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
                           }}
                           className="sr-only peer"
                         />
@@ -4448,7 +4566,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays);
+                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
@@ -4473,7 +4591,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays);
+                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
@@ -4494,7 +4612,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays);
+                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
