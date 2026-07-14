@@ -343,6 +343,7 @@ export default function Home() {
 
     const loadDatabase = async () => {
       try {
+        setIsLoadingDb(true);
         setIsPersonnelLoaded(false);
         setIsRequestsLoaded(false);
         
@@ -431,6 +432,7 @@ export default function Home() {
       } catch (err) {
         console.error("Error loading database from Iranian Object Storage S3:", err);
       } finally {
+        setIsLoadingDb(false);
         setIsPersonnelLoaded(true);
         setIsRequestsLoaded(true);
         setIsMonthLoaded(true);
@@ -1894,9 +1896,7 @@ export default function Home() {
           ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
           : isSavingDb
             ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
-            : isLoadingDb
-              ? 'سامانه در حال بارگذاری و همگام سازی آخرین اطلاعات ثبت شده است...'
-              : null;
+            : null;
 
   if (!isMounted) {
     return (
