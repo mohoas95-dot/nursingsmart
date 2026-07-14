@@ -246,24 +246,38 @@ export default function Home() {
   const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
 
   const [isSavingDb, setIsSavingDb] = useState<boolean>(false);
+  const [isBlockingSave, setIsBlockingSave] = useState<boolean>(false);
 
   const getFreshDbCopy = (): AppDatabaseState => {
     return fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
   };
 
-  const saveDbState = async (updatedDb: AppDatabaseState) => {
+  const saveDbState = async (
+    updatedDb: AppDatabaseState,
+    options: { showOverlay?: boolean } = {}
+  ) => {
     setFullDbState(updatedDb);
     
     const deptId = selectedDepartmentId || 'sepehr';
     const deptInfo = updatedDb.deptData[deptId] || {
       personnel: [],
       requests: [],
+      activeYear: currentYear,
       settings_system: INITIAL_SETTINGS,
       settings_credentials: { username: 'headnurse', password: '123456' },
       holidays: {},
       firstDayOfWeek: {},
       schedules: {},
     };
+
+    const resolvedYear = typeof deptInfo.activeYear === 'number' ? deptInfo.activeYear : currentYear;
+    const hKey = `${resolvedYear}_${currentMonth}`;
+    if (resolvedYear !== currentYear) {
+      setCurrentYear(resolvedYear);
+    }
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hospital_current_year', String(resolvedYear));
+    }
     
     setDepartments(updatedDb.departments || []);
     setPersonnel(deptInfo.personnel || []);
@@ -272,7 +286,6 @@ export default function Home() {
     setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
     setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
     
-    const hKey = `${currentYear}_${currentMonth}`;
     const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
     setCustomHolidays(holidaysInfo.days || {});
     setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
@@ -286,7 +299,7 @@ export default function Home() {
       setDismissedWarnings(sched.dismissedWarnings || []);
       const isFin = !!sched.finalized;
       setFinalizedMonths(prev => {
-        const key = `${currentYear}_${currentMonth}`;
+        const key = `${resolvedYear}_${currentMonth}`;
         if (isFin) {
           if (!prev.includes(key)) return [...prev, key];
         } else {
@@ -297,7 +310,7 @@ export default function Home() {
     } else {
       try {
         const solved = solveNursingSchedule(
-          currentYear, 
+          resolvedYear, 
           currentMonth, 
           deptInfo.personnel || [], 
           deptInfo.requests || [], 
@@ -307,7 +320,7 @@ export default function Home() {
           holidaysInfo.monthlyDutyHours || null
         );
         setSchedule({
-          year: currentYear,
+          year: resolvedYear,
           month: currentMonth,
           assignments: solved.assignments || {},
           shiftLeaders: solved.shiftLeaders || {},
@@ -320,7 +333,9 @@ export default function Home() {
     }
 
     try {
+      const showOverlay = options.showOverlay ?? true;
       setIsSavingDb(true);
+      setIsBlockingSave(showOverlay);
       const res = await fetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -334,6 +349,7 @@ export default function Home() {
       console.error("Network error saving to S3 Object Storage:", err);
     } finally {
       setIsSavingDb(false);
+      setIsBlockingSave(false);
     }
   };
 
@@ -367,6 +383,7 @@ export default function Home() {
             updatedDb.deptData[deptId] = {
               personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
               requests: INITIAL_REQUESTS,
+              activeYear: currentYear,
               settings_system: INITIAL_SETTINGS,
               settings_credentials: { username: 'headnurse', password: '123456' },
               holidays: {},
@@ -376,13 +393,20 @@ export default function Home() {
           }
           
           const deptInfo = updatedDb.deptData[deptId];
+          const resolvedYear = typeof deptInfo.activeYear === 'number' ? deptInfo.activeYear : currentYear;
+          if (resolvedYear !== currentYear) {
+            setCurrentYear(resolvedYear);
+          }
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('hospital_current_year', String(resolvedYear));
+          }
           setPersonnel(deptInfo.personnel || []);
           setRequests(deptInfo.requests || []);
           setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
           setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
           setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
           
-          const hKey = `${currentYear}_${currentMonth}`;
+          const hKey = `${resolvedYear}_${currentMonth}`;
           const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
           setCustomHolidays(holidaysInfo.days || {});
           setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
@@ -396,7 +420,7 @@ export default function Home() {
             setDismissedWarnings(sched.dismissedWarnings || []);
             const isFin = !!sched.finalized;
             setFinalizedMonths(prev => {
-              const key = `${currentYear}_${currentMonth}`;
+              const key = `${resolvedYear}_${currentMonth}`;
               if (isFin) {
                 if (!prev.includes(key)) return [...prev, key];
               } else {
@@ -407,7 +431,7 @@ export default function Home() {
           } else {
             try {
               const solved = solveNursingSchedule(
-                currentYear, 
+                resolvedYear, 
                 currentMonth, 
                 deptInfo.personnel || [], 
                 deptInfo.requests || [], 
@@ -417,7 +441,7 @@ export default function Home() {
                 holidaysInfo.monthlyDutyHours || null
               );
               setSchedule({
-                year: currentYear,
+                year: resolvedYear,
                 month: currentMonth,
                 assignments: solved.assignments || {},
                 shiftLeaders: solved.shiftLeaders || {},
@@ -568,7 +592,7 @@ export default function Home() {
       const activeFd = fdIndex !== undefined ? fdIndex : (firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1);
       
       // Auto calculate duty hours if enabled
-      let calculatedMonthlyDutyHours = monthlyDutyHours;
+      let calculatedMonthlyDutyHours = monthlyDutyHours ? { ...monthlyDutyHours } : null;
       if (updatedS.autoCalculateDutyHours) {
         const autoHours = calculateAutoDutyHours(
           currentYear, 
@@ -662,6 +686,7 @@ export default function Home() {
 
       const updatedDept = {
         ...oldDept,
+        activeYear: currentYear,
         personnel: updatedP,
         requests: updatedR,
         settings_system: updatedS,
@@ -932,6 +957,40 @@ export default function Home() {
     if (typeof window !== 'undefined') {
       localStorage.setItem('hospital_current_month', String(mNum));
       localStorage.setItem('hospital_current_year', String(currentYear));
+    }
+  };
+
+  const handleSelectYear = async (year: number) => {
+    if (year === currentYear) return;
+    try {
+      const nextDb = getFreshDbCopy();
+      if (!nextDb.deptData) nextDb.deptData = {};
+
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        activeYear: year,
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      nextDb.deptData[deptId] = {
+        ...oldDept,
+        activeYear: year
+      };
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('hospital_current_year', String(year));
+      }
+
+      await saveDbState(nextDb, { showOverlay: false });
+    } catch (error) {
+      console.error("Error setting active year:", error);
+      alert("خطا در ذخیره سال فعال: " + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -1447,9 +1506,8 @@ export default function Home() {
       };
 
       nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
-
       setEditingCell(null);
+      await saveDbState(nextDb, { showOverlay: false });
     } catch (error) {
       console.error("Error setting manual shift change:", error);
       alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
@@ -1894,9 +1952,14 @@ export default function Home() {
         ? 'در حال بازتولید هوشمند برنامه کمک بهیاران و ثبت تغییرات در سامانه...'
         : isAiProcessing
           ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
-          : isSavingDb
+          : isBlockingSave
             ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
             : null;
+
+  const availablePlanningYears = React.useMemo(
+    () => Array.from({ length: 11 }, (_, index) => currentYear - 5 + index),
+    [currentYear]
+  );
 
   if (!isMounted) {
     return (
@@ -2203,6 +2266,7 @@ export default function Home() {
                       nextDb.deptData[newId] = {
                         personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
                         requests: INITIAL_REQUESTS,
+                        activeYear: currentYear,
                         settings_system: INITIAL_SETTINGS,
                         settings_credentials: {
                           username: newDeptHeadnurseUsername.trim(),
@@ -2575,7 +2639,26 @@ export default function Home() {
         </header>
 
         {/* HORIZONTAL MONTH SELECTOR RIBBON */}
-        <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex gap-2 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
+        <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex gap-3 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
+          {role !== 'personnel' && (
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              <label htmlFor="planning-year-select" className="text-[11px] font-black text-slate-500 whitespace-nowrap">
+                سال فعال:
+              </label>
+              <select
+                id="planning-year-select"
+                value={currentYear}
+                onChange={(e) => handleSelectYear(Number(e.target.value))}
+                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-black text-slate-700 focus:border-emerald-500 focus:outline-none"
+              >
+                {availablePlanningYears.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {JALALI_MONTH_NAMES.map((name, idx) => {
             const mNum = idx + 1;
             const isActive = currentMonth === mNum;
@@ -2727,7 +2810,7 @@ export default function Home() {
                         <CalendarIcon className="w-5 h-5 text-emerald-600" />
                         تقویم شمسی {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}
                       </div>
-                      <div className="text-[10px] font-bold text-slate-500">فقط جهت مشاهده ماه</div>
+                      <div className="text-[10px] font-bold text-slate-500">سال فعال تقویم: {currentYear}</div>
                     </div>
                     <div className="p-4 bg-white">
                       <div className="grid grid-cols-7 gap-1 mb-2">
