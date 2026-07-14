@@ -80,6 +80,44 @@ interface Department {
   password?: string;
 }
 
+function BusyOverlay({ subtitle }: { subtitle: string }) {
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/35 backdrop-blur-md p-4 cursor-progress">
+      <div className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-white/50 bg-white/80 shadow-2xl shadow-slate-900/25">
+        <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-l from-indigo-500 via-sky-500 to-emerald-500" />
+        <div className="absolute -top-20 -right-16 h-44 w-44 rounded-full bg-sky-400/20 blur-3xl" />
+        <div className="absolute -bottom-20 -left-12 h-40 w-40 rounded-full bg-emerald-400/20 blur-3xl" />
+
+        <div
+          className="relative flex flex-col items-center gap-5 px-8 py-9 text-center"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <div className="relative flex h-24 w-24 items-center justify-center">
+            <div className="absolute inset-0 rounded-full border-4 border-indigo-200/80" />
+            <div className="absolute inset-2 rounded-full border-[3px] border-transparent border-t-indigo-600 border-r-sky-500 animate-spin" />
+            <div className="absolute inset-5 rounded-full border-2 border-emerald-200/70 border-b-emerald-500 animate-spin [animation-direction:reverse] [animation-duration:1.4s]" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 via-sky-500 to-emerald-500 text-white shadow-lg shadow-sky-500/30">
+              <Activity className="h-6 w-6 animate-pulse" />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-2xl font-black text-slate-900">لطفا شکیبا باشید</h3>
+            <p className="text-sm font-bold leading-7 text-slate-600">{subtitle}</p>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-4 py-2 text-[11px] font-extrabold text-slate-500 shadow-sm">
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            در حال انجام عملیات، لطفاً صفحه را نبندید.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function toEnglishDigits(str: string): string {
   if (!str) return '';
   const farsiDigits = [/۰/g, /۱/g, /۲/g, /۳/g, /۴/g, /۵/g, /۶/g, /۷/g, /۸/g, /۹/g];
@@ -1847,6 +1885,19 @@ export default function Home() {
     }
   };
 
+  const busyOverlaySubtitle =
+    solvingTarget === 'nurse'
+      ? 'در حال بازتولید هوشمند برنامه پرستاران و ثبت تغییرات در سامانه...'
+      : solvingTarget === 'assistant'
+        ? 'در حال بازتولید هوشمند برنامه کمک بهیاران و ثبت تغییرات در سامانه...'
+        : isAiProcessing
+          ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
+          : isSavingDb
+            ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
+            : isLoadingDb
+              ? 'سامانه در حال بارگذاری و همگام سازی آخرین اطلاعات ثبت شده است...'
+              : null;
+
   if (!isMounted) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 font-sans animate-pulse" dir="rtl">
@@ -1864,6 +1915,7 @@ export default function Home() {
 
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
+        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
         <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] opacity-70"></div>
         <div className="max-w-4xl w-full bg-white border border-slate-200/85 shadow-2xl rounded-3xl p-6 sm:p-10 text-center relative z-10 overflow-hidden">
           <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
@@ -2278,6 +2330,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen h-screen w-full overflow-hidden bg-slate-50 font-sans" dir="rtl">
+      {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
       
       {/* FLOATING COLLAPSIBLE NAVIGATION DRAWER (HAMBURGER SIDEMENU) */}
       {isNavOpen && (
