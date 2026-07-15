@@ -3135,7 +3135,7 @@ export default function Home() {
           </div>
 
           {/* ====== بخش ادغام شده هشدارها (درخواست ۵) ====== */}
-          {role !== 'guest' && schedule && getVisibleWarnings().length > 0 && (
+          {schedule && getVisibleWarnings().length > 0 && (
             <div className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden">
               {/* هدر با تعداد کل هشدارها */}
               <div className="bg-amber-50/70 border-b border-amber-200/60 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
