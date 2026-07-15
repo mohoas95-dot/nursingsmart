@@ -1,4 +1,4 @@
-// lib/types.ts - نسخه کامل بازنویسی شده
+// lib/types.ts - نسخه به‌روز‌شده با فیلدهای جدید
 
 export type JobGroup = 'nurse' | 'assistant';
 
@@ -20,7 +20,7 @@ export interface Personnel {
   orderIndex?: number;
   username?: string;
   password?: string;
-  locked?: boolean; // برای قفل کردن ردیف (درخواست ۶)
+  locked?: boolean;
 }
 
 export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
@@ -80,6 +80,8 @@ export interface ShiftRequest {
   startDate?: string;
   endDate?: string;
   selectedDays?: number[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MonthlySchedule {
@@ -104,7 +106,17 @@ export interface MonthlySchedule {
   requestsLocked?: boolean;
   dismissedWarnings?: string[];
   changeLogs?: string[];
-  lockedRows?: string[]; // برای قفل ردیف‌ها (درخواست ۶)
+  lockedRows?: string[];
+  autoSubstitutions?: AutoSubstitutionRecord[]; // فیلد جدید برای ثبت جایگزینی‌های خودکار
+}
+
+export interface AutoSubstitutionRecord {
+  personnelId: string;
+  day: number;
+  originalShift: ShiftType;
+  newShift: ShiftType;
+  reason: string;
+  timestamp: string;
 }
 
 export interface PersonnelReportResult {
@@ -134,7 +146,6 @@ export interface PersonnelReportResult {
 
 // ====== انواع جدید برای درخواست‌ها ======
 
-// برای هشدارهای زنجیره‌ای (درخواست ۵)
 export interface AggregatedAlert {
   personnelId: string;
   personnelName: string;
@@ -144,7 +155,6 @@ export interface AggregatedAlert {
   isExpanded: boolean;
 }
 
-// برای پیشنهادات هوشمند (درخواست ۷)
 export interface SmartSuggestion {
   id: string;
   description: string;
@@ -162,7 +172,6 @@ export interface SmartSuggestion {
   priority: number;
 }
 
-// برای پاسخ الگوریتم بازتولید با اولویت‌بندی (درخواست ۳)
 export interface OptimizationResult {
   assignments: { [pId: string]: { [day: number]: ShiftType } };
   warnings: string[];
