@@ -1,3 +1,5 @@
+// lib/types.ts - نسخه کامل بازنویسی شده
+
 export type JobGroup = 'nurse' | 'assistant';
 
 export type NursePosition = 'supervisor' | 'staff' | 'general' | 'none';
@@ -18,15 +20,16 @@ export interface Personnel {
   orderIndex?: number;
   username?: string;
   password?: string;
+  locked?: boolean; // برای قفل کردن ردیف (درخواست ۶)
 }
 
 export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
 
 export interface JalaliDateInfo {
   year: number;
-  month: number; // 1-12
-  day: number;   // 1-29/30/31
-  dayOfWeek: number; // 0 (Saturday) to 6 (Friday)
+  month: number;
+  day: number;
+  dayOfWeek: number;
   isFriday: boolean;
   isHoliday: boolean;
   holidayTitle?: string;
@@ -70,13 +73,13 @@ export interface ShiftRequest {
   id: string;
   personnelId: string;
   requestType: RequestType;
-  preferredShift?: 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L'; // 'L' is leave
-  patternSteps?: string[]; // e.g. ['EN', 'OFF', 'OFF'] or ['ME', 'OFF']
-  isEssential: boolean; // true = ضروری, false = عادی
+  preferredShift?: 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L';
+  patternSteps?: string[];
+  isEssential: boolean;
   scope: 'all' | 'even' | 'odd' | 'saturdays' | 'sundays' | 'mondays' | 'tuesdays' | 'wednesdays' | 'thursdays' | 'fridays' | 'range' | 'weekly_even' | 'weekly_odd' | 'custom_days';
-  startDate?: string; // YYYY-MM-DD
-  endDate?: string;   // YYYY-MM-DD
-  selectedDays?: number[]; // list of days of the month e.g. [1, 5, 12, 30]
+  startDate?: string;
+  endDate?: string;
+  selectedDays?: number[];
 }
 
 export interface MonthlySchedule {
@@ -84,14 +87,14 @@ export interface MonthlySchedule {
   month: number;
   assignments: {
     [personnelId: string]: {
-      [day: number]: ShiftType; // day of the month
+      [day: number]: ShiftType;
     };
   };
   shiftLeaders: {
     [day: number]: {
-      morning?: string; // personnelId
-      afternoon?: string; // personnelId
-      night?: string; // personnelId
+      morning?: string;
+      afternoon?: string;
+      night?: string;
     };
   };
   warnings: string[];
@@ -101,6 +104,7 @@ export interface MonthlySchedule {
   requestsLocked?: boolean;
   dismissedWarnings?: string[];
   changeLogs?: string[];
+  lockedRows?: string[]; // برای قفل ردیف‌ها (درخواست ۶)
 }
 
 export interface PersonnelReportResult {
@@ -110,16 +114,12 @@ export interface PersonnelReportResult {
   jobGroupText: string;
   positionText: string;
   employmentTypeText: string;
-  
-  // Hours calculated
   dutyHours: number;
   workedHours: number;
   overtimeHours: number;
   deficitHours: number;
   experienceHours: number;
   productivityHours: number;
-  
-  // Shift counts
   mCount: number;
   eCount: number;
   nCount: number;
@@ -129,7 +129,52 @@ export interface PersonnelReportResult {
   menCount: number;
   offCount: number;
   leaveCount: number;
-  
-  // Statuses
   productivityEligible: boolean;
+}
+
+// ====== انواع جدید برای درخواست‌ها ======
+
+// برای هشدارهای زنجیره‌ای (درخواست ۵)
+export interface AggregatedAlert {
+  personnelId: string;
+  personnelName: string;
+  warningCount: number;
+  warnings: string[];
+  severity: 'low' | 'medium' | 'high';
+  isExpanded: boolean;
+}
+
+// برای پیشنهادات هوشمند (درخواست ۷)
+export interface SmartSuggestion {
+  id: string;
+  description: string;
+  impact: {
+    resolvedWarnings: string[];
+    newWarnings: string[];
+    warningCountChange: number;
+  };
+  changes: {
+    personnelId: string;
+    day: number;
+    fromShift: ShiftType;
+    toShift: ShiftType;
+  }[];
+  priority: number;
+}
+
+// برای پاسخ الگوریتم بازتولید با اولویت‌بندی (درخواست ۳)
+export interface OptimizationResult {
+  assignments: { [pId: string]: { [day: number]: ShiftType } };
+  warnings: string[];
+  coverageGaps: {
+    day: number;
+    shift: 'M' | 'E' | 'N';
+    shortage: number;
+    filledBy: string[];
+  }[];
+  priorityUsed: {
+    level1: string[];
+    level2: string[];
+    level3: string[];
+  };
 }
