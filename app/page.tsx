@@ -1770,108 +1770,75 @@ export default function Home() {
   };
 
   // --- Manual Schedule Override cell edit ---
-   const handleCellClick = (pId: string, day: number) => {
-  if (role === 'admin' || role === 'headnurse') {
-    const p = personnel.find(per => per.id === pId);
-    if (p) {
-      const monthKey = `${currentYear}_${currentMonth}`;
-      const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
-      if (isLocked) {
-        alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
-        return;
-      }
-      if (lockedRows.includes(pId)) {
-        alert('این ردیف قفل شده است و نمی‌توان آن را ویرایش کرد.');
-        return;
-      }
-    }
-    setEditingCell({ pId, day });
-  }
-};
-
-  const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
-  const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
-  if (!schedule) return;
-  
-  try {
-    const updatedAssignments = { ...schedule.assignments };
-    if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
-    updatedAssignments[pId][day] = shift;
-
-    const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
-
-    // دریافت کپی از دیتابیس فعلی بدون تریگر کردن setFullDbState
-    const nextDb = fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
-    if (!nextDb.deptData) nextDb.deptData = {};
-    
-    const deptId = selectedDepartmentId || 'sepehr';
-    const oldDept = nextDb.deptData[deptId] || {
-      personnel: [],
-      requests: [],
-      settings_system: INITIAL_SETTINGS,
-      settings_credentials: { username: 'headnurse', password: '123456' },
-      holidays: {},
-      firstDayOfWeek: {},
-      schedules: {},
-    };
-
-    const key = `${currentYear}_${currentMonth}`;
-    const updatedDept = {
-      ...oldDept,
-      schedules: {
-        ...oldDept.schedules,
-        [key]: {
-          year: currentYear,
-          month: currentMonth,
-          assignments: updatedAssignments,
-          shiftLeaders: verification.shiftLeaders,
-          warnings: verification.warnings,
-          finalized: false,
-          dismissedWarnings: dismissedWarnings,
-          lockedRows: lockedRows,
-          changeLogs: [...(oldDept.schedules?.[key]?.changeLogs || []), `تغییر دستی شیفت پرسنل ${pId} در روز ${day} به ${shift} در تاریخ ${new Date().toLocaleString('fa-IR')}`]
+  const handleCellClick = (pId: string, day: number) => {
+    if (role === 'admin' || role === 'headnurse') {
+      const p = personnel.find(per => per.id === pId);
+      if (p) {
+        const monthKey = `${currentYear}_${currentMonth}`;
+        const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
+        if (isLocked) {
+          alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
+          return;
+        }
+        if (lockedRows.includes(pId)) {
+          alert('این ردیف قفل شده است و نمی‌توان آن را ویرایش کرد.');
+          return;
         }
       }
-    };
-
-    nextDb.deptData[deptId] = updatedDept;
-    
-    // ذخیره مستقیم در دیتابیس بدون تریگر کردن setIsSavingDb
-    setFullDbState(nextDb);
-    
-    // آپدیت state های محلی
-    setSchedule({
-      year: currentYear,
-      month: currentMonth,
-      assignments: updatedAssignments,
-      shiftLeaders: verification.shiftLeaders,
-      warnings: verification.warnings,
-      dismissedWarnings: dismissedWarnings,
-      lockedRows: lockedRows,
-      changeLogs: updatedDept.schedules[key].changeLogs
-    });
-
-    // ذخیره در سرور بدون نمایش لودینگ
-    try {
-      const res = await fetch('/api/storage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: nextDb })
-      });
-      const data = await res.json();
-      if (!data.success) {
-        console.error("S3 Object Storage save failed: ", data.error);
-      }
-    } catch (err) {
-      console.error("Network error saving to S3 Object Storage:", err);
+      setEditingCell({ pId, day });
     }
+  };
 
-    setEditingCell(null);
-  } catch (error) {
-    console.error("Error setting manual shift change:", error);
-    alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
-  }
-};
+  const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
+    if (!schedule) return;
+    
+    try {
+      const updatedAssignments = { ...schedule.assignments };
+      if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
+      updatedAssignments[pId][day] = shift;
+
+      const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
+
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const updatedDept = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [`${currentYear}_${currentMonth}`]: {
+            year: currentYear,
+            month: currentMonth,
+            assignments: updatedAssignments,
+            shiftLeaders: verification.shiftLeaders,
+            warnings: verification.warnings,
+            finalized: false,
+            dismissedWarnings: dismissedWarnings,
+            lockedRows: lockedRows
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
+
+      setEditingCell(null);
+    } catch (error) {
+      console.error("Error setting manual shift change:", error);
+      alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
+    }
+  };
 
   // --- Dynamic System Configuration ---
   const handleSaveSettings = async (e: React.FormEvent) => {
@@ -5987,4 +5954,3 @@ export default function Home() {
     </div>
   );
 }
-} 
