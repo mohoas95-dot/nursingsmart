@@ -1,4 +1,4 @@
-// lib/alertAggregator.ts - فایل جدید برای ادغام هشدارها (درخواست ۵)
+// lib/alertAggregator.ts - ادغام هشدارها و نمایش تفکیکی
 
 import { AggregatedAlert, Personnel } from './types';
 
@@ -46,4 +46,55 @@ export function aggregateWarnings(
   
   result.sort((a, b) => b.warningCount - a.warningCount);
   return result;
+}
+
+/**
+ * فیلتر کردن هشدارهای باقی‌مانده (نادیده گرفته نشده)
+ */
+export function filterActiveWarnings(
+  warnings: string[],
+  dismissedWarnings: string[]
+): string[] {
+  return warnings.filter(w => !dismissedWarnings.includes(w));
+}
+
+/**
+ * دسته‌بندی هشدارهای باقی‌مانده برای نمایش جمع‌و‌جور
+ */
+export function categorizeRemainingWarnings(
+  warnings: string[]
+): { byType: { [key: string]: string[] }; byPersonnel: { [key: string]: string[] } } {
+  const byType: { [key: string]: string[] } = {
+    'کمبود نیرو': [],
+    'مازاد نیرو': [],
+    'عدم رعایت درخواست': [],
+    'مسائل دیگر': []
+  };
+  
+  const byPersonnel: { [key: string]: string[] } = {};
+  
+  warnings.forEach(warning => {
+    // دسته‌بندی بر اساس نوع
+    if (warning.includes('کمبود نیرو') || warning.includes('Coverage Shortage')) {
+      byType['کمبود نیرو'].push(warning);
+    } else if (warning.includes('مازاد') || warning.includes('Overstaffing')) {
+      byType['مازاد نیرو'].push(warning);
+    } else if (warning.includes('Mismatched Request')) {
+      byType['عدم رعایت درخواست'].push(warning);
+    } else {
+      byType['مسائل دیگر'].push(warning);
+    }
+    
+    // دسته‌بندی بر اساس نام پرسنل
+    const nameMatch = warning.match(/(\w+\s+\w+)/);
+    if (nameMatch) {
+      const name = nameMatch[1];
+      if (!byPersonnel[name]) {
+        byPersonnel[name] = [];
+      }
+      byPersonnel[name].push(warning);
+    }
+  });
+  
+  return { byType, byPersonnel };
 }
