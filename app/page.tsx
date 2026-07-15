@@ -678,11 +678,20 @@ export default function Home() {
     updatedR: ShiftRequest[], 
     updatedS: SystemSettings, 
     updatedH: { [day: number]: string },
-    fdIndex?: number,
-    strategy: ScheduleUpdateStrategy = { mode: 'preserve_current' }
+    fdIndex?: number | ScheduleUpdateStrategy,
+    strategy?: ScheduleUpdateStrategy
   ) => {
     try {
-      const activeFd = fdIndex !== undefined ? fdIndex : (firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1);
+      let activeFd: number;
+      let finalStrategy: ScheduleUpdateStrategy = { mode: 'preserve_current' };
+      
+      if (typeof fdIndex === 'number') {
+        activeFd = fdIndex;
+        finalStrategy = strategy || { mode: 'preserve_current' };
+      } else {
+        activeFd = firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1;
+        finalStrategy = (fdIndex as ScheduleUpdateStrategy) || { mode: 'preserve_current' };
+      }
       
       let calculatedMonthlyDutyHours = monthlyDutyHours;
       if (updatedS.autoCalculateDutyHours) {
@@ -725,11 +734,11 @@ export default function Home() {
       const isReqLocked = requestsLockedMonths.includes(monthKey);
       let solved: MonthlySchedule;
 
-      if (currentMonthSchedule && strategy.mode !== 'full_resolve') {
+      if (currentMonthSchedule && finalStrategy.mode !== 'full_resolve') {
         const preservedAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
         let nextAssignments = preservedAssignments;
 
-        if (strategy.mode === 'refresh_personnel' || strategy.mode === 'refresh_group') {
+        if (finalStrategy.mode === 'refresh_personnel' || finalStrategy.mode === 'refresh_group') {
           const freshSolved = solveNursingSchedule(
             currentYear,
             currentMonth,
@@ -743,10 +752,10 @@ export default function Home() {
 
           nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
 
-          const targetPersonnelIds = (strategy.mode === 'refresh_personnel'
-            ? Array.from(new Set(strategy.personnelIds || []))
+          const targetPersonnelIds = (finalStrategy.mode === 'refresh_personnel'
+            ? Array.from(new Set(finalStrategy.personnelIds || []))
             : updatedP
-                .filter(person => person.jobGroup === strategy.jobGroup)
+                .filter(person => person.jobGroup === finalStrategy.jobGroup)
                 .map(person => person.id)
           ).filter(id => {
             const p = updatedP.find(per => per.id === id);
@@ -1373,7 +1382,7 @@ export default function Home() {
         updatedList = [...personnel, pData];
       }
 
-      await saveState(updatedList, requests, settings, customHolidays, undefined, { mode: 'full_resolve' });
+      await saveState(updatedList, requests, settings, customHolidays, { mode: 'full_resolve' });
       setShowAddPersonnelModal(false);
     } catch (error) {
       console.error("Error saving personnel:", error);
@@ -1385,7 +1394,7 @@ export default function Home() {
     try {
       const updatedP = personnel.filter(p => p.id !== id);
       const updatedR = requests.filter(r => r.personnelId !== id);
-      await saveState(updatedP, updatedR, settings, customHolidays, undefined, { mode: 'full_resolve' });
+      await saveState(updatedP, updatedR, settings, customHolidays, { mode: 'full_resolve' });
     } catch (error) {
       console.error("Error deleting personnel:", error);
       alert("خطا در حذف پرسنل: " + (error instanceof Error ? error.message : String(error)));
@@ -1457,7 +1466,6 @@ export default function Home() {
         updatedR,
         settings,
         customHolidays,
-        undefined,
         {
           mode: 'refresh_personnel',
           personnelIds: Array.from(new Set(finalRequestsToSave.map(req => req.personnelId)))
@@ -1486,7 +1494,7 @@ export default function Home() {
     }
     try {
       const updatedR = requests.filter(r => r.personnelId !== personId);
-      await saveState(personnel, updatedR, settings, customHolidays, undefined, {
+      await saveState(personnel, updatedR, settings, customHolidays, {
         mode: 'refresh_personnel',
         personnelIds: [personId]
       });
@@ -1528,7 +1536,6 @@ export default function Home() {
           updatedR,
           settings,
           customHolidays,
-          undefined,
           {
             mode: 'refresh_personnel',
             personnelIds: Array.from(new Set([editingRequest.personnelId, pid]))
@@ -1559,7 +1566,6 @@ export default function Home() {
         updatedR,
         settings,
         customHolidays,
-        undefined,
         deletedRequest ? {
           mode: 'refresh_personnel',
           personnelIds: [deletedRequest.personnelId]
@@ -1646,7 +1652,7 @@ export default function Home() {
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await saveState(personnel, requests, settings, customHolidays, undefined, { mode: 'full_resolve' });
+      await saveState(personnel, requests, settings, customHolidays, { mode: 'full_resolve' });
       alert('تنظیمات موظفی و نیاز نیرویی با موفقیت ذخیره شد.');
     } catch (error) {
       console.error("Error saving settings:", error);
@@ -1740,7 +1746,7 @@ export default function Home() {
     try {
       const updated = { ...customHolidays, [holidayDayInput]: holidayTitleInput.trim() };
       setCustomHolidays(updated);
-      await saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
+      await saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
       setHolidayTitleInput('');
       alert('تعطیلات با موفقیت ثبت شد.');
     } catch (error) {
@@ -1753,7 +1759,7 @@ export default function Home() {
       const updated = { ...customHolidays };
       delete updated[day];
       setCustomHolidays(updated);
-      await saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
+      await saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
     } catch (error) {
       console.error("Error removing holiday:", error);
     }
@@ -3786,7 +3792,7 @@ export default function Home() {
                             updatedR.push(reqData);
                           }
 
-                          await saveState(personnel, updatedR, settings, customHolidays, undefined, {
+                          await saveState(personnel, updatedR, settings, customHolidays, {
                             mode: 'refresh_personnel',
                             personnelIds: [targetPId]
                           });
@@ -3998,7 +4004,7 @@ export default function Home() {
                                       onClick={async () => {
                                         const updatedReq = { ...r, isEssential: !r.isEssential };
                                         const updatedList = requests.map(item => item.id === r.id ? updatedReq : item);
-                                        await saveState(personnel, updatedList, settings, customHolidays, undefined, {
+                                        await saveState(personnel, updatedList, settings, customHolidays, {
                                           mode: 'refresh_personnel',
                                           personnelIds: [r.personnelId]
                                         });
@@ -4621,7 +4627,7 @@ export default function Home() {
                               updated[d.day] = 'تعطیل کاربری با یک کلیک';
                             }
                             setCustomHolidays(updated);
-                            saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
+                            saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
                           }}
                           className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[38px] cursor-pointer ${
                             isRed 
@@ -4832,7 +4838,7 @@ export default function Home() {
                                       delete updated[d.day];
                                     }
                                     setCustomHolidays(updated);
-                                    saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
+                                    saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
                                   }}
                                   className="w-4 h-4 accent-emerald-600 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed"
                                   id={`check-holiday-${d.day}`}
@@ -4872,7 +4878,7 @@ export default function Home() {
                                     if (updated[d.day] !== undefined) {
                                       updated[d.day] = val;
                                       setCustomHolidays(updated);
-                                      saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
+                                      saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
                                     }
                                   }}
                                   className={`w-full text-[10px] px-2.5 py-1 rounded-lg border focus:outline-none transition-all ${
@@ -4967,7 +4973,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
+                            saveState(personnel, requests, updated, customHolidays, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
@@ -4992,7 +4998,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
+                            saveState(personnel, requests, updated, customHolidays, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
@@ -5013,7 +5019,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
+                            saveState(personnel, requests, updated, customHolidays, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
