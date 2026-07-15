@@ -18,7 +18,10 @@ import {
   MonthlySchedule, 
   ShiftType, 
   JalaliDateInfo, 
-  PersonnelReportResult 
+  PersonnelReportResult,
+  AggregatedAlert,
+  SmartSuggestion,
+  OptimizationResult
 } from '../lib/types';
 import { 
   INITIAL_PERSONNEL, 
@@ -33,8 +36,11 @@ import {
   SHIFT_HOURS, 
   getLeaveHours,
   getSeniorityHours,
-  calculateAutoDutyHours
+  calculateAutoDutyHours,
+  solveWithPriority
 } from '../lib/solver';
+import { aggregateWarnings } from '../lib/alertAggregator';
+import { generateSmartSuggestions } from '../lib/smartSuggestion';
 import { 
   Calendar as CalendarIcon, 
   Users, 
@@ -267,6 +273,22 @@ export default function Home() {
   // State for dismissed warnings list per month
   const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
 
+  // ====== STATE‌های جدید برای درخواست‌ها ======
+  
+  // برای هشدارهای زنجیره‌ای (درخواست ۵)
+  const [aggregatedAlerts, setAggregatedAlerts] = useState<AggregatedAlert[]>([]);
+  const [expandedAlertId, setExpandedAlertId] = useState<string | null>(null);
+
+  // برای کلیک روی هشدار و اسکرول (درخواست ۴)
+  const [scrollTarget, setScrollTarget] = useState<{ personnelId: string; day: number } | null>(null);
+
+  // برای قفل ردیف‌ها (درخواست ۶)
+  const [lockedRows, setLockedRows] = useState<string[]>([]);
+
+  // برای پیشنهادات هوشمند (درخواست ۷)
+  const [smartSuggestions, setSmartSuggestions] = useState<SmartSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
+
   const [isSavingDb, setIsSavingDb] = useState<boolean>(false);
 
   const getFreshDbCopy = (): AppDatabaseState => {
@@ -306,6 +328,7 @@ export default function Home() {
     setSchedule(sched);
     if (sched) {
       setDismissedWarnings(sched.dismissedWarnings || []);
+      setLockedRows(sched.lockedRows || []);
       const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
       const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
       const isReqLocked = !!sched.requestsLocked;
@@ -348,6 +371,7 @@ export default function Home() {
           warnings: solved.warnings || []
         });
         setDismissedWarnings([]);
+        setLockedRows([]);
       } catch (e) {
         console.error(e);
       }
@@ -428,6 +452,7 @@ export default function Home() {
           setSchedule(sched);
           if (sched) {
             setDismissedWarnings(sched.dismissedWarnings || []);
+            setLockedRows(sched.lockedRows || []);
             const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
             const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
             const isReqLocked = !!sched.requestsLocked;
@@ -470,6 +495,7 @@ export default function Home() {
                 warnings: solved.warnings || []
               });
               setDismissedWarnings([]);
+              setLockedRows([]);
             } catch (e) {
               console.error(e);
             }
@@ -488,6 +514,51 @@ export default function Home() {
     
     loadDatabase();
   }, [selectedDepartmentId, currentYear, currentMonth]);
+
+  // ====== تابع ادغام هشدارها (درخواست ۵) ======
+  const handleAggregateAlerts = (warningsList: string[]) => {
+    if (!schedule) return;
+    const grouped = aggregateWarnings(warningsList, personnel);
+    setAggregatedAlerts(grouped);
+    
+    // تولید پیشنهادات هوشمند (درخواست ۷)
+    const suggestions = generateSmartSuggestions(
+      currentYear,
+      currentMonth,
+      personnel,
+      requests,
+      schedule.assignments,
+      warningsList,
+      customHolidays,
+      firstDayOfWeekIndex
+    );
+    setSmartSuggestions(suggestions);
+  };
+
+  // ====== تابع کلیک روی هشدار و اسکرول (درخواست ۴) ======
+  const handleAlertClick = (personnelId: string, day: number) => {
+    setScrollTarget({ personnelId, day });
+    
+    setTimeout(() => {
+      const cellId = `cell-${personnelId}-${day}`;
+      const element = document.getElementById(cellId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        element.classList.add('ring-4', 'ring-yellow-400', 'ring-offset-2', 'animate-pulse');
+        setTimeout(() => {
+          element.classList.remove('ring-4', 'ring-yellow-400', 'ring-offset-2', 'animate-pulse');
+        }, 3000);
+      }
+    }, 100);
+  };
+
+  // استفاده از useEffect برای آپدیت هشدارها
+  useEffect(() => {
+    if (schedule) {
+      const activeWarnings = schedule.warnings.filter(w => !dismissedWarnings.includes(w));
+      handleAggregateAlerts(activeWarnings);
+    }
+  }, [schedule, dismissedWarnings, personnel]);
 
   const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
   const [newUsernameValue, setNewUsernameValue] = useState<string>('');
@@ -613,7 +684,6 @@ export default function Home() {
     try {
       const activeFd = fdIndex !== undefined ? fdIndex : (firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1);
       
-      // Auto calculate duty hours if enabled
       let calculatedMonthlyDutyHours = monthlyDutyHours;
       if (updatedS.autoCalculateDutyHours) {
         const autoHours = calculateAutoDutyHours(
@@ -650,7 +720,6 @@ export default function Home() {
           ? schedule
           : oldDept.schedules?.[monthKey] || null;
 
-      // Calculate schedule
       const isLockedNurses = finalizedNursesMonths.includes(monthKey);
       const isLockedAssistants = finalizedAssistantsMonths.includes(monthKey);
       const isReqLocked = requestsLockedMonths.includes(monthKey);
@@ -767,14 +836,13 @@ export default function Home() {
             finalizedAssistants: isLockedAssistants,
             requestsLocked: isReqLocked,
             dismissedWarnings: dismissedWarnings,
+            lockedRows: lockedRows,
             changeLogs: schedule?.changeLogs || []
           }
         }
       };
 
       nextDb.deptData[deptId] = updatedDept;
-
-      // Persist S3 State
       await saveDbState(nextDb);
     } catch (error) {
       console.error("Error in saveState:", error);
@@ -819,15 +887,25 @@ export default function Home() {
     setSolvingTarget(jobGroup);
     setTimeout(async () => {
       try {
-        const solved = solveNursingSchedule(currentYear, currentMonth, personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
+        const optimized = solveWithPriority(
+          currentYear, 
+          currentMonth, 
+          personnel, 
+          requests, 
+          settings, 
+          customHolidays, 
+          firstDayOfWeekIndex, 
+          monthlyDutyHours
+        );
+        
         const baseAssignments = normalizeScheduleAssignments(schedule?.assignments, personnel);
         const mergedAssignments = schedule
           ? { ...baseAssignments }
-          : normalizeScheduleAssignments(solved.assignments, personnel);
+          : normalizeScheduleAssignments(optimized.assignments, personnel);
 
         const targetPersonnel = personnel.filter(p => p.jobGroup === jobGroup);
         for (const person of targetPersonnel) {
-          mergedAssignments[person.id] = { ...(solved.assignments[person.id] || {}) };
+          mergedAssignments[person.id] = { ...(optimized.assignments[person.id] || {}) };
         }
 
         const verification = verifyCoverageAndLeaders(
@@ -860,14 +938,15 @@ export default function Home() {
           schedules: {
             ...oldDept.schedules,
             [`${currentYear}_${currentMonth}`]: {
-              ...(schedule || solved),
+              ...(schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
               year: currentYear,
               month: currentMonth,
               assignments: mergedAssignments,
               shiftLeaders: verification.shiftLeaders,
               warnings: verification.warnings,
               ...(jobGroup === 'nurse' ? { finalizedNurses: false } : { finalizedAssistants: false }),
-              dismissedWarnings: dismissedWarnings
+              dismissedWarnings: dismissedWarnings,
+              lockedRows: lockedRows
             }
           }
         };
@@ -1059,7 +1138,6 @@ export default function Home() {
         const dbUser = toEnglishDigits(matchedDept.username || 'headnurse');
         const dbPass = toEnglishDigits(matchedDept.password || '123456');
         
-        // Dynamic "First Login" credential creation
         if (dbUser === 'headnurse' && dbPass === '123456') {
           if (!uInput || pInput.length < 4) {
             setAuthError('برای اولین ورود سرپرستار، نام کاربری دلخواه و رمز عبور (حداقل ۴ کاراکتر) خود را در کادرها تایپ کنید تا ثبت گردد.');
@@ -1101,7 +1179,6 @@ export default function Home() {
             setSelectedPersonnelUser(null);
             setActiveTab('schedule');
             
-            // Set fields for profile update
             setProfileUsernameInput(uInput);
             setProfilePasswordInput(pInput);
             setProfileDeptNameInput(matchedDept.name);
@@ -1114,13 +1191,11 @@ export default function Home() {
             setAuthError('خطا در ثبت نهایی کلمات عبور سرپرستار.');
           }
         } else {
-          // Normal login match
           if (uInput === dbUser && pInput === dbPass) {
             setRole('headnurse');
             setSelectedPersonnelUser(null);
             setActiveTab('schedule');
             
-            // Set fields for profile update
             setProfileUsernameInput(dbUser);
             setProfilePasswordInput(dbPass);
             setProfileDeptNameInput(matchedDept.name);
@@ -1144,7 +1219,6 @@ export default function Home() {
         return;
       }
 
-      // Default password is '1234'
       const checkPass = pInput || '1234';
 
       const pMatch = personnel.find(p => {
@@ -1166,7 +1240,6 @@ export default function Home() {
       setRole('personnel');
       setActiveTab('schedule');
       
-      // Set fields for profile update
       setProfileUsernameInput(pMatch.lastName);
       setProfilePasswordInput(pMatch.password || '1234');
       
@@ -1293,8 +1366,8 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
-          username: formLastName.trim(), // Default username is LastName
-          password: '1234',                 // Default personnel password is 1234
+          username: formLastName.trim(),
+          password: '1234',
           orderIndex: personnel.length
         };
         updatedList = [...personnel, pData];
@@ -1335,7 +1408,7 @@ export default function Home() {
       requestType: reqType,
       preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
       patternSteps: steps,
-      isEssential: role === 'personnel' ? false : reqIsEssential, // Personnel cannot request essential
+      isEssential: role === 'personnel' ? false : reqIsEssential,
       scope: reqScope,
       startDate: reqScope === 'range' ? reqStartDate : undefined,
       endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -1343,7 +1416,6 @@ export default function Home() {
     };
 
     setDraftRequests([...draftRequests, reqData]);
-    // Clear selections for next add
     setReqSelectedDays([]);
   };
 
@@ -1354,7 +1426,6 @@ export default function Home() {
       return;
     }
 
-    // Elegant fallback: If draft is empty but they currently have mapped input in the form, add it first so nothing is lost!
     let finalRequestsToSave = [...draftRequests];
     if (finalRequestsToSave.length === 0) {
       const steps = reqType === 'pattern' ? reqPatternInput.split(' ').map(s => s.trim().toUpperCase()) : undefined;
@@ -1376,7 +1447,6 @@ export default function Home() {
     try {
       let updatedR = [...requests];
       for (const reqData of finalRequestsToSave) {
-        // Replace temporary draft id with real id
         const finalId = reqData.id.startsWith('draft_') ? `req_${Date.now()}_${Math.random().toString(36).substr(2, 5)}` : reqData.id;
         const finalReq = { ...reqData, id: finalId };
         updatedR.push(finalReq);
@@ -1395,7 +1465,6 @@ export default function Home() {
       );
       setShowAddRequestModal(false);
       
-      // Reset states
       setDraftRequests([]);
       setEditingRequest(null);
       setReqPatternInput('EN OFF OFF');
@@ -1435,7 +1504,6 @@ export default function Home() {
       return;
     }
     
-    // Direct edit mode saving
     if (editingRequest) {
       try {
         const pid = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : reqPersonnelId;
@@ -1474,7 +1542,6 @@ export default function Home() {
         alert("خطا در ویرایش درخواست: " + (error instanceof Error ? error.message : String(error)));
       }
     } else {
-      // Create mode: Final Submit
       await handleFinalSubmitRequests();
     }
   };
@@ -1513,6 +1580,10 @@ export default function Home() {
         const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
         if (isLocked) {
           alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
+          return;
+        }
+        if (lockedRows.includes(pId)) {
+          alert('این ردیف قفل شده است و نمی‌توان آن را ویرایش کرد.');
           return;
         }
       }
@@ -1555,7 +1626,8 @@ export default function Home() {
             shiftLeaders: verification.shiftLeaders,
             warnings: verification.warnings,
             finalized: false,
-            dismissedWarnings: dismissedWarnings
+            dismissedWarnings: dismissedWarnings,
+            lockedRows: lockedRows
           }
         }
       };
@@ -1688,7 +1760,6 @@ export default function Home() {
   };
 
   // --- Reporting Exports ---
-  // --- Helper to convert column index to Excel letter ---
   const getExcelColumnLetter = (col: number): string => {
     let letter = '';
     while (col > 0) {
@@ -1703,7 +1774,6 @@ export default function Home() {
     if (!schedule) return;
     const ExcelJS = (await import('exceljs')).default;
     
-    // Ensure accurate starting day of the week based on what the user defined
     const startDayIndex = firstDayOfWeekIndex !== undefined 
       ? firstDayOfWeekIndex 
       : getJalaliWeekday(currentYear, currentMonth, 1);
@@ -1712,19 +1782,16 @@ export default function Home() {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('برنامه کاری پرستاری');
 
-    // Make it RTL and enable Grid lines
     worksheet.views = [{ showGridLines: true, rtl: true } as any];
 
-    // Configure for A4 Landscape print fit to page width!
     worksheet.pageSetup = {
-      paperSize: 9, // A4
+      paperSize: 9,
       orientation: 'landscape',
       fitToPage: true,
       fitToWidth: 1,
       fitToHeight: 0
     };
 
-    // Styling fonts and alignments with Beautiful Persian Fonts (B Titr and B Nazanin)
     const titleFont = { name: 'B Titr', size: 16, bold: true, color: { argb: 'FF1E293B' } };
     const headFont = { name: 'B Titr', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
     const bodyFont = { name: 'B Nazanin', size: 11 };
@@ -1734,7 +1801,6 @@ export default function Home() {
     const centerAlign = { vertical: 'middle' as const, horizontal: 'center' as const, wrapText: true };
     const rightAlign = { vertical: 'middle' as const, horizontal: 'right' as const };
 
-    // 1. Add Title block (Merged across total columns: 3 leading columns + calendar days + 6 metrics)
     const totalCols = 3 + calendarDays.length + 6;
     const lastColLetter = getExcelColumnLetter(totalCols);
     worksheet.mergeCells(`A1:${lastColLetter}1`);
@@ -1745,10 +1811,8 @@ export default function Home() {
     titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
     worksheet.getRow(1).height = 42;
 
-    // Blank row 2
     worksheet.getRow(2).height = 10;
 
-    // Row 3: Headers (without 'کد پرسنلی')
     const headers = [
       'نام و نام خانوادگی',
       'سمت',
@@ -1764,9 +1828,9 @@ export default function Home() {
     const headerRow = worksheet.addRow(headers);
     headerRow.height = 36;
 
-    const primaryColor = 'FF4F46E5'; // Indigo 600
-    const weekendColor = 'FFE11D48'; // Rose 600 (Red)
-    const kpiColor = 'FF059669'; // Emerald 600
+    const primaryColor = 'FF4F46E5';
+    const weekendColor = 'FFE11D48';
+    const kpiColor = 'FF059669';
 
     headerRow.eachCell((cell, colNumber) => {
       cell.font = headFont;
@@ -1790,7 +1854,7 @@ export default function Home() {
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: weekendColor } // Red Highlight for Holidays Headers
+            fgColor: { argb: weekendColor }
           };
         } else {
           cell.fill = {
@@ -1808,7 +1872,6 @@ export default function Home() {
       }
     });
 
-    // 2. Add Data Rows (without personalCode, and with highlighted columns for holidays)
     personnel.filter(p => p.active).forEach((p, rowIndex) => {
       const rep = reports.find(r => r.personnelId === p.id);
       const rowData: any[] = [
@@ -1821,10 +1884,9 @@ export default function Home() {
         const s = schedule.assignments[p.id]?.[d.day] || 'OFF';
         let cleanS = s;
         if (s.startsWith('L')) {
-          cleanS = s.substring(1) as ShiftType; // e.g. 'L1' -> '1', 'L2' -> '2'
+          cleanS = s.substring(1) as ShiftType;
         }
         
-        // Translate OFF to Persian 'آف'
         if (cleanS === 'OFF') {
           rowData.push('آف');
         } else {
@@ -1872,16 +1934,14 @@ export default function Home() {
           const isHolidayCol = d.isHoliday || d.dayOfWeek === 6;
           
           if (isHolidayCol) {
-            // Holiday column shading: Beautiful clear soft red/pink background for the whole column!
             cell.fill = {
               type: 'pattern',
               pattern: 'solid',
-              fgColor: { argb: 'FFFFC7CE' } // Soft pastel red background
+              fgColor: { argb: 'FFFFC7CE' }
             };
             
-            // Text fonts style in Holiday columns
             if (val === 'آف') {
-              cell.font = { name: 'B Nazanin', size: 11, bold: true, color: { argb: 'FF9C0006' } }; // Dark red
+              cell.font = { name: 'B Nazanin', size: 11, bold: true, color: { argb: 'FF9C0006' } };
             } else if (val === 'M') {
               cell.font = { name: 'B Titr', size: 10, bold: true, color: { argb: 'FF0284C7' } };
             } else if (val === 'E') {
@@ -1894,7 +1954,6 @@ export default function Home() {
               cell.font = { name: 'B Titr', size: 10, bold: true, color: { argb: 'FF9C0006' } };
             }
           } else {
-            // Normal day column shading
             if (val === 'آف') {
               cell.fill = {
                 type: 'pattern',
@@ -1957,13 +2016,12 @@ export default function Home() {
       });
     });
 
-    // 3. Set Columns Width beautifully with proper limits
-    worksheet.getColumn(1).width = 25; // Name and last name
-    worksheet.getColumn(2).width = 15; // Position
-    worksheet.getColumn(3).width = 15; // Employment type
+    worksheet.getColumn(1).width = 25;
+    worksheet.getColumn(2).width = 15;
+    worksheet.getColumn(3).width = 15;
 
     for (let c = 4; c <= 3 + calendarDays.length; c++) {
-      worksheet.getColumn(c).width = 14; // Wider columns to beautifully fit full Persian weekday names
+      worksheet.getColumn(c).width = 14;
     }
 
     const startKpiCol = 4 + calendarDays.length;
@@ -1972,7 +2030,6 @@ export default function Home() {
       worksheet.getColumn(c).width = 11;
     }
 
-    // Save and download actual buffer file!
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
@@ -2034,7 +2091,6 @@ export default function Home() {
         <div className="max-w-4xl w-full bg-white border border-slate-200/85 shadow-2xl rounded-3xl p-6 sm:p-10 text-center relative z-10 overflow-hidden">
           <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
           
-          {/* Be'sat Hospital Logo (Root/Public Directory Lookup) */}
           <div className="mb-6 flex flex-col items-center">
             <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
               <img 
@@ -2073,7 +2129,6 @@ export default function Home() {
             سیستم توزیع عادلانه شیفت ها مبتنی بر هوش مصنوعی و الگوریتم‌های رصد قوانین بیمارستان. لطفا برای ورود، بخش مورد نظر و نوع کاربری خود را تایید نمایید.
           </p>
 
-          {/* Department Selection & Creation Row */}
           <div className="max-w-xl mx-auto mb-8 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-right space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex-1">
@@ -2109,7 +2164,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Selected Department Description */}
             <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-slate-100">
               <div className="text-[10px] text-slate-400 font-bold">
                 بخش فعلی: <span className="text-emerald-700 font-black">{activeDept?.name || 'بارگذاری نشده...'}</span>
@@ -2135,7 +2189,6 @@ export default function Home() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-2xl mx-auto">
             
-            {/* Personnel dropdown login */}
             <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-personnel">
               <div>
                 <div className="flex justify-center mb-3">
@@ -2180,7 +2233,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Head Nurse Portal */}
             <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-headnurse">
               <div>
                 <div className="flex justify-center mb-3">
@@ -2226,7 +2278,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Dynamic Modal to add custom department */}
         {showAddDeptModal && (
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in" id="add-dept-modal">
             <div className="bg-white border rounded-3xl max-w-sm w-full p-6 shadow-2xl relative text-right space-y-4">
@@ -2329,7 +2380,6 @@ export default function Home() {
 
                       await saveDbState(nextDb);
 
-                      // Select department and reset inputs
                       setSelectedDepartmentId(newId);
                       if (typeof window !== 'undefined') {
                         localStorage.setItem('hospital_selected_dept_id', newId);
@@ -2354,7 +2404,6 @@ export default function Home() {
           </div>
         )}
 
-      {/* --- CUSTOM MODAL: DEPARTMENT DELETE AUTH --- */}
       {showDeptDeleteAuth && (
         <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in" id="dept-delete-auth-modal" dir="rtl">
           <div className="bg-white rounded-[24px] shadow-2xl p-6 md:p-8 w-full max-w-[420px] animate-scale-in border border-slate-100 relative">
@@ -2446,7 +2495,6 @@ export default function Home() {
     <div className="flex flex-col min-h-screen h-screen w-full overflow-hidden bg-slate-50 font-sans" dir="rtl">
       {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
       
-      {/* FLOATING COLLAPSIBLE NAVIGATION DRAWER (HAMBURGER SIDEMENU) */}
       {isNavOpen && (
         <div 
           className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex justify-start print:hidden animate-fade-in"
@@ -2458,7 +2506,6 @@ export default function Home() {
             onClick={(e) => e.stopPropagation()}
             id="drawer-container"
           >
-            {/* Drawer Logo / Header */}
             <div className="p-6 border-b border-slate-700 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-white shadow-md shadow-blue-500/20">H</div>
@@ -2474,10 +2521,8 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Navigation Drawer List */}
             <nav className="flex-1 py-4 text-sm font-semibold space-y-1 overflow-y-auto">
               
-              {/* Dashboard Table Nav */}
               <button
                 onClick={() => {
                   setActiveTab('schedule');
@@ -2494,7 +2539,6 @@ export default function Home() {
                 <span>داشبورد زمان‌بندی</span>
               </button>
 
-              {/* Personnel Management Nav */}
               {role !== 'personnel' && (
                 <button
                   onClick={() => {
@@ -2513,24 +2557,25 @@ export default function Home() {
                 </button>
               )}
 
-              {/* Calendar & Holiday Settings Nav */}
-              <button
-                onClick={() => {
-                  setActiveTab('calendar');
-                  setIsNavOpen(false);
-                }}
-                className={`w-full px-6 py-3 flex items-center gap-3 text-right hover:text-white transition-all cursor-pointer ${
-                  activeTab === 'calendar'
-                    ? 'bg-blue-600/20 text-blue-400 border-r-4 border-blue-400 font-extrabold'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                }`}
-                id="tab-calendar-drawer"
-              >
-                <span className="text-lg leading-none">📅</span>
-                <span>{role === 'personnel' ? 'تقویم آنلاین شمسی و رویدادها' : 'مدیریت تقویم و تعطیلات'}</span>
-              </button>
+              {/* Calendar - فقط برای سرپرستار و ادمین (درخواست ۲) */}
+              {(role === 'admin' || role === 'headnurse') && (
+                <button
+                  onClick={() => {
+                    setActiveTab('calendar');
+                    setIsNavOpen(false);
+                  }}
+                  className={`w-full px-6 py-3 flex items-center gap-3 text-right hover:text-white transition-all cursor-pointer ${
+                    activeTab === 'calendar'
+                      ? 'bg-blue-600/20 text-blue-400 border-r-4 border-blue-400 font-extrabold'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  id="tab-calendar-drawer"
+                >
+                  <span className="text-lg leading-none">📅</span>
+                  <span>مدیریت تقویم و تعطیلات</span>
+                </button>
+              )}
 
-              {/* Leave Requests Nav */}
               <button
                 onClick={() => {
                   setActiveTab('requests');
@@ -2547,7 +2592,6 @@ export default function Home() {
                 <span>ثبت درخواست‌ها</span>
               </button>
 
-              {/* Monthly Reports Nav */}
               <button
                 onClick={() => {
                   setActiveTab('reports');
@@ -2564,7 +2608,6 @@ export default function Home() {
                 <span>کارنامه و گزارشات</span>
               </button>
 
-              {/* District Settings Nav */}
               {role === 'admin' && (
                 <button
                   onClick={() => {
@@ -2583,7 +2626,6 @@ export default function Home() {
                 </button>
               )}
 
-              {/* Secure Profile Menu Option */}
               <button
                 onClick={() => {
                   setActiveTab('profile');
@@ -2601,10 +2643,8 @@ export default function Home() {
               </button>
             </nav>
 
-            {/* Current logged user card & engine status widget */}
             <div className="p-4 border-t border-slate-700/80 space-y-4">
               
-              {/* Active Level Card */}
               <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50">
                 <div className="text-[10px] text-slate-400 mb-1 font-bold">سطح دسترسی فعال:</div>
                 <div className="flex items-center justify-between">
@@ -2625,7 +2665,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Smart Engine Widget Status */}
               <div className="bg-[#151f32]/85 p-3 rounded-xl border border-slate-800/50 text-[11px] font-bold">
                 <div className="text-slate-400 mb-1 leading-tight text-[10px]">وضعیت محاسبات هوشمند:</div>
                 <div className="flex items-center gap-2">
@@ -2642,10 +2681,8 @@ export default function Home() {
         </div>
       )}
 
-      {/* DASHBOARD CONTAINER WORKSPACE */}
       <main className="flex-1 flex flex-col h-full overflow-hidden">
         
-        {/* HEADER BAR */}
         <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0 print:hidden transition-all duration-300">
           <div className="flex items-center gap-4">
             <button
@@ -2663,7 +2700,6 @@ export default function Home() {
             <div className="hidden md:flex text-xs font-black text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100">
               {departments.find(d => d.id === selectedDepartmentId)?.name || 'بخش سپهر'}
             </div>
-            {/* Iranian Object Storage Status Badge */}
             <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-black text-blue-700 bg-blue-50 px-2.5 py-1.5 rounded-full border border-blue-100">
               <span className={`w-2 h-2 rounded-full ${isSavingDb ? 'bg-orange-500 animate-pulse' : (isLoadingDb ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500')}`} />
               <span>پشتیبان‌گیری ابری:</span>
@@ -2686,7 +2722,6 @@ export default function Home() {
           </div>
         </header>
 
-        {/* HORIZONTAL MONTH SELECTOR RIBBON WITH YEAR SELECTOR */}
         <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex items-center gap-3 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
           <div className="flex items-center gap-2 bg-slate-100 border border-slate-200 rounded-full px-2 py-1 shrink-0">
              <button onClick={() => {
@@ -2726,10 +2761,8 @@ export default function Home() {
           })}
         </div>
 
-        {/* CONTENT VIEWPORT */}
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
           
-          {/* QUICK PERMISSIONS AND SOLVER STRAP ALERT */}
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-2 text-xs">
               <span className="bg-indigo-50 text-indigo-700 p-1.5 rounded-xl border border-indigo-100"><Sparkles className="w-4 h-4"/></span>
@@ -2797,7 +2830,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* DASHBOARD DISPATCH STATS KPI CORNER */}
           {(activeTab === 'schedule' || activeTab === 'reports') && (
             <>
               {role !== 'personnel' ? (
@@ -2907,11 +2939,9 @@ export default function Home() {
             </>
           )}
 
-          {/* INTERNAL CONTENT VIEW MANAGER */}
           {activeTab === 'schedule' && (
             <div className="space-y-6">
               
-              {/* Toolbar */}
               <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4 print:hidden">
                 <div className="flex items-center gap-3">
                   <h3 className="font-extrabold text-slate-800 text-sm">لیست شیفت‌های ماهانه</h3>
@@ -2972,58 +3002,201 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Solver Outputs & Deadlock Solving Warnings */}
               {role !== 'personnel' && schedule && schedule.warnings.length > 0 && (
                 <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-4 shadow-inner">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <h4 className="text-amber-900 font-extrabold text-sm flex items-center gap-1.5">
                       <AlertTriangle className="w-4 h-4 text-amber-600 animate-[bounce_1.5s_infinite]"/>
-                      هشدارها و تصمیمات موتور برنامه‌ریز (حل بن‌بست):
+                      هشدارها و تصمیمات موتور برنامه‌ریز
+                      <span className="text-xs bg-amber-200/50 px-2 py-0.5 rounded-full font-mono">
+                        {aggregatedAlerts.length} گروه هشدار
+                      </span>
+                      {smartSuggestions.length > 0 && (
+                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-mono">
+                          {smartSuggestions.length} پیشنهاد
+                        </span>
+                      )}
                     </h4>
-                    {dismissedWarnings.length > 0 && (
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={() => {
-                          setDismissedWarnings([]);
-                          localStorage.removeItem(`hospital_dismissed_warnings_${currentYear}_${currentMonth}`);
-                        }}
-                        className="text-amber-700 hover:text-amber-950 font-bold text-[10px] bg-amber-100/70 border border-amber-200 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer shadow-2xs"
+                        onClick={() => setShowSuggestions(!showSuggestions)}
+                        className="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
                       >
-                        بازیابی همه هشدارهای حذف شده ({dismissedWarnings.length})
+                        💡 {showSuggestions ? 'بستن پیشنهادات' : 'نمایش پیشنهادات هوشمند'}
                       </button>
-                    )}
+                      {dismissedWarnings.length > 0 && (
+                        <button
+                          onClick={() => {
+                            setDismissedWarnings([]);
+                            localStorage.removeItem(`hospital_dismissed_warnings_${currentYear}_${currentMonth}`);
+                          }}
+                          className="text-amber-700 hover:text-amber-950 font-bold text-[10px] bg-amber-100/70 border border-amber-200 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer shadow-2xs"
+                        >
+                          بازیابی همه ({dismissedWarnings.length})
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  {schedule.warnings.filter(w => !dismissedWarnings.includes(w)).length === 0 ? (
+                  
+                  {showSuggestions && smartSuggestions.length > 0 && (
+                    <div className="mb-3 bg-indigo-50/80 border border-indigo-200 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-indigo-800">💡 پیشنهادات هوشمند برای رفع تناقضات:</span>
+                        <span className="text-[10px] text-indigo-600 font-bold">
+                          {smartSuggestions.reduce((acc, s) => acc + Math.abs(s.impact.warningCountChange), 0)} مشکل قابل حل
+                        </span>
+                      </div>
+                      {smartSuggestions.map((suggestion, idx) => (
+                        <div key={suggestion.id} className="bg-white/70 rounded-lg p-2.5 border border-indigo-100 flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <div className="text-xs font-bold text-slate-700">{suggestion.description}</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              {suggestion.impact.resolvedWarnings.length > 0 && (
+                                <span className="text-emerald-600">✔ {suggestion.impact.resolvedWarnings.length} هشدار رفع می‌شود</span>
+                              )}
+                              {suggestion.impact.newWarnings.length > 0 && (
+                                <span className="text-amber-600 mr-2">✖ {suggestion.impact.newWarnings.length} هشدار جدید ایجاد می‌شود</span>
+                              )}
+                              <span className="mr-2 text-indigo-600">
+                                {suggestion.impact.warningCountChange < 0 ? `⬇ ${Math.abs(suggestion.impact.warningCountChange)}` : ''}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              const change = suggestion.changes[0];
+                              if (change && schedule) {
+                                const updatedAssignments = { ...schedule.assignments };
+                                if (!updatedAssignments[change.personnelId]) updatedAssignments[change.personnelId] = {};
+                                updatedAssignments[change.personnelId][change.day] = change.toShift;
+                                
+                                const verification = verifyCoverageAndLeaders(
+                                  currentYear, currentMonth, personnel, updatedAssignments, 
+                                  settings, customHolidays, firstDayOfWeekIndex, requests
+                                );
+                                
+                                const nextDb = getFreshDbCopy();
+                                const deptId = selectedDepartmentId || 'sepehr';
+                                const oldDept = nextDb.deptData[deptId];
+                                if (oldDept) {
+                                  const key = `${currentYear}_${currentMonth}`;
+                                  const updatedDept = {
+                                    ...oldDept,
+                                    schedules: {
+                                      ...oldDept.schedules,
+                                      [key]: {
+                                        year: currentYear,
+                                        month: currentMonth,
+                                        assignments: updatedAssignments,
+                                        shiftLeaders: verification.shiftLeaders,
+                                        warnings: verification.warnings,
+                                        dismissedWarnings: dismissedWarnings,
+                                        lockedRows: lockedRows
+                                      }
+                                    }
+                                  };
+                                  nextDb.deptData[deptId] = updatedDept;
+                                  await saveDbState(nextDb);
+                                  setShowSuggestions(false);
+                                }
+                              }
+                            }}
+                            className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
+                          >
+                            اعمال
+                          </button>
+                        </div>
+                      ))}
+                      <div className="text-[9px] text-slate-400 font-bold text-center pt-1">
+                        با اعمال هر پیشنهاد، سیستم به صورت خودکار بازتولید می‌شود
+                      </div>
+                    </div>
+                  )}
+                  
+                  {aggregatedAlerts.length === 0 ? (
                     <div className="text-xs text-emerald-800 font-bold bg-white/80 border border-emerald-150 p-3 rounded-xl text-center shadow-2xs">
                       ✨ تمامی هشدارهای این ماه توسط شما نادیده گرفته شده‌اند.
                     </div>
                   ) : (
-                    <ul className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs text-amber-800">
-                      {schedule.warnings.filter(w => !dismissedWarnings.includes(w)).map((warn, i) => (
-                        <li key={i} className="flex items-start justify-between gap-1.5 bg-white/70 p-2.5 rounded-xl border border-amber-100/85 group transition-all hover:bg-white hover:shadow-xs">
-                          <div className="flex items-start gap-1">
-                            <span className="text-amber-600 font-black ml-1">•</span>
-                            <span className="leading-relaxed">{warn}</span>
-                          </div>
+                    <div className="space-y-2">
+                      {aggregatedAlerts.map((alert) => (
+                        <div 
+                          key={alert.personnelId}
+                          className={`bg-white/70 rounded-xl border transition-all ${
+                            alert.severity === 'high' ? 'border-red-200' :
+                            alert.severity === 'medium' ? 'border-amber-200' : 'border-blue-200'
+                          }`}
+                        >
                           <button
-                            onClick={() => handleDismissWarning(warn)}
-                            className="text-amber-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg p-1 transition-all flex-shrink-0 cursor-pointer self-start"
-                            title="حذف دستی این هشدار"
+                            onClick={() => {
+                              setExpandedAlertId(expandedAlertId === alert.personnelId ? null : alert.personnelId);
+                              if (expandedAlertId !== alert.personnelId && alert.warnings.length > 0) {
+                                const firstWarning = alert.warnings[0];
+                                const dayMatch = firstWarning.match(/روز (\d+)/);
+                                if (dayMatch) {
+                                  const day = parseInt(dayMatch[1]);
+                                  handleAlertClick(alert.personnelId, day);
+                                }
+                              }
+                            }}
+                            className={`w-full px-4 py-3 flex items-center justify-between text-right transition-all ${
+                              alert.severity === 'high' ? 'hover:bg-red-50/50' :
+                              alert.severity === 'medium' ? 'hover:bg-amber-50/50' : 'hover:bg-blue-50/50'
+                            }`}
                           >
-                            <X className="w-3.5 h-3.5" />
+                            <div className="flex items-center gap-3">
+                              <span className={`text-sm font-black ${
+                                alert.severity === 'high' ? 'text-red-600' :
+                                alert.severity === 'medium' ? 'text-amber-600' : 'text-blue-600'
+                              }`}>
+                                {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
+                              </span>
+                              <span className="font-bold text-slate-800">{alert.personnelName}</span>
+                              <span className={`text-xs font-black px-2 py-0.5 rounded-full ${
+                                alert.severity === 'high' ? 'bg-red-100 text-red-700' :
+                                alert.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {alert.warningCount} مشکل
+                              </span>
+                            </div>
+                            <span className="text-slate-400 text-sm">
+                              {expandedAlertId === alert.personnelId ? '▲' : '▼'}
+                            </span>
                           </button>
-                        </li>
+                          
+                          {expandedAlertId === alert.personnelId && (
+                            <div className="px-4 pb-3 pt-1 space-y-1 border-t border-slate-100">
+                              {alert.warnings.map((warn, idx) => (
+                                <div key={idx} className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50/50 p-2 rounded-lg">
+                                  <span className="text-amber-600 font-black ml-1">•</span>
+                                  <span className="leading-relaxed">{warn}</span>
+                                  <button
+                                    onClick={() => {
+                                      const dayMatch = warn.match(/روز (\d+)/);
+                                      if (dayMatch) {
+                                        const day = parseInt(dayMatch[1]);
+                                        handleAlertClick(alert.personnelId, day);
+                                      }
+                                    }}
+                                    className="text-indigo-500 hover:text-indigo-700 font-bold text-[10px] bg-white/80 px-2 py-0.5 rounded-lg border border-indigo-100 shrink-0"
+                                  >
+                                    رفتن به سلول
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   )}
                 </div>
               )}
 
-              {/* SCHEDULE SCROLLABLE WEB GRID */}
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="schedule-grid-container">
                 <div className="overflow-x-auto overflow-y-auto max-h-[75vh]">
                   <table className="w-full text-right border-collapse min-w-[1200px]">
                     
-                    {/* Calendar Head Days numbers */}
                     <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-20 shadow-sm">
                       <tr>
                         <th className="sticky right-0 top-0 bg-slate-50 z-30 px-4 py-3 text-xs font-extrabold text-slate-600 border-l border-b border-slate-200 w-44 text-center">پرسنل / روزهای ماه</th>
@@ -3040,10 +3213,8 @@ export default function Home() {
                       </tr>
                     </thead>
 
-                    {/* Matrix Rows */}
                     <tbody className="divide-y divide-slate-200">
                       
-                      {/* Filter logic if role is personnel: show only their row */}
                       {personnel
                         .filter(p => p.active)
                         .filter(p => {
@@ -3059,16 +3230,64 @@ export default function Home() {
                           return (
                             <tr key={p.id} className="hover:bg-indigo-50/20 transition-colors">
                               
-                              {/* Personnel Info Card */}
                               <td className="sticky right-0 bg-white z-10 px-4 py-2 border-l border-slate-200 shadow-[2px_0_5px_rgba(0,0,0,0.03)] text-right">
-                                <div className="font-extrabold text-slate-900 text-sm leading-tight">{p.firstName} {p.lastName}</div>
-                                <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-400 font-serif">
-                                  <span>{p.personalCode} •</span>
-                                  <span className="font-bold text-slate-500">{report?.positionText}</span>
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <div className="font-extrabold text-slate-900 text-sm leading-tight">{p.firstName} {p.lastName}</div>
+                                    <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-400 font-serif">
+                                      <span>{p.personalCode} •</span>
+                                      <span className="font-bold text-slate-500">{report?.positionText}</span>
+                                    </div>
+                                  </div>
+                                  
+                                  {(role === 'admin' || role === 'headnurse') && (
+                                    <button
+                                      onClick={async () => {
+                                        const isLocked = lockedRows.includes(p.id);
+                                        const newLocked = isLocked 
+                                          ? lockedRows.filter(id => id !== p.id)
+                                          : [...lockedRows, p.id];
+                                        setLockedRows(newLocked);
+                                        
+                                        const nextDb = getFreshDbCopy();
+                                        const deptId = selectedDepartmentId || 'sepehr';
+                                        const oldDept = nextDb.deptData[deptId];
+                                        if (oldDept) {
+                                          const key = `${currentYear}_${currentMonth}`;
+                                          const sched = oldDept.schedules?.[key];
+                                          if (sched) {
+                                            const updatedDept = {
+                                              ...oldDept,
+                                              schedules: {
+                                                ...oldDept.schedules,
+                                                [key]: {
+                                                  ...sched,
+                                                  lockedRows: newLocked
+                                                }
+                                              }
+                                            };
+                                            nextDb.deptData[deptId] = updatedDept;
+                                            await saveDbState(nextDb);
+                                          }
+                                        }
+                                      }}
+                                      className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                                        lockedRows.includes(p.id) 
+                                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' 
+                                          : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                      }`}
+                                      title={lockedRows.includes(p.id) ? 'باز کردن قفل این ردیف' : 'قفل کردن این ردیف'}
+                                    >
+                                      {lockedRows.includes(p.id) ? (
+                                        <Lock className="w-4 h-4" />
+                                      ) : (
+                                        <Unlock className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  )}
                                 </div>
                               </td>
 
-                              {/* Day Shift cells */}
                               {calendarDays.map(d => {
                                 const currentShift = pAssignments[d.day] || 'OFF';
                                 
@@ -3085,7 +3304,6 @@ export default function Home() {
                                   (currentShift === 'MN' && (isShiftLeaderM || isShiftLeaderN)) ||
                                   (currentShift === 'MEN' && (isShiftLeaderM || isShiftLeaderE || isShiftLeaderN));
 
-                                // Color Scheme definitions
                                 let badgeClass = "bg-slate-100 text-slate-400 text-[10px]";
                                 let displayVal: string = currentShift;
 
@@ -3114,12 +3332,10 @@ export default function Home() {
                                   badgeClass = "bg-slate-50 text-slate-300 font-medium text-xs";
                                   displayVal = 'آف';
                                 } else if (currentShift.startsWith('L')) {
-                                  // LEAVE! Under rule: "نمایش مرخصی به صورت ۱ ۲ ۳ و نه L1 یا L2"
                                   badgeClass = "bg-emerald-100 text-emerald-800 font-black text-xs border border-emerald-300";
-                                  displayVal = currentShift.substring(1); // 'L1' -> '1', 'L2' -> '2'
+                                  displayVal = currentShift.substring(1);
                                 }
 
-                                // Interactive cell selection for HeadNurse/Admin editing
                                 const isEditingThis = editingCell?.pId === p.id && editingCell?.day === d.day;
 
                                 return (
@@ -3153,8 +3369,8 @@ export default function Home() {
                                     ) : (
                                       <button 
                                         onClick={() => handleCellClick(p.id, d.day)}
-                                        disabled={role === 'personnel'}
-                                        className={`w-full max-w-[32px] h-8 rounded-lg flex items-center justify-center transition-all ${badgeClass} ${role !== 'personnel' ? 'hover:scale-105 hover:shadow cursor-pointer' : ''}`}
+                                        disabled={role === 'personnel' || lockedRows.includes(p.id)}
+                                        className={`w-full max-w-[32px] h-8 rounded-lg flex items-center justify-center transition-all ${badgeClass} ${(role !== 'personnel' && !lockedRows.includes(p.id)) ? 'hover:scale-105 hover:shadow cursor-pointer' : ''}`}
                                         title={`${p.firstName} ${p.lastName} • روز ${d.day} \nکلیک برای ویرایش دستی`}
                                         id={`cell-${p.id}-${d.day}`}
                                       >
@@ -3172,7 +3388,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Legends explanation */}
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs font-semibold print:hidden">
                 <span className="text-slate-500">راهنمای نوبت‌های کاری:</span>
                 <div className="flex flex-wrap gap-4">
@@ -3189,7 +3404,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* --- VIEW 2: PERSONNEL LIST & MANAGEMENT --- */}
           {activeTab === 'personnel' && role !== 'personnel' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
@@ -3203,7 +3417,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Personnel Table list */}
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto w-full">
                   <table className="w-full text-right border-collapse min-w-[800px]">
@@ -3225,7 +3438,6 @@ export default function Home() {
                         <tr key={p.id} className="hover:bg-slate-50/50 transition-colors animate-fadeIn">
                           <td className="px-4 py-3.5 text-center">
                             <div className="flex items-center justify-center gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-150 inline-flex">
-                              {/* Move Up Input */}
                               <button
                                 disabled={index === 0}
                                 onClick={() => movePersonnel(index, 'up')}
@@ -3234,8 +3446,6 @@ export default function Home() {
                               >
                                 <ChevronUp className="w-3.5 h-3.5" />
                               </button>
-                              
-                              {/* Direct Order Number Input */}
                               <input
                                 type="number"
                                 min="1"
@@ -3248,8 +3458,6 @@ export default function Home() {
                                 className="w-9 text-center text-xs font-black bg-white border border-slate-200 rounded-lg py-0.5 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-100"
                                 title="تغییر شماره ردیف مستقیم"
                               />
-
-                              {/* Move Down Input */}
                               <button
                                 disabled={index === personnel.length - 1}
                                 onClick={() => movePersonnel(index, 'down')}
@@ -3356,10 +3564,8 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* BIFURCATED TWO-METHOD REGISTRATION DESIGNS */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 
-                {/* METHOD A: CLASSIC STEP-BY-STEP MANUAL ENTRY CARD */}
                 <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm flex flex-col justify-between hover:border-indigo-200 hover:shadow-md transition-all">
                   <div className="space-y-4">
                     <div className="flex items-center gap-3">
@@ -3397,7 +3603,7 @@ export default function Home() {
                         setReqPreferredShift('M');
                         setReqIsEssential(false);
                         setReqScope('all');
-                        setDraftRequests([]); // Reset draft list on open
+                        setDraftRequests([]);
                         setShowAddRequestModal(true);
                       }}
                       className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-3 rounded-2xl shadow-lg hover:shadow-indigo-500/10 transition-all cursor-pointer"
@@ -3408,7 +3614,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* METHOD B: EXTREMELY ADVANCED AI DYNAMIC ENTRY CARD */}
                 <div className="bg-gradient-to-br from-indigo-50/40 via-white to-purple-50/30 border border-purple-100 rounded-3xl p-6 shadow-xs flex flex-col justify-between hover:border-purple-200 hover:shadow-md transition-all relative overflow-hidden">
                   <div className="absolute top-0 left-0 bg-purple-500 text-white text-[9px] font-black px-3 py-1 rounded-br-2xl animate-pulse tracking-wider">
                     Powered by Gemini AI (Beta)
@@ -3532,7 +3737,6 @@ export default function Home() {
 
               </div>
 
-              {/* AI Proposed List Confirmation BOX */}
               {aiProposedRequests.length > 0 && (
                 <div className="bg-white border border-purple-100 p-5 rounded-3xl space-y-3 shadow-md animate-fadeIn">
                   <div className="flex items-center justify-between border-b pb-2 border-slate-105">
@@ -3602,7 +3806,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Requests Registry Table */}
               <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto w-full">
                   <table className="w-full text-right border-collapse min-w-[900px]">
@@ -3623,7 +3826,6 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-sm">
-                      {/* 1. Grouped View Mode */}
                       {!showSplitRequests && role !== 'personnel' ? (
                         (() => {
                           const groupedPIds = Array.from(new Set(requests.map(r => r.personnelId)));
@@ -3669,7 +3871,6 @@ export default function Home() {
                                   <div className="flex items-center justify-center gap-1.5">
                                     <button
                                       onClick={() => {
-                                        // Open split requests mode so they can edit or toggle individually
                                         setShowSplitRequests(true);
                                       }}
                                       className="text-indigo-600 hover:bg-indigo-50 border border-indigo-100 bg-white text-xs font-bold px-2.5 py-1.5 rounded-xl transition-all cursor-pointer"
@@ -3691,7 +3892,6 @@ export default function Home() {
                           });
                         })()
                       ) : (
-                        // 2. Split View (Individual Rows) Mode
                         (() => {
                           const filteredRequests = requests.filter(r => {
                             if (role === 'personnel' && selectedPersonnelUser) {
@@ -3710,8 +3910,6 @@ export default function Home() {
                             );
                           }
 
-                          // If personnel mode, is it grouped in one line anyway?
-                          // Yes! "همه ی درخواست در قالب یک خط در صفحه ی درخواستها دیده شود"
                           if (role === 'personnel' && selectedPersonnelUser) {
                             const p = selectedPersonnelUser;
                             const pReqs = filteredRequests;
@@ -3824,6 +4022,11 @@ export default function Home() {
                                 <td className="px-6 py-3.5 text-center flex items-center justify-center gap-1">
                                   <button
                                     onClick={() => {
+                                      const isLocked = requestsLockedMonths.includes(`${currentYear}_${currentMonth}`);
+                                      if (isLocked && role === 'personnel') {
+                                        alert('مهلت ویرایش درخواست برای این ماه به پایان رسیده است.');
+                                        return;
+                                      }
                                       setEditingRequest(r);
                                       setReqPersonnelId(r.personnelId);
                                       setReqType(r.requestType);
@@ -3840,12 +4043,14 @@ export default function Home() {
                                     }}
                                     className="text-blue-500 hover:text-blue-700 p-1.5 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
                                     title="ویرایش درخواست"
-                                  ><Settings2 className="w-4 h-4" /></button>
+                                  >
+                                    <Settings2 className="w-4 h-4" />
+                                  </button>
                                   <button
                                     onClick={() => setDeleteTarget({ 
                                       id: r.id, 
                                       type: 'request', 
-                                      label: `درخواست ${r.requestType === 'shift' ? 'تعیین شیفت' : r.requestType === 'OFF' ? 'آف' : r.requestType === 'leave' ? 'مرخصی' : 'سایر'} پرسنل ${p.firstName} ${p.lastName}` 
+                                      label: `درخواست پرسنل ${p.firstName} ${p.lastName}` 
                                     })}
                                     className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
                                     title="حذف درخواست"
@@ -3867,7 +4072,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* --- VIEW 4: PERFORMANCE REPORTS PANEL --- */}
           {activeTab === 'reports' && (
             <div className="space-y-6">
               <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
@@ -3883,10 +4087,8 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Statistics Grid */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 
-                {/* Total Worked card */}
                 <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white shadow-lg p-5 rounded-2xl border border-indigo-200">
                   <div className="flex justify-between items-start">
                     <span className="text-indigo-100 font-bold text-xs">مجموع ساعت ارائه خدمات</span>
@@ -3897,7 +4099,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Total Overtime card */}
                 <div className="bg-white border border-slate-200 shadow-sm p-5 rounded-2xl">
                   <div className="flex justify-between items-start">
                     <span className="text-slate-400 font-bold text-xs">مجموع اضافه‌کار انباشته</span>
@@ -3908,7 +4109,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Eligible productivity counter */}
                 <div className="bg-white border border-slate-200 shadow-sm p-5 rounded-2xl">
                   <div className="flex justify-between items-start">
                     <span className="text-slate-400 font-bold text-xs">تعداد واجدین بهره‌وری بخش</span>
@@ -3919,7 +4119,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Total productivity hours */}
                 <div className="bg-white border border-slate-200 shadow-sm p-5 rounded-2xl">
                   <div className="flex justify-between items-start">
                     <span className="text-slate-400 font-bold text-xs">ساعت و امتیاز بهره‌وری</span>
@@ -3932,7 +4131,6 @@ export default function Home() {
 
               </div>
 
-              {/* Action Logs Panel */}
               {schedule?.changeLogs && schedule.changeLogs.length > 0 && (
                 <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 print:hidden">
                   <h4 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-4">
@@ -3950,7 +4148,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Comprehensive performance table */}
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="reports-table-container">
                 <div className="overflow-x-auto w-full">
                   <table className="w-full text-right border-collapse min-w-[900px]">
@@ -4012,11 +4209,9 @@ export default function Home() {
             </div>
           )}
 
-          {/* --- VIEW 5: SYSTEM DEMAND & CONFIGURATION --- */}
           {activeTab === 'settings' && role === 'admin' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               
-              {/* Left Column: Duty Hours and staffing demand */}
               <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
                 <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100">ساعات موظفی پایه و پیکربندی بر اساس قوانین</h3>
                 
@@ -4292,7 +4487,6 @@ export default function Home() {
                 </form>
               </div>
 
-              {/* Right Column: Holiday Management & Calendar define */}
               <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
                 <div>
                   <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100">تعریف تقویم و مناسبت‌های تعطیل انتخابی</h3>
@@ -4332,7 +4526,6 @@ export default function Home() {
                   </div>
                 </form>
 
-                {/* Holiday registry list */}
                 <div className="space-y-2">
                   <h4 className="font-extrabold text-slate-800 text-xs">تعطیلات ثبت شده اضافه در آبان/آذر/خرداد:</h4>
                   <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden text-xs">
@@ -4358,7 +4551,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* SELECT DAY ONCE FOR 1ST DAY OF MONTH */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mt-4 space-y-3">
                   <div>
                     <h4 className="text-xs font-black text-slate-800">روز ۱ام ماه چندشنبه است؟</h4>
@@ -4397,7 +4589,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* ON-CLICK CALENDAR TOGGLE GRID */}
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mt-4 space-y-3">
                   <div>
                     <h4 className="text-xs font-black text-slate-800 font-sans">تقویم تعاملی {JALALI_MONTH_NAMES[currentMonth - 1]} (کلیک جهت تعیین تعطیلی):</h4>
@@ -4527,7 +4718,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* --- VIEW 6: CALENDAR & HOLIDAYS MANAGEMENT --- */}
           {activeTab === 'calendar' && (
             <div className="space-y-6 animate-fade-in print:hidden">
               
@@ -4546,7 +4736,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* STEP 1: CHOOSE STARTING WEEKDAY */}
                 <div className="space-y-3 bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-6">
                   <div>
                     <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
@@ -4594,7 +4783,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* STEP 2: TICK TO DEFINE HOLIDAYS LIST */}
                 <div className="space-y-4">
                   <div>
                     <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
@@ -4609,7 +4797,6 @@ export default function Home() {
                   <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                     <div className="max-h-[500px] overflow-y-auto divide-y divide-slate-100 scrollbar-thin">
                       
-                      {/* Table Header */}
                       <div className="grid grid-cols-12 bg-slate-50 p-3 text-[10px] font-black text-slate-500 sticky top-0 border-b border-slate-250 z-10">
                         <div className="col-span-3 text-center">وضعیت تعطیلی مذهبی/ملی</div>
                         <div className="col-span-2 text-center">تاریخ روز</div>
@@ -4617,7 +4804,6 @@ export default function Home() {
                         <div className="col-span-4">علت تعطیلی / توضیح مناسبت</div>
                       </div>
 
-                      {/* Days list */}
                       {calendarDays.map(d => {
                         const isCustomHoliday = !!customHolidays[d.day];
                         const isFriday = d.dayOfWeek === 6;
@@ -4632,13 +4818,12 @@ export default function Home() {
                                 : 'hover:bg-slate-50/30 text-slate-700'
                             }`}
                           >
-                            {/* Checkbox trigger */}
                             <div className="col-span-3 flex items-center justify-center gap-2">
                               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                                 <input 
                                   type="checkbox"
                                   checked={isChecked}
-                                  disabled={isFriday || role === 'personnel'} // Friday is automatically system holiday
+                                  disabled={isFriday || role === 'personnel'}
                                   onChange={(e) => {
                                     const updated = { ...customHolidays };
                                     if (e.target.checked) {
@@ -4658,12 +4843,10 @@ export default function Home() {
                               </label>
                             </div>
 
-                            {/* Holiday ID/Day */}
                             <div className="col-span-2 text-center font-mono font-black text-sm text-slate-800">
                               {d.day}
                             </div>
 
-                            {/* Weekday name */}
                             <div className="col-span-3">
                               <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${
                                 isFriday 
@@ -4674,7 +4857,6 @@ export default function Home() {
                               </span>
                             </div>
 
-                            {/* Reason Input */}
                             <div className="col-span-4 flex items-center">
                               {isFriday ? (
                                 <span className="text-slate-400 text-[10px] font-normal italic">روز جمعه (تعطیل مستقل سیستم)</span>
@@ -4710,7 +4892,6 @@ export default function Home() {
 
               </div>
 
-              {/* STEP 3: MANAGE DUTY HOURS */}
               {role !== 'personnel' && (() => {
                 const liveCalendarDays = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
                 const liveTotalDays = liveCalendarDays.length;
@@ -4733,7 +4914,6 @@ export default function Home() {
                       </p>
                     </div>
 
-                    {/* Auto calculate Toggle */}
                     <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl p-4">
                       <div className="space-y-0.5 ml-4">
                         <span className="text-xs font-black text-slate-800 block">محاسبه خودکار ساعت موظفی بر اساس تعطیلات تقویم (فرمول وزارتخانه)</span>
@@ -4759,7 +4939,7 @@ export default function Home() {
                               } : {})
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, undefined, { mode: 'full_resolve' });
+                            saveState(personnel, requests, settings, updated, customHolidays, undefined, { mode: 'full_resolve' });
                           }}
                           className="sr-only peer"
                         />
@@ -4846,7 +5026,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* --- VIEW 7: PERSONAL PROFILE MANAGEMENT --- */}
           {activeTab === 'profile' && (
             <div className="max-w-4xl mx-auto space-y-6 animate-fade-in print:hidden text-right">
               <div className="bg-white border border-slate-200 p-6 sm:p-10 rounded-3xl shadow-sm text-right space-y-6">
@@ -4912,7 +5091,6 @@ export default function Home() {
 
                 {role === 'personnel' && selectedPersonnelUser && (
                   <form onSubmit={handleSaveProfile} className="space-y-6">
-                    {/* Read only info section */}
                     <div className="bg-slate-50 border border-slate-200/80 p-5 rounded-2xl grid grid-cols-2 md:grid-cols-4 gap-4 text-xs font-bold text-slate-600">
                       <div>
                         <span className="text-[10px] text-slate-400 block mb-1">نام کادر درمان:</span>
@@ -4972,7 +5150,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* --- VIEW 1 (PRINT SPECIFIC LAYOUT ONLY) --- */}
           <div className="hidden print:block w-full bg-white text-slate-900 p-8">
             <div className="text-center mb-6">
               <h1 className="text-2xl font-black">جدول زمان‌بندی و توزیع شیفت پرسنل پرستاری بیمارستان</h1>
@@ -5045,10 +5222,9 @@ export default function Home() {
             </div>
           </div>
 
-        </div> {/* close CONTENT VIEWPORT */}
-      </main> {/* close DASHBOARD CONTAINER WORKSPACE */}
+        </div>
+      </main>
 
-      {/* --- CUSTOM MODAL: DELETE CONFIRMATION --- */}
       {deleteTarget && (
         <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in" id="delete-confirm-modal" dir="rtl">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full border border-slate-200 shadow-2xl space-y-4 text-center">
@@ -5087,7 +5263,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* --- MODAL 1: ADD / EDIT PERSONNEL --- */}
       {showAddPersonnelModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="personnel-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative scrollbar-thin">
@@ -5243,7 +5418,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* --- MODAL 2: ADD ADVANCED MODULAR REQUEST --- */}
       {showAddRequestModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="request-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative animate-scale-up scrollbar-thin">
@@ -5431,7 +5605,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* DRAFT TABLE IN MODAL */}
               {draftRequests.length > 0 && (
                 <div className="mt-4 border-t border-slate-100 pt-3 space-y-2">
                   <div className="flex items-center justify-between">
