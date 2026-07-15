@@ -683,29 +683,59 @@ export default function Home() {
     }
   };
 
-  // ====== درخواست ۵: نمایش Collapsible هشدارهای باقی‌مانده ======
+  // ====== درخواست ۵: توابع مدیریت هشدارها ======
   
   const handleToggleAlert = (alertId: string) => {
     setExpandedAlertId(expandedAlertId === alertId ? null : alertId);
   };
 
   const handleDismissAlert = (warningText: string) => {
-    setDismissedAlertWarnings(prev => ({
-      ...prev,
-      [warningText]: true
-    }));
-    handleDismissWarning(warningText);
+    // اگر قبلاً نادیده گرفته شده، بازگردانی کن
+    if (dismissedAlertWarnings[warningText]) {
+      const newDismissed = { ...dismissedAlertWarnings };
+      delete newDismissed[warningText];
+      setDismissedAlertWarnings(newDismissed);
+      // همچنین از dismissedWarnings حذف کن
+      const updated = dismissedWarnings.filter(w => w !== warningText);
+      setDismissedWarnings(updated);
+      // ذخیره در دیتابیس
+      const key = `${currentYear}_${currentMonth}`;
+      const nextDb = getFreshDbCopy();
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId];
+      if (oldDept && oldDept.schedules?.[key]) {
+        const updatedDept = {
+          ...oldDept,
+          schedules: {
+            ...oldDept.schedules,
+            [key]: {
+              ...oldDept.schedules[key],
+              dismissedWarnings: updated
+            }
+          }
+        };
+        nextDb.deptData[deptId] = updatedDept;
+        saveDbState(nextDb);
+      }
+    } else {
+      setDismissedAlertWarnings(prev => ({
+        ...prev,
+        [warningText]: true
+      }));
+      handleDismissWarning(warningText);
+    }
   };
 
   const getVisibleWarnings = () => {
     if (!schedule) return [];
+    // هشدارهایی که نه در dismissedWarnings هستند و نه در dismissedAlertWarnings
     return schedule.warnings.filter(w => 
       !dismissedWarnings.includes(w) && 
       !dismissedAlertWarnings[w]
     );
   };
 
-  // ====== درخواست ۷: UI برای Collapsible هشدارها ======
+  // ====== درخواست ۷: کامپوننت Collapsible هشدارها ======
   
   const CollapsibleAlerts = () => {
     const activeAlerts = aggregatedAlerts.filter(a => a.warnings.length > 0);
@@ -743,19 +773,51 @@ export default function Home() {
             
             {expandedAlertId === alert.personnelId && (
               <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 space-y-2">
-                {alert.warnings.map((warn, idx) => (
-                  <div key={idx} className="flex items-start gap-2 text-xs bg-white p-2 rounded border border-slate-100">
-                    <span className="text-amber-600 font-black">•</span>
-                    <span className="flex-1 text-slate-700">{warn}</span>
-                    <button
-                      onClick={() => handleDismissAlert(warn)}
-                      className="text-slate-400 hover:text-slate-600 text-[10px] font-bold"
-                      title="نادیده گرفتن این هشدار"
+                {alert.warnings.map((warn, idx) => {
+                  const isDismissed = dismissedAlertWarnings[warn];
+                  return (
+                    <div 
+                      key={idx} 
+                      className={`flex items-start gap-2 text-xs p-2 rounded-lg transition-all ${
+                        isDismissed 
+                          ? 'bg-slate-50 text-slate-400' 
+                          : 'bg-amber-50/50 text-amber-800'
+                      }`}
                     >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                      <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                      <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            const dayMatch = warn.match(/روز (\d+)/);
+                            if (dayMatch) {
+                              const day = parseInt(dayMatch[1]);
+                              handleAlertClick(alert.personnelId, day);
+                            }
+                          }}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
+                            isDismissed 
+                              ? 'text-slate-400 border-slate-200 bg-white/50' 
+                              : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
+                          }`}
+                        >
+                          رفتن به سلول
+                        </button>
+                        <button
+                          onClick={() => handleDismissAlert(warn)}
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
+                            isDismissed 
+                              ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
+                              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+                          }`}
+                          title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
+                        >
+                          {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2775,7 +2837,6 @@ export default function Home() {
                 </button>
               )}
 
-              {/* Calendar - فقط برای سرپرستار و ادمین (درخواست ۲) */}
               {(role === 'admin' || role === 'headnurse') && (
                 <button
                   onClick={() => {
@@ -3048,24 +3109,28 @@ export default function Home() {
             </div>
           </div>
 
-          {/* ====== درخواست ۵: نمایش Collapsible هشدارها در داشبورد ====== */}
+          {/* ====== بخش ادغام شده هشدارها (درخواست ۵) ====== */}
           {role !== 'personnel' && schedule && getVisibleWarnings().length > 0 && (
-            <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    هشدارهای باقی‌مانده
-                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+            <div className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden">
+              {/* هدر با تعداد کل هشدارها */}
+              <div className="bg-amber-50/70 border-b border-amber-200/60 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-600" />
+                    <h3 className="text-sm font-black text-slate-800">
+                      هشدارهای باقی‌مانده
+                    </h3>
+                    <span className="bg-amber-100 text-amber-800 text-xs font-black px-2.5 py-0.5 rounded-full">
                       {getVisibleWarnings().length} مورد
                     </span>
-                  </h3>
+                  </div>
                   {smartSuggestions.length > 0 && (
-                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-mono">
+                    <span className="bg-indigo-100 text-indigo-700 text-xs font-black px-2.5 py-0.5 rounded-full">
                       {smartSuggestions.length} پیشنهاد
                     </span>
                   )}
                 </div>
+                
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowSuggestions(!showSuggestions)}
@@ -3079,90 +3144,205 @@ export default function Home() {
                         setDismissedWarnings([]);
                         setDismissedAlertWarnings({});
                       }}
-                      className="text-amber-700 hover:text-amber-950 font-bold text-[10px] bg-amber-100/70 border border-amber-200 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer shadow-2xs"
+                      className="text-amber-700 hover:text-amber-950 font-bold text-[10px] bg-amber-100/70 border border-amber-200 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
                     >
                       بازیابی همه ({dismissedWarnings.length})
                     </button>
                   )}
                 </div>
               </div>
-              
+
+              {/* بخش پیشنهادات هوشمند (قابل جمع‌شدن) */}
               {showSuggestions && smartSuggestions.length > 0 && (
-                <div className="mb-3 bg-indigo-50/80 border border-indigo-200 rounded-xl p-3 space-y-2">
+                <div className="bg-indigo-50/80 border-b border-indigo-200 p-4 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-indigo-800">💡 پیشنهادات هوشمند برای رفع تناقضات:</span>
                     <span className="text-[10px] text-indigo-600 font-bold">
                       {smartSuggestions.reduce((acc, s) => acc + Math.abs(s.impact.warningCountChange), 0)} مشکل قابل حل
                     </span>
                   </div>
-                  {smartSuggestions.map((suggestion, idx) => (
-                    <div key={suggestion.id} className="bg-white/70 rounded-lg p-2.5 border border-indigo-100 flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <div className="text-xs font-bold text-slate-700">{suggestion.description}</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {suggestion.impact.resolvedWarnings.length > 0 && (
-                            <span className="text-emerald-600">✔ {suggestion.impact.resolvedWarnings.length} هشدار رفع می‌شود</span>
-                          )}
-                          {suggestion.impact.newWarnings.length > 0 && (
-                            <span className="text-amber-600 mr-2">✖ {suggestion.impact.newWarnings.length} هشدار جدید ایجاد می‌شود</span>
-                          )}
-                          <span className="mr-2 text-indigo-600">
-                            {suggestion.impact.warningCountChange < 0 ? `⬇ ${Math.abs(suggestion.impact.warningCountChange)}` : ''}
-                          </span>
+                  <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                    {smartSuggestions.map((suggestion) => (
+                      <div key={suggestion.id} className="bg-white/70 rounded-lg p-2.5 border border-indigo-100 flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="text-xs font-bold text-slate-700">{suggestion.description}</div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            {suggestion.impact.resolvedWarnings.length > 0 && (
+                              <span className="text-emerald-600">✔ {suggestion.impact.resolvedWarnings.length} هشدار رفع می‌شود</span>
+                            )}
+                            {suggestion.impact.newWarnings.length > 0 && (
+                              <span className="text-amber-600 mr-2">✖ {suggestion.impact.newWarnings.length} هشدار جدید</span>
+                            )}
+                            <span className="mr-2 text-indigo-600">
+                              {suggestion.impact.warningCountChange < 0 ? `⬇ ${Math.abs(suggestion.impact.warningCountChange)}` : ''}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          const change = suggestion.changes[0];
-                          if (change && schedule) {
-                            const updatedAssignments = { ...schedule.assignments };
-                            if (!updatedAssignments[change.personnelId]) updatedAssignments[change.personnelId] = {};
-                            updatedAssignments[change.personnelId][change.day] = change.toShift;
-                            
-                            const verification = verifyCoverageAndLeaders(
-                              currentYear, currentMonth, personnel, updatedAssignments, 
-                              settings, customHolidays, firstDayOfWeekIndex, requests
-                            );
-                            
-                            const nextDb = getFreshDbCopy();
-                            const deptId = selectedDepartmentId || 'sepehr';
-                            const oldDept = nextDb.deptData[deptId];
-                            if (oldDept) {
-                              const key = `${currentYear}_${currentMonth}`;
-                              const updatedDept = {
-                                ...oldDept,
-                                schedules: {
-                                  ...oldDept.schedules,
-                                  [key]: {
-                                    year: currentYear,
-                                    month: currentMonth,
-                                    assignments: updatedAssignments,
-                                    shiftLeaders: verification.shiftLeaders,
-                                    warnings: verification.warnings,
-                                    dismissedWarnings: dismissedWarnings,
-                                    lockedRows: lockedRows
+                        <button
+                          onClick={async () => {
+                            const change = suggestion.changes[0];
+                            if (change && schedule) {
+                              const updatedAssignments = { ...schedule.assignments };
+                              if (!updatedAssignments[change.personnelId]) updatedAssignments[change.personnelId] = {};
+                              updatedAssignments[change.personnelId][change.day] = change.toShift;
+                              
+                              const verification = verifyCoverageAndLeaders(
+                                currentYear, currentMonth, personnel, updatedAssignments, 
+                                settings, customHolidays, firstDayOfWeekIndex, requests
+                              );
+                              
+                              const nextDb = getFreshDbCopy();
+                              const deptId = selectedDepartmentId || 'sepehr';
+                              const oldDept = nextDb.deptData[deptId];
+                              if (oldDept) {
+                                const key = `${currentYear}_${currentMonth}`;
+                                const updatedDept = {
+                                  ...oldDept,
+                                  schedules: {
+                                    ...oldDept.schedules,
+                                    [key]: {
+                                      year: currentYear,
+                                      month: currentMonth,
+                                      assignments: updatedAssignments,
+                                      shiftLeaders: verification.shiftLeaders,
+                                      warnings: verification.warnings,
+                                      dismissedWarnings: dismissedWarnings,
+                                      lockedRows: lockedRows
+                                    }
                                   }
-                                }
-                              };
-                              nextDb.deptData[deptId] = updatedDept;
-                              await saveDbState(nextDb);
-                              setShowSuggestions(false);
+                                };
+                                nextDb.deptData[deptId] = updatedDept;
+                                await saveDbState(nextDb);
+                                setShowSuggestions(false);
+                              }
                             }
-                          }
-                        }}
-                        className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
-                      >
-                        اعمال
-                      </button>
-                    </div>
-                  ))}
+                          }}
+                          className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
+                        >
+                          اعمال
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                   <div className="text-[9px] text-slate-400 font-bold text-center pt-1">
                     با اعمال هر پیشنهاد، سیستم به صورت خودکار بازتولید می‌شود
                   </div>
                 </div>
               )}
-              
-              <CollapsibleAlerts />
+
+              {/* لیست هشدارها با قابلیت جمع‌شدن */}
+              <div className="p-4">
+                {aggregatedAlerts.filter(a => a.warnings.length > 0).length === 0 ? (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-emerald-800 text-xs font-bold text-center">
+                    ✨ تمامی هشدارهای این ماه توسط شما نادیده گرفته شده‌اند.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {aggregatedAlerts
+                      .filter(a => a.warnings.length > 0)
+                      .map((alert) => (
+                        <div 
+                          key={alert.personnelId}
+                          className={`bg-white border rounded-xl overflow-hidden transition-all ${
+                            alert.severity === 'high' ? 'border-red-200' :
+                            alert.severity === 'medium' ? 'border-amber-200' : 'border-blue-200'
+                          } ${expandedAlertId === alert.personnelId ? 'shadow-md' : 'shadow-sm'}`}
+                        >
+                          <button
+                            onClick={() => {
+                              setExpandedAlertId(expandedAlertId === alert.personnelId ? null : alert.personnelId);
+                              if (expandedAlertId !== alert.personnelId && alert.warnings.length > 0) {
+                                const firstWarning = alert.warnings[0];
+                                const dayMatch = firstWarning.match(/روز (\d+)/);
+                                if (dayMatch) {
+                                  const day = parseInt(dayMatch[1]);
+                                  handleAlertClick(alert.personnelId, day);
+                                }
+                              }
+                            }}
+                            className={`w-full px-4 py-3 flex items-center justify-between text-right transition-all hover:bg-slate-50/80 ${
+                              expandedAlertId === alert.personnelId ? 'bg-slate-50/50' : ''
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className={`text-sm font-black ${
+                                alert.severity === 'high' ? 'text-red-600' :
+                                alert.severity === 'medium' ? 'text-amber-600' : 'text-blue-600'
+                              }`}>
+                                {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
+                              </span>
+                              <span className="font-bold text-slate-800 text-sm">{alert.personnelName}</span>
+                              <span className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
+                                alert.severity === 'high' ? 'bg-red-100 text-red-700' :
+                                alert.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {alert.warningCount} مشکل
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {alert.warnings.some(w => dismissedAlertWarnings[w]) && (
+                                <span className="text-[10px] text-slate-400 font-bold">(نادیده گرفته شده‌ها)</span>
+                              )}
+                              <span className="text-slate-400 text-sm transition-transform duration-200">
+                                {expandedAlertId === alert.personnelId ? '▲' : '▼'}
+                              </span>
+                            </div>
+                          </button>
+                          
+                          {expandedAlertId === alert.personnelId && (
+                            <div className="px-4 pb-3 pt-1 space-y-1.5 border-t border-slate-100">
+                              {alert.warnings.map((warn, idx) => {
+                                const isDismissed = dismissedAlertWarnings[warn];
+                                return (
+                                  <div 
+                                    key={idx} 
+                                    className={`flex items-start gap-2 text-xs p-2.5 rounded-lg transition-all ${
+                                      isDismissed 
+                                        ? 'bg-slate-50 text-slate-400' 
+                                        : 'bg-amber-50/50 text-amber-800'
+                                    }`}
+                                  >
+                                    <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                                    <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <button
+                                        onClick={() => {
+                                          const dayMatch = warn.match(/روز (\d+)/);
+                                          if (dayMatch) {
+                                            const day = parseInt(dayMatch[1]);
+                                            handleAlertClick(alert.personnelId, day);
+                                          }
+                                        }}
+                                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
+                                          isDismissed 
+                                            ? 'text-slate-400 border-slate-200 bg-white/50' 
+                                            : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
+                                        }`}
+                                      >
+                                        رفتن به سلول
+                                      </button>
+                                      <button
+                                        onClick={() => handleDismissAlert(warn)}
+                                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
+                                          isDismissed 
+                                            ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
+                                            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+                                        }`}
+                                        title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
+                                      >
+                                        {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -3337,197 +3517,6 @@ export default function Home() {
                   </button>
                 </div>
               </div>
-
-              {role !== 'personnel' && schedule && schedule.warnings.length > 0 && (
-                <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-4 shadow-inner">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                    <h4 className="text-amber-900 font-extrabold text-sm flex items-center gap-1.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 animate-[bounce_1.5s_infinite]"/>
-                      هشدارها و تصمیمات موتور برنامه‌ریز
-                      <span className="text-xs bg-amber-200/50 px-2 py-0.5 rounded-full font-mono">
-                        {aggregatedAlerts.length} گروه هشدار
-                      </span>
-                      {smartSuggestions.length > 0 && (
-                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-mono">
-                          {smartSuggestions.length} پیشنهاد
-                        </span>
-                      )}
-                    </h4>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setShowSuggestions(!showSuggestions)}
-                        className="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
-                      >
-                        💡 {showSuggestions ? 'بستن پیشنهادات' : 'نمایش پیشنهادات هوشمند'}
-                      </button>
-                      {dismissedWarnings.length > 0 && (
-                        <button
-                          onClick={() => {
-                            setDismissedWarnings([]);
-                            setDismissedAlertWarnings({});
-                          }}
-                          className="text-amber-700 hover:text-amber-950 font-bold text-[10px] bg-amber-100/70 border border-amber-200 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer shadow-2xs"
-                        >
-                          بازیابی همه ({dismissedWarnings.length})
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  
-                  {showSuggestions && smartSuggestions.length > 0 && (
-                    <div className="mb-3 bg-indigo-50/80 border border-indigo-200 rounded-xl p-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-black text-indigo-800">💡 پیشنهادات هوشمند برای رفع تناقضات:</span>
-                        <span className="text-[10px] text-indigo-600 font-bold">
-                          {smartSuggestions.reduce((acc, s) => acc + Math.abs(s.impact.warningCountChange), 0)} مشکل قابل حل
-                        </span>
-                      </div>
-                      {smartSuggestions.map((suggestion, idx) => (
-                        <div key={suggestion.id} className="bg-white/70 rounded-lg p-2.5 border border-indigo-100 flex items-start justify-between gap-2">
-                          <div className="flex-1">
-                            <div className="text-xs font-bold text-slate-700">{suggestion.description}</div>
-                            <div className="text-[10px] text-slate-500 mt-0.5">
-                              {suggestion.impact.resolvedWarnings.length > 0 && (
-                                <span className="text-emerald-600">✔ {suggestion.impact.resolvedWarnings.length} هشدار رفع می‌شود</span>
-                              )}
-                              {suggestion.impact.newWarnings.length > 0 && (
-                                <span className="text-amber-600 mr-2">✖ {suggestion.impact.newWarnings.length} هشدار جدید ایجاد می‌شود</span>
-                              )}
-                              <span className="mr-2 text-indigo-600">
-                                {suggestion.impact.warningCountChange < 0 ? `⬇ ${Math.abs(suggestion.impact.warningCountChange)}` : ''}
-                              </span>
-                            </div>
-                          </div>
-                          <button
-                            onClick={async () => {
-                              const change = suggestion.changes[0];
-                              if (change && schedule) {
-                                const updatedAssignments = { ...schedule.assignments };
-                                if (!updatedAssignments[change.personnelId]) updatedAssignments[change.personnelId] = {};
-                                updatedAssignments[change.personnelId][change.day] = change.toShift;
-                                
-                                const verification = verifyCoverageAndLeaders(
-                                  currentYear, currentMonth, personnel, updatedAssignments, 
-                                  settings, customHolidays, firstDayOfWeekIndex, requests
-                                );
-                                
-                                const nextDb = getFreshDbCopy();
-                                const deptId = selectedDepartmentId || 'sepehr';
-                                const oldDept = nextDb.deptData[deptId];
-                                if (oldDept) {
-                                  const key = `${currentYear}_${currentMonth}`;
-                                  const updatedDept = {
-                                    ...oldDept,
-                                    schedules: {
-                                      ...oldDept.schedules,
-                                      [key]: {
-                                        year: currentYear,
-                                        month: currentMonth,
-                                        assignments: updatedAssignments,
-                                        shiftLeaders: verification.shiftLeaders,
-                                        warnings: verification.warnings,
-                                        dismissedWarnings: dismissedWarnings,
-                                        lockedRows: lockedRows
-                                      }
-                                    }
-                                  };
-                                  nextDb.deptData[deptId] = updatedDept;
-                                  await saveDbState(nextDb);
-                                  setShowSuggestions(false);
-                                }
-                              }
-                            }}
-                            className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
-                          >
-                            اعمال
-                          </button>
-                        </div>
-                      ))}
-                      <div className="text-[9px] text-slate-400 font-bold text-center pt-1">
-                        با اعمال هر پیشنهاد، سیستم به صورت خودکار بازتولید می‌شود
-                      </div>
-                    </div>
-                  )}
-                  
-                  {aggregatedAlerts.length === 0 ? (
-                    <div className="text-xs text-emerald-800 font-bold bg-white/80 border border-emerald-150 p-3 rounded-xl text-center shadow-2xs">
-                      ✨ تمامی هشدارهای این ماه توسط شما نادیده گرفته شده‌اند.
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {aggregatedAlerts.map((alert) => (
-                        <div 
-                          key={alert.personnelId}
-                          className={`bg-white/70 rounded-xl border transition-all ${
-                            alert.severity === 'high' ? 'border-red-200' :
-                            alert.severity === 'medium' ? 'border-amber-200' : 'border-blue-200'
-                          }`}
-                        >
-                          <button
-                            onClick={() => {
-                              setExpandedAlertId(expandedAlertId === alert.personnelId ? null : alert.personnelId);
-                              if (expandedAlertId !== alert.personnelId && alert.warnings.length > 0) {
-                                const firstWarning = alert.warnings[0];
-                                const dayMatch = firstWarning.match(/روز (\d+)/);
-                                if (dayMatch) {
-                                  const day = parseInt(dayMatch[1]);
-                                  handleAlertClick(alert.personnelId, day);
-                                }
-                              }
-                            }}
-                            className={`w-full px-4 py-3 flex items-center justify-between text-right transition-all ${
-                              alert.severity === 'high' ? 'hover:bg-red-50/50' :
-                              alert.severity === 'medium' ? 'hover:bg-amber-50/50' : 'hover:bg-blue-50/50'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className={`text-sm font-black ${
-                                alert.severity === 'high' ? 'text-red-600' :
-                                alert.severity === 'medium' ? 'text-amber-600' : 'text-blue-600'
-                              }`}>
-                                {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
-                              </span>
-                              <span className="font-bold text-slate-800">{alert.personnelName}</span>
-                              <span className={`text-xs font-black px-2 py-0.5 rounded-full ${
-                                alert.severity === 'high' ? 'bg-red-100 text-red-700' :
-                                alert.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
-                              }`}>
-                                {alert.warningCount} مشکل
-                              </span>
-                            </div>
-                            <span className="text-slate-400 text-sm">
-                              {expandedAlertId === alert.personnelId ? '▲' : '▼'}
-                            </span>
-                          </button>
-                          
-                          {expandedAlertId === alert.personnelId && (
-                            <div className="px-4 pb-3 pt-1 space-y-1 border-t border-slate-100">
-                              {alert.warnings.map((warn, idx) => (
-                                <div key={idx} className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50/50 p-2 rounded-lg">
-                                  <span className="text-amber-600 font-black ml-1">•</span>
-                                  <span className="leading-relaxed">{warn}</span>
-                                  <button
-                                    onClick={() => {
-                                      const dayMatch = warn.match(/روز (\d+)/);
-                                      if (dayMatch) {
-                                        const day = parseInt(dayMatch[1]);
-                                        handleAlertClick(alert.personnelId, day);
-                                      }
-                                    }}
-                                    className="text-indigo-500 hover:text-indigo-700 font-bold text-[10px] bg-white/80 px-2 py-0.5 rounded-lg border border-indigo-100 shrink-0"
-                                  >
-                                    رفتن به سلول
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
 
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="schedule-grid-container">
                 <div className="overflow-x-auto overflow-y-auto max-h-[75vh]">
