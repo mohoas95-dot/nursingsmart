@@ -69,7 +69,8 @@ import {
   Activity,
   Menu,
   X,
-  Settings2
+  Settings2,
+  History
 } from 'lucide-react';
 
 // Department interface for multi-department management
@@ -240,44 +241,32 @@ export default function Home() {
   const [headnursePassword, setHeadnursePassword] = useState<string>('123456');
 
   // States for finalized months (locked schedules that won't auto-resolve)
-  const [finalizedMonths, setFinalizedMonths] = useState<string[]>([]);
+  const [finalizedNursesMonths, setFinalizedNursesMonths] = useState<string[]>([]);
+  const [finalizedAssistantsMonths, setFinalizedAssistantsMonths] = useState<string[]>([]);
+  const [requestsLockedMonths, setRequestsLockedMonths] = useState<string[]>([]);
 
   // State for dismissed warnings list per month
   const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
 
   const [isSavingDb, setIsSavingDb] = useState<boolean>(false);
-  const [isBlockingSave, setIsBlockingSave] = useState<boolean>(false);
 
   const getFreshDbCopy = (): AppDatabaseState => {
     return fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
   };
 
-  const saveDbState = async (
-    updatedDb: AppDatabaseState,
-    options: { showOverlay?: boolean } = {}
-  ) => {
+  const saveDbState = async (updatedDb: AppDatabaseState) => {
     setFullDbState(updatedDb);
     
     const deptId = selectedDepartmentId || 'sepehr';
     const deptInfo = updatedDb.deptData[deptId] || {
       personnel: [],
       requests: [],
-      activeYear: currentYear,
       settings_system: INITIAL_SETTINGS,
       settings_credentials: { username: 'headnurse', password: '123456' },
       holidays: {},
       firstDayOfWeek: {},
       schedules: {},
     };
-
-    const resolvedYear = typeof deptInfo.activeYear === 'number' ? deptInfo.activeYear : currentYear;
-    const hKey = `${resolvedYear}_${currentMonth}`;
-    if (resolvedYear !== currentYear) {
-      setCurrentYear(resolvedYear);
-    }
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('hospital_current_year', String(resolvedYear));
-    }
     
     setDepartments(updatedDb.departments || []);
     setPersonnel(deptInfo.personnel || []);
@@ -286,6 +275,7 @@ export default function Home() {
     setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
     setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
     
+    const hKey = `${currentYear}_${currentMonth}`;
     const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
     setCustomHolidays(holidaysInfo.days || {});
     setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
@@ -297,20 +287,32 @@ export default function Home() {
     setSchedule(sched);
     if (sched) {
       setDismissedWarnings(sched.dismissedWarnings || []);
-      const isFin = !!sched.finalized;
-      setFinalizedMonths(prev => {
-        const key = `${resolvedYear}_${currentMonth}`;
-        if (isFin) {
-          if (!prev.includes(key)) return [...prev, key];
-        } else {
-          return prev.filter(k => k !== key);
-        }
+      const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
+      const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
+      const isReqLocked = !!sched.requestsLocked;
+      
+      setFinalizedNursesMonths(prev => {
+        const key = `${currentYear}_${currentMonth}`;
+        if (isFinNurses && !prev.includes(key)) return [...prev, key];
+        if (!isFinNurses) return prev.filter(k => k !== key);
+        return prev;
+      });
+      setFinalizedAssistantsMonths(prev => {
+        const key = `${currentYear}_${currentMonth}`;
+        if (isFinAssistants && !prev.includes(key)) return [...prev, key];
+        if (!isFinAssistants) return prev.filter(k => k !== key);
+        return prev;
+      });
+      setRequestsLockedMonths(prev => {
+        const key = `${currentYear}_${currentMonth}`;
+        if (isReqLocked && !prev.includes(key)) return [...prev, key];
+        if (!isReqLocked) return prev.filter(k => k !== key);
         return prev;
       });
     } else {
       try {
         const solved = solveNursingSchedule(
-          resolvedYear, 
+          currentYear, 
           currentMonth, 
           deptInfo.personnel || [], 
           deptInfo.requests || [], 
@@ -320,7 +322,7 @@ export default function Home() {
           holidaysInfo.monthlyDutyHours || null
         );
         setSchedule({
-          year: resolvedYear,
+          year: currentYear,
           month: currentMonth,
           assignments: solved.assignments || {},
           shiftLeaders: solved.shiftLeaders || {},
@@ -333,9 +335,7 @@ export default function Home() {
     }
 
     try {
-      const showOverlay = options.showOverlay ?? true;
       setIsSavingDb(true);
-      setIsBlockingSave(showOverlay);
       const res = await fetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -349,7 +349,6 @@ export default function Home() {
       console.error("Network error saving to S3 Object Storage:", err);
     } finally {
       setIsSavingDb(false);
-      setIsBlockingSave(false);
     }
   };
 
@@ -383,7 +382,6 @@ export default function Home() {
             updatedDb.deptData[deptId] = {
               personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
               requests: INITIAL_REQUESTS,
-              activeYear: currentYear,
               settings_system: INITIAL_SETTINGS,
               settings_credentials: { username: 'headnurse', password: '123456' },
               holidays: {},
@@ -393,20 +391,13 @@ export default function Home() {
           }
           
           const deptInfo = updatedDb.deptData[deptId];
-          const resolvedYear = typeof deptInfo.activeYear === 'number' ? deptInfo.activeYear : currentYear;
-          if (resolvedYear !== currentYear) {
-            setCurrentYear(resolvedYear);
-          }
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('hospital_current_year', String(resolvedYear));
-          }
           setPersonnel(deptInfo.personnel || []);
           setRequests(deptInfo.requests || []);
           setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
           setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
           setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
           
-          const hKey = `${resolvedYear}_${currentMonth}`;
+          const hKey = `${currentYear}_${currentMonth}`;
           const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
           setCustomHolidays(holidaysInfo.days || {});
           setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
@@ -418,20 +409,32 @@ export default function Home() {
           setSchedule(sched);
           if (sched) {
             setDismissedWarnings(sched.dismissedWarnings || []);
-            const isFin = !!sched.finalized;
-            setFinalizedMonths(prev => {
-              const key = `${resolvedYear}_${currentMonth}`;
-              if (isFin) {
-                if (!prev.includes(key)) return [...prev, key];
-              } else {
-                return prev.filter(k => k !== key);
-              }
+            const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
+            const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
+            const isReqLocked = !!sched.requestsLocked;
+            
+            setFinalizedNursesMonths(prev => {
+              const key = `${currentYear}_${currentMonth}`;
+              if (isFinNurses && !prev.includes(key)) return [...prev, key];
+              if (!isFinNurses) return prev.filter(k => k !== key);
+              return prev;
+            });
+            setFinalizedAssistantsMonths(prev => {
+              const key = `${currentYear}_${currentMonth}`;
+              if (isFinAssistants && !prev.includes(key)) return [...prev, key];
+              if (!isFinAssistants) return prev.filter(k => k !== key);
+              return prev;
+            });
+            setRequestsLockedMonths(prev => {
+              const key = `${currentYear}_${currentMonth}`;
+              if (isReqLocked && !prev.includes(key)) return [...prev, key];
+              if (!isReqLocked) return prev.filter(k => k !== key);
               return prev;
             });
           } else {
             try {
               const solved = solveNursingSchedule(
-                resolvedYear, 
+                currentYear, 
                 currentMonth, 
                 deptInfo.personnel || [], 
                 deptInfo.requests || [], 
@@ -441,7 +444,7 @@ export default function Home() {
                 holidaysInfo.monthlyDutyHours || null
               );
               setSchedule({
-                year: resolvedYear,
+                year: currentYear,
                 month: currentMonth,
                 assignments: solved.assignments || {},
                 shiftLeaders: solved.shiftLeaders || {},
@@ -592,7 +595,7 @@ export default function Home() {
       const activeFd = fdIndex !== undefined ? fdIndex : (firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1);
       
       // Auto calculate duty hours if enabled
-      let calculatedMonthlyDutyHours = monthlyDutyHours ? { ...monthlyDutyHours } : null;
+      let calculatedMonthlyDutyHours = monthlyDutyHours;
       if (updatedS.autoCalculateDutyHours) {
         const autoHours = calculateAutoDutyHours(
           currentYear, 
@@ -629,7 +632,9 @@ export default function Home() {
           : oldDept.schedules?.[monthKey] || null;
 
       // Calculate schedule
-      const isLocked = finalizedMonths.includes(monthKey);
+      const isLockedNurses = finalizedNursesMonths.includes(monthKey);
+      const isLockedAssistants = finalizedAssistantsMonths.includes(monthKey);
+      const isReqLocked = requestsLockedMonths.includes(monthKey);
       let solved: MonthlySchedule;
 
       if (currentMonthSchedule && strategy.mode !== 'full_resolve') {
@@ -650,11 +655,16 @@ export default function Home() {
 
           nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
 
-          const targetPersonnelIds = strategy.mode === 'refresh_personnel'
+          const targetPersonnelIds = (strategy.mode === 'refresh_personnel'
             ? Array.from(new Set(strategy.personnelIds || []))
             : updatedP
                 .filter(person => person.jobGroup === strategy.jobGroup)
-                .map(person => person.id);
+                .map(person => person.id)
+          ).filter(id => {
+            const p = updatedP.find(per => per.id === id);
+            if (!p) return false;
+            return p.jobGroup === 'nurse' ? !isLockedNurses : !isLockedAssistants;
+          });
 
           for (const personnelId of targetPersonnelIds) {
             nextAssignments[personnelId] = { ...(freshSolved.assignments[personnelId] || {}) };
@@ -681,12 +691,41 @@ export default function Home() {
           warnings: verification.warnings
         };
       } else {
-        solved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
+        const freshSolved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
+        
+        if (currentMonthSchedule) {
+          const nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
+          for (const p of updatedP) {
+            const isLocked = p.jobGroup === 'nurse' ? isLockedNurses : isLockedAssistants;
+            if (!isLocked) {
+              nextAssignments[p.id] = { ...(freshSolved.assignments[p.id] || {}) };
+            }
+          }
+          const verification = verifyCoverageAndLeaders(
+            currentYear,
+            currentMonth,
+            updatedP,
+            nextAssignments,
+            updatedS,
+            updatedH,
+            activeFd === -1 ? undefined : activeFd,
+            updatedR
+          );
+          solved = {
+            ...currentMonthSchedule,
+            year: currentYear,
+            month: currentMonth,
+            assignments: nextAssignments,
+            shiftLeaders: verification.shiftLeaders,
+            warnings: verification.warnings
+          };
+        } else {
+          solved = freshSolved;
+        }
       }
 
       const updatedDept = {
         ...oldDept,
-        activeYear: currentYear,
         personnel: updatedP,
         requests: updatedR,
         settings_system: updatedS,
@@ -705,8 +744,11 @@ export default function Home() {
           ...oldDept.schedules,
           [monthKey]: {
             ...solved,
-            finalized: isLocked,
-            dismissedWarnings: dismissedWarnings
+            finalizedNurses: isLockedNurses,
+            finalizedAssistants: isLockedAssistants,
+            requestsLocked: isReqLocked,
+            dismissedWarnings: dismissedWarnings,
+            changeLogs: schedule?.changeLogs || []
           }
         }
       };
@@ -748,7 +790,7 @@ export default function Home() {
   // Run the smart constraints CP-SAT mimic engine with loading animation
   const handleRunOptimizer = (jobGroup: JobGroup) => {
     const key = `${currentYear}_${currentMonth}`;
-    let wasLocked = finalizedMonths.includes(key);
+    let wasLocked = jobGroup === 'nurse' ? finalizedNursesMonths.includes(key) : finalizedAssistantsMonths.includes(key);
     if (wasLocked) {
       const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
       const confirmUnlock = confirm(`برنامه این ماه ثبت نهایی و قفل شده است. آیا مایلید قفل لیست را باز کرده و بازتولید هوشمند ${groupTitle} را اجرا کنید؟`);
@@ -805,7 +847,7 @@ export default function Home() {
               assignments: mergedAssignments,
               shiftLeaders: verification.shiftLeaders,
               warnings: verification.warnings,
-              finalized: false,
+              ...(jobGroup === 'nurse' ? { finalizedNurses: false } : { finalizedAssistants: false }),
               dismissedWarnings: dismissedWarnings
             }
           }
@@ -821,55 +863,13 @@ export default function Home() {
     }, 1500);
   };
 
-  const handleFinalizeMonth = async () => {
+  const handleToggleLock = async (jobGroup: JobGroup) => {
     if (role === 'personnel') return;
     try {
       const key = `${currentYear}_${currentMonth}`;
-      
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
-      if (!nextDb.deptData) nextDb.deptData = {};
-      
-      const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
-
-      const existingSched = oldDept.schedules?.[key];
-      if (!existingSched) {
-        alert("جدول شیفتی برای نهایی‌سازی یافت نشد.");
-        return;
-      }
-
-      const updatedDept = {
-        ...oldDept,
-        schedules: {
-          ...oldDept.schedules,
-          [key]: {
-            ...existingSched,
-            finalized: true
-          }
-        }
-      };
-
-      nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
-      alert(`لیست شیفت‌های ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت ثبت نهایی شد و قفل گردید.`);
-    } catch (error) {
-      console.error("Error finalizing month:", error);
-      alert("خطا در قفل جدول: " + (error instanceof Error ? error.message : String(error)));
-    }
-  };
-
-  const handleUnfinalizeMonth = async () => {
-    if (role === 'personnel') return;
-    try {
-      const key = `${currentYear}_${currentMonth}`;
+      const isNurse = jobGroup === 'nurse';
+      const isLocked = isNurse ? finalizedNursesMonths.includes(key) : finalizedAssistantsMonths.includes(key);
+      const groupTitle = isNurse ? 'پرستاران' : 'کمک‌بهیاران';
       
       const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
       if (!nextDb.deptData) nextDb.deptData = {};
@@ -891,23 +891,71 @@ export default function Home() {
         return;
       }
 
+      const updatedLogs = [...(existingSched.changeLogs || []), `تغییر وضعیت قفل ${groupTitle}: ${!isLocked ? 'قفل شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`];
+
       const updatedDept = {
         ...oldDept,
         schedules: {
           ...oldDept.schedules,
           [key]: {
             ...existingSched,
-            finalized: false
+            ...(isNurse ? { finalizedNurses: !isLocked } : { finalizedAssistants: !isLocked }),
+            changeLogs: updatedLogs
           }
         }
       };
 
       nextDb.deptData[deptId] = updatedDept;
       await saveDbState(nextDb);
-      alert(`قفل لیست شیفت‌های ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت باز شد.`);
+      alert(`لیست شیفت‌های ${groupTitle} ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت ${!isLocked ? 'قفل گردید' : 'باز شد'}.`);
     } catch (error) {
-      console.error("Error unlocking month:", error);
-      alert("خطا در باز کردن قفل جدول: " + (error instanceof Error ? error.message : String(error)));
+      console.error("Error toggling lock:", error);
+      alert("خطا در تغییر وضعیت قفل: " + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
+  const handleToggleRequestsLock = async () => {
+    if (role === 'personnel') return;
+    try {
+      const key = `${currentYear}_${currentMonth}`;
+      const isLocked = requestsLockedMonths.includes(key);
+      
+      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      if (!nextDb.deptData) nextDb.deptData = {};
+      
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const existingSched = oldDept.schedules?.[key];
+      
+      const updatedLogs = existingSched ? [...(existingSched.changeLogs || []), `تغییر وضعیت مهلت درخواست‌ها: ${!isLocked ? 'بسته شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`] : [`تغییر وضعیت مهلت درخواست‌ها: ${!isLocked ? 'بسته شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`];
+
+      const updatedDept = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...(existingSched || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
+            requestsLocked: !isLocked,
+            changeLogs: updatedLogs
+          }
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
+      alert(`مهلت ثبت درخواست‌های ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت ${!isLocked ? 'بسته شد' : 'تمدید شد'}.`);
+    } catch (error) {
+      console.error("Error toggling requests lock:", error);
+      alert("خطا در تغییر وضعیت مهلت درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -957,40 +1005,6 @@ export default function Home() {
     if (typeof window !== 'undefined') {
       localStorage.setItem('hospital_current_month', String(mNum));
       localStorage.setItem('hospital_current_year', String(currentYear));
-    }
-  };
-
-  const handleSelectYear = async (year: number) => {
-    if (year === currentYear) return;
-    try {
-      const nextDb = getFreshDbCopy();
-      if (!nextDb.deptData) nextDb.deptData = {};
-
-      const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        activeYear: year,
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
-
-      nextDb.deptData[deptId] = {
-        ...oldDept,
-        activeYear: year
-      };
-
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('hospital_current_year', String(year));
-      }
-
-      await saveDbState(nextDb, { showOverlay: false });
-    } catch (error) {
-      console.error("Error setting active year:", error);
-      alert("خطا در ذخیره سال فعال: " + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -1375,6 +1389,10 @@ export default function Home() {
   };
 
   const handleDeleteAllPersonRequests = async (personId: string, name: string) => {
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت و ویرایش درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
     if (!confirm(`آیا مطمئن هستید که می‌خواهید تمام درخواست‌های ثبت‌شده ${name} را حذف کنید؟`)) {
       return;
     }
@@ -1392,6 +1410,11 @@ export default function Home() {
 
   const handleAddRequest = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
     
     // Direct edit mode saving
     if (editingRequest) {
@@ -1438,6 +1461,10 @@ export default function Home() {
   };
 
   const handleDeleteRequest = async (id: string) => {
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت و ویرایش درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
     try {
       const deletedRequest = requests.find(r => r.id === id);
       const updatedR = requests.filter(r => r.id !== id);
@@ -1461,6 +1488,15 @@ export default function Home() {
   // --- Manual Schedule Override cell edit ---
   const handleCellClick = (pId: string, day: number) => {
     if (role === 'admin' || role === 'headnurse') {
+      const p = personnel.find(per => per.id === pId);
+      if (p) {
+        const monthKey = `${currentYear}_${currentMonth}`;
+        const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
+        if (isLocked) {
+          alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
+          return;
+        }
+      }
       setEditingCell({ pId, day });
     }
   };
@@ -1506,8 +1542,9 @@ export default function Home() {
       };
 
       nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
+
       setEditingCell(null);
-      await saveDbState(nextDb, { showOverlay: false });
     } catch (error) {
       console.error("Error setting manual shift change:", error);
       alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
@@ -1952,14 +1989,9 @@ export default function Home() {
         ? 'در حال بازتولید هوشمند برنامه کمک بهیاران و ثبت تغییرات در سامانه...'
         : isAiProcessing
           ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
-          : isBlockingSave
+          : isSavingDb
             ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
             : null;
-
-  const availablePlanningYears = React.useMemo(
-    () => Array.from({ length: 11 }, (_, index) => currentYear - 5 + index),
-    [currentYear]
-  );
 
   if (!isMounted) {
     return (
@@ -2266,7 +2298,6 @@ export default function Home() {
                       nextDb.deptData[newId] = {
                         personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
                         requests: INITIAL_REQUESTS,
-                        activeYear: currentYear,
                         settings_system: INITIAL_SETTINGS,
                         settings_credentials: {
                           username: newDeptHeadnurseUsername.trim(),
@@ -2639,26 +2670,7 @@ export default function Home() {
         </header>
 
         {/* HORIZONTAL MONTH SELECTOR RIBBON */}
-        <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex gap-3 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
-          {role !== 'personnel' && (
-            <div className="flex items-center gap-2 shrink-0 ml-2">
-              <label htmlFor="planning-year-select" className="text-[11px] font-black text-slate-500 whitespace-nowrap">
-                سال فعال:
-              </label>
-              <select
-                id="planning-year-select"
-                value={currentYear}
-                onChange={(e) => handleSelectYear(Number(e.target.value))}
-                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-black text-slate-700 focus:border-emerald-500 focus:outline-none"
-              >
-                {availablePlanningYears.map((year) => (
-                  <option key={year} value={year}>
-                    {year}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+        <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex gap-2 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
           {JALALI_MONTH_NAMES.map((name, idx) => {
             const mNum = idx + 1;
             const isActive = currentMonth === mNum;
@@ -2810,7 +2822,7 @@ export default function Home() {
                         <CalendarIcon className="w-5 h-5 text-emerald-600" />
                         تقویم شمسی {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}
                       </div>
-                      <div className="text-[10px] font-bold text-slate-500">سال فعال تقویم: {currentYear}</div>
+                      <div className="text-[10px] font-bold text-slate-500">فقط جهت مشاهده ماه</div>
                     </div>
                     <div className="p-4 bg-white">
                       <div className="grid grid-cols-7 gap-1 mb-2">
@@ -2873,25 +2885,47 @@ export default function Home() {
                 
                 <div className="flex items-center gap-2">
                   {role !== 'personnel' && (
-                    finalizedMonths.includes(`${currentYear}_${currentMonth}`) ? (
-                      <button 
-                        onClick={handleUnfinalizeMonth}
-                        className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-black px-3.5 py-2 rounded-xl border border-emerald-200 transition-all cursor-pointer shadow-xs"
-                        title="قفل این ماه فعال است. برای باز کردن و ویرایش مجدد کلیک کنید"
-                      >
-                        <Lock className="w-4 h-4 text-emerald-600 animate-[pulse_2s_infinite]"/>
-                        <span>برنامه ثبت نهایی شده (باز کردن قفل)</span>
-                      </button>
-                    ) : (
-                      <button 
-                        onClick={handleFinalizeMonth}
-                        className="flex items-center gap-1.5 bg-slate-50 hover:bg-emerald-600 hover:text-white text-slate-700 text-xs font-black px-3.5 py-2 rounded-xl border border-slate-200 hover:border-emerald-600 transition-all cursor-pointer shadow-xs"
-                        title="ثبت نهایی و قفل برنامه این ماه"
-                      >
-                        <Unlock className="w-4 h-4 text-slate-500 hover:text-inherit"/>
-                        <span>ثبت نهایی و قفل جدول</span>
-                      </button>
-                    )
+                    <>
+                      {finalizedNursesMonths.includes(`${currentYear}_${currentMonth}`) ? (
+                        <button 
+                          onClick={() => handleToggleLock('nurse')}
+                          className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-black px-3.5 py-2 rounded-xl border border-emerald-200 transition-all cursor-pointer shadow-xs"
+                          title="قفل پرستاران این ماه فعال است. برای باز کردن کلیک کنید"
+                        >
+                          <Lock className="w-4 h-4 text-emerald-600 animate-[pulse_2s_infinite]"/>
+                          <span>قفل پرستاران (باز کردن)</span>
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => handleToggleLock('nurse')}
+                          className="flex items-center gap-1.5 bg-slate-50 hover:bg-emerald-600 hover:text-white text-slate-700 text-xs font-black px-3.5 py-2 rounded-xl border border-slate-200 hover:border-emerald-600 transition-all cursor-pointer shadow-xs"
+                          title="ثبت نهایی و قفل برنامه پرستاران"
+                        >
+                          <Unlock className="w-4 h-4 text-slate-500 hover:text-inherit"/>
+                          <span>قفل پرستاران</span>
+                        </button>
+                      )}
+                      
+                      {finalizedAssistantsMonths.includes(`${currentYear}_${currentMonth}`) ? (
+                        <button 
+                          onClick={() => handleToggleLock('assistant')}
+                          className="flex items-center gap-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-black px-3.5 py-2 rounded-xl border border-sky-200 transition-all cursor-pointer shadow-xs"
+                          title="قفل کمک‌بهیاران این ماه فعال است. برای باز کردن کلیک کنید"
+                        >
+                          <Lock className="w-4 h-4 text-sky-600 animate-[pulse_2s_infinite]"/>
+                          <span>قفل کمک‌بهیاران (باز کردن)</span>
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => handleToggleLock('assistant')}
+                          className="flex items-center gap-1.5 bg-slate-50 hover:bg-sky-600 hover:text-white text-slate-700 text-xs font-black px-3.5 py-2 rounded-xl border border-slate-200 hover:border-sky-600 transition-all cursor-pointer shadow-xs"
+                          title="ثبت نهایی و قفل برنامه کمک‌بهیاران"
+                        >
+                          <Unlock className="w-4 h-4 text-slate-500 hover:text-inherit"/>
+                          <span>قفل کمک‌بهیاران</span>
+                        </button>
+                      )}
+                    </>
                   )}
                   <button 
                     onClick={exportToExcel}
@@ -3270,15 +3304,26 @@ export default function Home() {
                 
                 <div className="flex flex-wrap items-center gap-3">
                   {(role === 'admin' || role === 'headnurse') && (
-                    <label className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-2 rounded-xl text-xs font-black text-slate-705 cursor-pointer transition-colors">
-                      <input 
-                        type="checkbox" 
-                        checked={showSplitRequests}
-                        onChange={(e) => setShowSplitRequests(e.target.checked)}
-                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                      />
-                      نمایش تفکیکی درخواست‌ها
-                    </label>
+                    <>
+                      <label className="flex items-center gap-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-3.5 py-2 rounded-xl text-xs font-black text-rose-800 cursor-pointer transition-colors shadow-xs">
+                        <input 
+                          type="checkbox" 
+                          checked={requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
+                          onChange={handleToggleRequestsLock}
+                          className="rounded border-rose-300 text-rose-600 focus:ring-rose-500"
+                        />
+                        اتمام مهلت ثبت درخواست‌ها
+                      </label>
+                      <label className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-2 rounded-xl text-xs font-black text-slate-700 cursor-pointer transition-colors">
+                        <input 
+                          type="checkbox" 
+                          checked={showSplitRequests}
+                          onChange={(e) => setShowSplitRequests(e.target.checked)}
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        نمایش تفکیکی درخواست‌ها
+                      </label>
+                    </>
                   )}
                 </div>
               </div>
@@ -3861,6 +3906,24 @@ export default function Home() {
                 </div>
 
               </div>
+
+              {/* Action Logs Panel */}
+              {schedule?.changeLogs && schedule.changeLogs.length > 0 && (
+                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 print:hidden">
+                  <h4 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-4">
+                    <History className="w-5 h-5 text-indigo-500" />
+                    لاگ‌ها و اتفاقات (تاریخچه قفل‌ها و مهلت درخواست)
+                  </h4>
+                  <ul className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                    {schedule.changeLogs.slice().reverse().map((log, idx) => (
+                      <li key={idx} className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0"></div>
+                        {log}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Comprehensive performance table */}
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="reports-table-container">
