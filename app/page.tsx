@@ -5248,7 +5248,10 @@ export default function Home() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="request-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative animate-scale-up scrollbar-thin">
             <button 
-              onClick={() => setShowAddRequestModal(false)}
+              onClick={() => {
+                setShowAddRequestModal(false);
+                setEditingRequest(null);
+              }}
               className="absolute top-4 left-4 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg p-1.5 cursor-pointer"
             >
               ✕
@@ -5258,7 +5261,7 @@ export default function Home() {
               ثبت درخواست هوشمند و مرخصی پرستاری
             </h3>
 
-            <form onSubmit={(e) => { e.preventDefault(); handleFinalSubmitRequests(); }} className="space-y-4">
+            <form onSubmit={handleAddRequest} className="space-y-4">
               
               {role !== 'personnel' ? (
                 <div>
@@ -5453,21 +5456,23 @@ export default function Home() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleAddDraftRequest}
-                  className="flex items-center justify-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-705 border border-slate-300 font-extrabold text-xs py-3 rounded-xl shadow-sm transition-all cursor-pointer animate-pulse-subtle"
-                  id="btn-add-draft"
-                >
-                  <Plus className="w-4 h-4 text-slate-600 animate-spin-once" /> افزودن به لیست
-                </button>
+              <div className={`grid gap-3 pt-2 ${editingRequest ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                {!editingRequest && (
+                  <button
+                    type="button"
+                    onClick={handleAddDraftRequest}
+                    className="flex items-center justify-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-705 border border-slate-300 font-extrabold text-xs py-3 rounded-xl shadow-sm transition-all cursor-pointer animate-pulse-subtle"
+                    id="btn-add-draft"
+                  >
+                    <Plus className="w-4 h-4 text-slate-600 animate-spin-once" /> افزودن به لیست
+                  </button>
+                )}
                 <button
                   type="submit"
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   id="btn-save-req"
                 >
-                  <Check className="w-4 h-4 text-white" /> ثبت نهایی درخواست‌ها
+                  <Check className="w-4 h-4 text-white" /> {editingRequest ? 'ثبت ویرایش درخواست' : 'ثبت نهایی درخواست‌ها'}
                 </button>
               </div>
             </form>
