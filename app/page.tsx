@@ -1770,24 +1770,24 @@ export default function Home() {
   };
 
   // --- Manual Schedule Override cell edit ---
-  const handleCellClick = (pId: string, day: number) => {
-    if (role === 'admin' || role === 'headnurse') {
-      const p = personnel.find(per => per.id === pId);
-      if (p) {
-        const monthKey = `${currentYear}_${currentMonth}`;
-        const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
-        if (isLocked) {
-          alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
-          return;
-        }
-        if (lockedRows.includes(pId)) {
-          alert('این ردیف قفل شده است و نمی‌توان آن را ویرایش کرد.');
-          return;
-        }
+   const handleCellClick = (pId: string, day: number) => {
+  if (role === 'admin' || role === 'headnurse') {
+    const p = personnel.find(per => per.id === pId);
+    if (p) {
+      const monthKey = `${currentYear}_${currentMonth}`;
+      const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
+      if (isLocked) {
+        alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
+        return;
       }
-      setEditingCell({ pId, day });
+      if (lockedRows.includes(pId)) {
+        alert('این ردیف قفل شده است و نمی‌توان آن را ویرایش کرد.');
+        return;
+      }
     }
-  };
+    setEditingCell({ pId, day });
+  }
+};
 
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
