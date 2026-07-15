@@ -153,6 +153,7 @@ export interface AggregatedAlert {
   warnings: string[];
   severity: 'low' | 'medium' | 'high';
   isExpanded: boolean;
+  groupType?: 'personnel' | 'general';
 }
 
 export interface SmartSuggestion {

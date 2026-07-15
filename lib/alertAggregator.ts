@@ -7,6 +7,7 @@ export function aggregateWarnings(
   personnelList: Personnel[]
 ): AggregatedAlert[] {
   const grouped: { [personnelId: string]: string[] } = {};
+  const generalWarnings: string[] = [];
   
   warnings.forEach(warning => {
     let foundId: string | null = null;
@@ -24,6 +25,8 @@ export function aggregateWarnings(
         grouped[foundId] = [];
       }
       grouped[foundId].push(warning);
+    } else {
+      generalWarnings.push(warning);
     }
   });
   
@@ -40,7 +43,24 @@ export function aggregateWarnings(
       warningCount: warningsList.length,
       warnings: warningsList,
       severity,
-      isExpanded: false
+      isExpanded: false,
+      groupType: 'personnel'
+    });
+  }
+
+  if (generalWarnings.length > 0) {
+    const severity: 'low' | 'medium' | 'high' =
+      generalWarnings.length >= 5 ? 'high' :
+      generalWarnings.length >= 3 ? 'medium' : 'low';
+
+    result.push({
+      personnelId: 'general-alerts',
+      personnelName: 'هشدارهای عمومی برنامه',
+      warningCount: generalWarnings.length,
+      warnings: generalWarnings,
+      severity,
+      isExpanded: true,
+      groupType: 'general'
     });
   }
   
