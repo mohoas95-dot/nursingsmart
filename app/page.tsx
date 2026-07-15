@@ -61,6 +61,7 @@ import {
   Award, 
   Sparkles, 
   ChevronRight, 
+  ChevronLeft,
   ChevronUp,
   ChevronDown,
   ArrowUp,
@@ -166,9 +167,27 @@ export default function Home() {
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
   const [dbChecked, setDbChecked] = useState<boolean>(false);
 
-  // Year & Month (1405 as preset, which corresponds to mid-2026 local time)
-  const [currentYear, setCurrentYear] = useState<number>(1405);
-  const [currentMonth, setCurrentMonth] = useState<number>(3); // Khordad
+  const getCurrentJalaliDate = () => {
+    try {
+      const parts = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { 
+        year: 'numeric', 
+        month: 'numeric', 
+        day: 'numeric',
+        timeZone: 'Asia/Tehran' 
+      }).format(new Date()).split('/');
+      return {
+        year: parseInt(parts[0], 10),
+        month: parseInt(parts[1], 10),
+        day: parseInt(parts[2], 10)
+      };
+    } catch(e) {
+      return { year: 1405, month: 4, day: 1 };
+    }
+  };
+
+  // Year & Month (Dynamic based on current local time)
+  const [currentYear, setCurrentYear] = useState<number>(() => getCurrentJalaliDate().year);
+  const [currentMonth, setCurrentMonth] = useState<number>(() => getCurrentJalaliDate().month);
 
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(() => typeof window === 'undefined');
@@ -2495,23 +2514,21 @@ export default function Home() {
               )}
 
               {/* Calendar & Holiday Settings Nav */}
-              {role !== 'personnel' && (
-                <button
-                  onClick={() => {
-                    setActiveTab('calendar');
-                    setIsNavOpen(false);
-                  }}
-                  className={`w-full px-6 py-3 flex items-center gap-3 text-right hover:text-white transition-all cursor-pointer ${
-                    activeTab === 'calendar'
-                      ? 'bg-blue-600/20 text-blue-400 border-r-4 border-blue-400 font-extrabold'
-                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                  }`}
-                  id="tab-calendar-drawer"
-                >
-                  <span className="text-lg leading-none">📅</span>
-                  <span>مدیریت تقویم و تعطیلات</span>
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  setActiveTab('calendar');
+                  setIsNavOpen(false);
+                }}
+                className={`w-full px-6 py-3 flex items-center gap-3 text-right hover:text-white transition-all cursor-pointer ${
+                  activeTab === 'calendar'
+                    ? 'bg-blue-600/20 text-blue-400 border-r-4 border-blue-400 font-extrabold'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+                id="tab-calendar-drawer"
+              >
+                <span className="text-lg leading-none">📅</span>
+                <span>{role === 'personnel' ? 'تقویم آنلاین شمسی و رویدادها' : 'مدیریت تقویم و تعطیلات'}</span>
+              </button>
 
               {/* Leave Requests Nav */}
               <button
@@ -2669,8 +2686,26 @@ export default function Home() {
           </div>
         </header>
 
-        {/* HORIZONTAL MONTH SELECTOR RIBBON */}
-        <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex gap-2 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
+        {/* HORIZONTAL MONTH SELECTOR RIBBON WITH YEAR SELECTOR */}
+        <div className="bg-white border-b border-slate-100 px-6 sm:px-8 py-3 flex items-center gap-3 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none">
+          <div className="flex items-center gap-2 bg-slate-100 border border-slate-200 rounded-full px-2 py-1 shrink-0">
+             <button onClick={() => {
+                setCurrentYear(y => {
+                  const newY = y - 1;
+                  if (typeof window !== 'undefined') localStorage.setItem('hospital_current_year', String(newY));
+                  return newY;
+                });
+             }} className="p-1 text-slate-500 hover:text-emerald-600 transition-colors"><ChevronRight className="w-4 h-4"/></button>
+             <span className="text-xs font-black text-slate-800 w-10 text-center">{currentYear}</span>
+             <button onClick={() => {
+                setCurrentYear(y => {
+                  const newY = y + 1;
+                  if (typeof window !== 'undefined') localStorage.setItem('hospital_current_year', String(newY));
+                  return newY;
+                });
+             }} className="p-1 text-slate-500 hover:text-emerald-600 transition-colors"><ChevronLeft className="w-4 h-4"/></button>
+          </div>
+          <div className="w-px h-6 bg-slate-200 shrink-0 hidden sm:block"></div>
           {JALALI_MONTH_NAMES.map((name, idx) => {
             const mNum = idx + 1;
             const isActive = currentMonth === mNum;
@@ -2679,7 +2714,7 @@ export default function Home() {
                 key={name}
                 type="button"
                 onClick={() => handleSelectMonth(mNum)}
-                className={`px-4 py-1.5 rounded-full text-xs font-black shrink-0 transition-all cursor-pointer ${
+                className={`px-4 py-1.5 rounded-full text-[11px] font-black shrink-0 transition-all cursor-pointer ${
                   isActive 
                     ? 'bg-emerald-600 text-white shadow-xs scale-102 font-black' 
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200/60'
@@ -2928,18 +2963,11 @@ export default function Home() {
                     </>
                   )}
                   <button 
-                    onClick={exportToExcel}
+                    onClick={() => { exportToExcel(); handlePrint(); }}
                     className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-                    id="btn-export-excel"
+                    id="btn-export-excel-pdf"
                   >
-                    <FileSpreadsheet className="w-4 h-4 text-emerald-600"/> خروجی فایل اکسل (Excel)
-                  </button>
-                  <button 
-                    onClick={handlePrint}
-                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-                    id="btn-export-pdf"
-                  >
-                    <Printer className="w-4 h-4 text-indigo-600"/> چاپ برنامه / PDF
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600"/> خروجی فایل اکسل و PDF
                   </button>
                 </div>
               </div>
@@ -3849,11 +3877,8 @@ export default function Home() {
                 </div>
                 
                 <div className="flex gap-2">
-                  <button onClick={exportToExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
-                    <FileSpreadsheet className="w-4 h-4"/> دریافت اکسل جامع گزارشات
-                  </button>
-                  <button onClick={handlePrint} className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
-                    <Printer className="w-4 h-4"/> چاپ کارنامه‌ها
+                  <button onClick={() => { exportToExcel(); handlePrint(); }} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
+                    <FileSpreadsheet className="w-4 h-4"/> دریافت همزمان اکسل و چاپ کارنامه‌ها
                   </button>
                 </div>
               </div>
@@ -4397,6 +4422,7 @@ export default function Home() {
                         <button
                           type="button"
                           key={`day-btn-${d.day}`}
+                          disabled={role === 'personnel'}
                           onClick={() => {
                             const updated = { ...customHolidays };
                             if (updated[d.day]) {
@@ -4407,11 +4433,11 @@ export default function Home() {
                             setCustomHolidays(updated);
                             saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
                           }}
-                          className={`p-1 rounded-lg border text-[10px] font-black transition-all cursor-pointer flex flex-col items-center justify-center min-h-[38px] ${
+                          className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[38px] ${
                             isRed 
                               ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100/50 hover:border-rose-300' 
                               : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
-                          }`}
+                          } ${role !== 'personnel' ? 'cursor-pointer' : 'cursor-not-allowed opacity-75 hover:bg-transparent'}`}
                         >
                           <span className="font-mono text-xs">{d.day}</span>
                           <span className="text-[7px] leading-none opacity-80 mt-0.5">
@@ -4544,6 +4570,7 @@ export default function Home() {
                         <button
                           type="button"
                           key={`tab-cal-start-day-${idx}`}
+                          disabled={role === 'personnel'}
                           onClick={() => {
                             setFirstDayOfWeekIndex(idx);
                             if (typeof window !== 'undefined') {
@@ -4552,11 +4579,11 @@ export default function Home() {
                             }
                             saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
                           }}
-                          className={`px-3 py-2 rounded-xl border text-xs font-black cursor-pointer transition-all flex flex-col items-center justify-center gap-1 ${
+                          className={`px-3 py-2 rounded-xl border text-xs font-black transition-all flex flex-col items-center justify-center gap-1 ${
                             isSelected 
                               ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.02]' 
-                              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                          }`}
+                              : 'bg-white text-slate-600 border-slate-200'
+                          } ${role !== 'personnel' ? 'hover:bg-slate-50 cursor-pointer' : 'opacity-70 cursor-not-allowed'}`}
                         >
                           <span>{w}</span>
                           {mathDefault === idx && (
@@ -4656,7 +4683,7 @@ export default function Home() {
                                 <input 
                                   type="text"
                                   placeholder="مثلاً: مناسبت تعطیلی مذهبی..."
-                                  disabled={!isCustomHoliday}
+                                  disabled={!isCustomHoliday || role === 'personnel'}
                                   value={customHolidays[d.day] || ''}
                                   onChange={(e) => {
                                     const val = e.target.value;
@@ -4668,9 +4695,9 @@ export default function Home() {
                                     }
                                   }}
                                   className={`w-full text-[10px] px-2.5 py-1 rounded-lg border focus:outline-none transition-all ${
-                                    isCustomHoliday 
+                                    isCustomHoliday && role !== 'personnel'
                                       ? 'bg-white border-rose-300 text-rose-800 font-black focus:border-rose-500' 
-                                      : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
+                                      : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-75'
                                   }`}
                                 />
                               )}
