@@ -592,9 +592,19 @@ export function solveNursingSchedule(
           if (prev === 'N' || prev === 'EN' || prev === 'MN' || prev === 'MEN') return false;
         }
 
-        // Rest after 24-hour MEN shift rule: If yesterday was MEN, they should not get any shift today (M, E, or N) unless explicitly requested.
-        if (d > 1 && assignments[p.id][d-1] === 'MEN') {
-          const isExplicit = dailyRequests[p.id]?.[d]?.requestType === 'shift';
+        // Rest after Long Shift rule: If yesterday was ME, MEN, EN, or N, they should not get any shift today unless explicitly requested.
+        if (d > 1 && ['ME', 'MEN', 'EN', 'N'].includes(assignments[p.id][d-1])) {
+          const isExplicit = (() => {
+            const req = dailyRequests[p.id]?.[d];
+            if (req && req.requestType === 'shift') return true;
+            const pReq = requests.find(r => r.personnelId === p.id && r.requestType === 'pattern');
+            if (pReq && pReq.patternSteps && pReq.patternSteps.length > 0) {
+              const stepVal = pReq.patternSteps[(d - 1) % pReq.patternSteps.length];
+              if (stepVal !== 'OFF' && !stepVal.startsWith('L')) return true;
+            }
+            return false;
+          })();
+          
           if (!isExplicit) {
             return false;
           }

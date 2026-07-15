@@ -95,6 +95,12 @@ export interface MonthlySchedule {
     };
   };
   warnings: string[];
+  finalized?: boolean;
+  finalizedNurses?: boolean;
+  finalizedAssistants?: boolean;
+  requestsLocked?: boolean;
+  dismissedWarnings?: string[];
+  changeLogs?: string[];
 }
 
 export interface PersonnelReportResult {
