@@ -4422,7 +4422,6 @@ export default function Home() {
                         <button
                           type="button"
                           key={`day-btn-${d.day}`}
-                          disabled={role === 'personnel'}
                           onClick={() => {
                             const updated = { ...customHolidays };
                             if (updated[d.day]) {
@@ -4433,11 +4432,11 @@ export default function Home() {
                             setCustomHolidays(updated);
                             saveState(personnel, requests, settings, updated, undefined, { mode: 'full_resolve' });
                           }}
-                          className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[38px] ${
+                          className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[38px] cursor-pointer ${
                             isRed 
                               ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100/50 hover:border-rose-300' 
                               : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
-                          } ${role !== 'personnel' ? 'cursor-pointer' : 'cursor-not-allowed opacity-75 hover:bg-transparent'}`}
+                          }`}
                         >
                           <span className="font-mono text-xs">{d.day}</span>
                           <span className="text-[7px] leading-none opacity-80 mt-0.5">
@@ -4639,7 +4638,7 @@ export default function Home() {
                                 <input 
                                   type="checkbox"
                                   checked={isChecked}
-                                  disabled={isFriday} // Friday is automatically system holiday
+                                  disabled={isFriday || role === 'personnel'} // Friday is automatically system holiday
                                   onChange={(e) => {
                                     const updated = { ...customHolidays };
                                     if (e.target.checked) {
@@ -4712,7 +4711,7 @@ export default function Home() {
               </div>
 
               {/* STEP 3: MANAGE DUTY HOURS */}
-              {(() => {
+              {role !== 'personnel' && (() => {
                 const liveCalendarDays = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
                 const liveTotalDays = liveCalendarDays.length;
                 const liveHolidaysCount = liveCalendarDays.filter(d => d.isHoliday).length;
