@@ -628,7 +628,12 @@ export default function Home() {
   // ====== تابع ادغام هشدارها (درخواست ۵) ======
   const handleAggregateAlerts = (warningsList: string[]) => {
     if (!schedule) return;
-    const grouped = aggregateWarnings(warningsList, personnel);
+    // فقط هشدارهای فعال را گروه‌بندی کن
+    const activeWarnings = warningsList.filter(w => 
+      !dismissedWarnings.includes(w) && 
+      !dismissedAlertWarnings[w]
+    );
+    const grouped = aggregateWarnings(activeWarnings, personnel);
     setAggregatedAlerts(grouped);
     
     // تولید پیشنهادات هوشمند (درخواست ۷)
@@ -638,7 +643,7 @@ export default function Home() {
       personnel,
       requests,
       schedule.assignments,
-      warningsList,
+      activeWarnings,
       customHolidays,
       firstDayOfWeekIndex
     );
@@ -686,7 +691,8 @@ export default function Home() {
   // ====== درخواست ۵: توابع مدیریت هشدارها ======
   
   const handleToggleAlert = (alertId: string) => {
-    setExpandedAlertId(expandedAlertId === alertId ? null : alertId);
+    // اگر alertId برابر با alertId باز شده باشد، آن را می‌بندیم وگرنه باز می‌کنیم
+    setExpandedAlertId(prev => prev === alertId ? null : alertId);
   };
 
   const handleDismissAlert = (warningText: string) => {
@@ -724,15 +730,22 @@ export default function Home() {
       }));
       handleDismissWarning(warningText);
     }
+    
+    // به‌روزرسانی aggregated alerts بعد از تغییر
+    if (schedule) {
+      const activeWarnings = getVisibleWarnings();
+      handleAggregateAlerts(activeWarnings);
+    }
   };
 
   const getVisibleWarnings = () => {
     if (!schedule) return [];
     // هشدارهایی که نه در dismissedWarnings هستند و نه در dismissedAlertWarnings
-    return schedule.warnings.filter(w => 
+    const visible = schedule.warnings.filter(w => 
       !dismissedWarnings.includes(w) && 
       !dismissedAlertWarnings[w]
     );
+    return visible;
   };
 
   // ====== درخواست ۷: کامپوننت Collapsible هشدارها ======
@@ -750,78 +763,90 @@ export default function Home() {
 
     return (
       <div className="space-y-2">
-        {activeAlerts.map(alert => (
-          <div key={alert.personnelId} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <button
-              onClick={() => handleToggleAlert(alert.personnelId)}
-              className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <span className={`text-lg ${
-                  alert.severity === 'high' ? '🔴' :
-                  alert.severity === 'medium' ? '🟡' : '🔵'
-                }`} />
-                <div className="text-right">
-                  <div className="font-bold text-slate-800 text-sm">{alert.personnelName}</div>
-                  <div className="text-xs text-slate-500">{alert.warningCount} هشدار</div>
+        {activeAlerts.map(alert => {
+          const activeWarnings = alert.warnings.filter(w => !dismissedAlertWarnings[w]);
+          const dismissedCount = alert.warnings.length - activeWarnings.length;
+          
+          return (
+            <div key={alert.personnelId} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+              <button
+                onClick={() => handleToggleAlert(alert.personnelId)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <span className={`text-lg ${
+                    alert.severity === 'high' ? '🔴' :
+                    alert.severity === 'medium' ? '🟡' : '🔵'
+                  }`} />
+                  <div className="text-right">
+                    <div className="font-bold text-slate-800 text-sm">{alert.personnelName}</div>
+                    <div className="text-xs text-slate-500">{activeWarnings.length} مشکل {dismissedCount > 0 && `(${dismissedCount} نادیده گرفته شده)`}</div>
+                  </div>
                 </div>
-              </div>
-              <ChevronDownIcon className={`w-4 h-4 text-slate-400 transition-transform ${
-                expandedAlertId === alert.personnelId ? 'rotate-180' : ''
-              }`} />
-            </button>
-            
-            {expandedAlertId === alert.personnelId && (
-              <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 space-y-2">
-                {alert.warnings.map((warn, idx) => {
-                  const isDismissed = dismissedAlertWarnings[warn];
-                  return (
-                    <div 
-                      key={idx} 
-                      className={`flex items-start gap-2 text-xs p-2 rounded-lg transition-all ${
-                        isDismissed 
-                          ? 'bg-slate-50 text-slate-400' 
-                          : 'bg-amber-50/50 text-amber-800'
-                      }`}
-                    >
-                      <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
-                      <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => {
-                            const dayMatch = warn.match(/روز (\d+)/);
-                            if (dayMatch) {
-                              const day = parseInt(dayMatch[1]);
-                              handleAlertClick(alert.personnelId, day);
-                            }
-                          }}
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
-                            isDismissed 
-                              ? 'text-slate-400 border-slate-200 bg-white/50' 
-                              : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
-                          }`}
-                        >
-                          رفتن به سلول
-                        </button>
-                        <button
-                          onClick={() => handleDismissAlert(warn)}
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
-                            isDismissed 
-                              ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
-                              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-                          }`}
-                          title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
-                        >
-                          {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
-                        </button>
+                <ChevronDownIcon className={`w-4 h-4 text-slate-400 transition-transform ${
+                  expandedAlertId === alert.personnelId ? 'rotate-180' : ''
+                }`} />
+              </button>
+              
+              {expandedAlertId === alert.personnelId && (
+                <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 space-y-2">
+                  {alert.warnings.map((warn, idx) => {
+                    const isDismissed = dismissedAlertWarnings[warn];
+                    return (
+                      <div 
+                        key={idx} 
+                        className={`flex items-start gap-2 text-xs p-2 rounded-lg transition-all ${
+                          isDismissed 
+                            ? 'bg-slate-50 text-slate-400' 
+                            : 'bg-amber-50/50 text-amber-800'
+                        }`}
+                      >
+                        <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                        <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => {
+                              const dayMatch = warn.match(/روز (\d+)/);
+                              if (dayMatch) {
+                                const day = parseInt(dayMatch[1]);
+                                handleAlertClick(alert.personnelId, day);
+                              }
+                            }}
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
+                              isDismissed 
+                                ? 'text-slate-400 border-slate-200 bg-white/50' 
+                                : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
+                            }`}
+                          >
+                            رفتن به سلول
+                          </button>
+                          <button
+                            onClick={() => {
+                              handleDismissAlert(warn);
+                              // بعد از تغییر، aggregated alerts را به‌روزرسانی کن
+                              if (schedule) {
+                                const activeWarnings = getVisibleWarnings();
+                                handleAggregateAlerts(activeWarnings);
+                              }
+                            }}
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
+                              isDismissed 
+                                ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
+                                : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+                            }`}
+                            title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
+                          >
+                            {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ))}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -3110,7 +3135,7 @@ export default function Home() {
           </div>
 
           {/* ====== بخش ادغام شده هشدارها (درخواست ۵) ====== */}
-          {role !== 'personnel' && schedule && getVisibleWarnings().length > 0 && (
+          {role !== 'guest' && schedule && getVisibleWarnings().length > 0 && (
             <div className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden">
               {/* هدر با تعداد کل هشدارها */}
               <div className="bg-amber-50/70 border-b border-amber-200/60 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -3240,106 +3265,125 @@ export default function Home() {
                   <div className="space-y-2">
                     {aggregatedAlerts
                       .filter(a => a.warnings.length > 0)
-                      .map((alert) => (
-                        <div 
-                          key={alert.personnelId}
-                          className={`bg-white border rounded-xl overflow-hidden transition-all ${
-                            alert.severity === 'high' ? 'border-red-200' :
-                            alert.severity === 'medium' ? 'border-amber-200' : 'border-blue-200'
-                          } ${expandedAlertId === alert.personnelId ? 'shadow-md' : 'shadow-sm'}`}
-                        >
-                          <button
-                            onClick={() => {
-                              setExpandedAlertId(expandedAlertId === alert.personnelId ? null : alert.personnelId);
-                              if (expandedAlertId !== alert.personnelId && alert.warnings.length > 0) {
-                                const firstWarning = alert.warnings[0];
-                                const dayMatch = firstWarning.match(/روز (\d+)/);
-                                if (dayMatch) {
-                                  const day = parseInt(dayMatch[1]);
-                                  handleAlertClick(alert.personnelId, day);
-                                }
-                              }
-                            }}
-                            className={`w-full px-4 py-3 flex items-center justify-between text-right transition-all hover:bg-slate-50/80 ${
-                              expandedAlertId === alert.personnelId ? 'bg-slate-50/50' : ''
-                            }`}
+                      .map((alert) => {
+                        // محاسبه تعداد هشدارهای فعال (نادیده گرفته نشده)
+                        const activeWarnings = alert.warnings.filter(w => !dismissedAlertWarnings[w]);
+                        const dismissedCount = alert.warnings.length - activeWarnings.length;
+                        
+                        return (
+                          <div 
+                            key={alert.personnelId}
+                            className={`bg-white border rounded-xl overflow-hidden transition-all ${
+                              alert.severity === 'high' ? 'border-red-200' :
+                              alert.severity === 'medium' ? 'border-amber-200' : 'border-blue-200'
+                            } ${expandedAlertId === alert.personnelId ? 'shadow-md' : 'shadow-sm'}`}
                           >
-                            <div className="flex items-center gap-3">
-                              <span className={`text-sm font-black ${
-                                alert.severity === 'high' ? 'text-red-600' :
-                                alert.severity === 'medium' ? 'text-amber-600' : 'text-blue-600'
-                              }`}>
-                                {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
-                              </span>
-                              <span className="font-bold text-slate-800 text-sm">{alert.personnelName}</span>
-                              <span className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
-                                alert.severity === 'high' ? 'bg-red-100 text-red-700' :
-                                alert.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
-                              }`}>
-                                {alert.warningCount} مشکل
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {alert.warnings.some(w => dismissedAlertWarnings[w]) && (
-                                <span className="text-[10px] text-slate-400 font-bold">(نادیده گرفته شده‌ها)</span>
-                              )}
-                              <span className="text-slate-400 text-sm transition-transform duration-200">
-                                {expandedAlertId === alert.personnelId ? '▲' : '▼'}
-                              </span>
-                            </div>
-                          </button>
-                          
-                          {expandedAlertId === alert.personnelId && (
-                            <div className="px-4 pb-3 pt-1 space-y-1.5 border-t border-slate-100">
-                              {alert.warnings.map((warn, idx) => {
-                                const isDismissed = dismissedAlertWarnings[warn];
-                                return (
-                                  <div 
-                                    key={idx} 
-                                    className={`flex items-start gap-2 text-xs p-2.5 rounded-lg transition-all ${
-                                      isDismissed 
-                                        ? 'bg-slate-50 text-slate-400' 
-                                        : 'bg-amber-50/50 text-amber-800'
-                                    }`}
-                                  >
-                                    <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
-                                    <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      <button
-                                        onClick={() => {
-                                          const dayMatch = warn.match(/روز (\d+)/);
-                                          if (dayMatch) {
-                                            const day = parseInt(dayMatch[1]);
-                                            handleAlertClick(alert.personnelId, day);
-                                          }
-                                        }}
-                                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
-                                          isDismissed 
-                                            ? 'text-slate-400 border-slate-200 bg-white/50' 
-                                            : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
-                                        }`}
-                                      >
-                                        رفتن به سلول
-                                      </button>
-                                      <button
-                                        onClick={() => handleDismissAlert(warn)}
-                                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
-                                          isDismissed 
-                                            ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
-                                            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-                                        }`}
-                                        title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
-                                      >
-                                        {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
-                                      </button>
+                            {/* هدر هر ردیف هشدار - قابل کلیک */}
+                            <button
+                              onClick={() => {
+                                // toggle: اگر باز است ببند، اگر بسته است باز کن
+                                setExpandedAlertId(expandedAlertId === alert.personnelId ? null : alert.personnelId);
+                                // اگر هشدار وجود دارد و بسته است، به اولین هشدار اسکرول کن
+                                if (expandedAlertId !== alert.personnelId && alert.warnings.length > 0) {
+                                  const firstWarning = alert.warnings[0];
+                                  const dayMatch = firstWarning.match(/روز (\d+)/);
+                                  if (dayMatch) {
+                                    const day = parseInt(dayMatch[1]);
+                                    handleAlertClick(alert.personnelId, day);
+                                  }
+                                }
+                              }}
+                              className={`w-full px-4 py-3 flex items-center justify-between text-right transition-all hover:bg-slate-50/80 ${
+                                expandedAlertId === alert.personnelId ? 'bg-slate-50/50' : ''
+                              }`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className={`text-sm font-black ${
+                                  alert.severity === 'high' ? 'text-red-600' :
+                                  alert.severity === 'medium' ? 'text-amber-600' : 'text-blue-600'
+                                }`}>
+                                  {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
+                                </span>
+                                <span className="font-bold text-slate-800 text-sm">{alert.personnelName}</span>
+                                <span className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
+                                  alert.severity === 'high' ? 'bg-red-100 text-red-700' :
+                                  alert.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                                }`}>
+                                  {activeWarnings.length} مشکل {dismissedCount > 0 && `(${dismissedCount} نادیده گرفته شده)`}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {dismissedCount > 0 && (
+                                  <span className="text-[10px] text-slate-400 font-bold">(نادیده گرفته شده‌ها)</span>
+                                )}
+                                <span className={`text-slate-400 text-sm transition-transform duration-200 ${
+                                  expandedAlertId === alert.personnelId ? 'rotate-180' : ''
+                                }`}>
+                                  ▼
+                                </span>
+                              </div>
+                            </button>
+                            
+                            {/* محتوای باز شده - لیست هشدارها */}
+                            {expandedAlertId === alert.personnelId && (
+                              <div className="px-4 pb-3 pt-1 space-y-1.5 border-t border-slate-100">
+                                {alert.warnings.map((warn, idx) => {
+                                  const isDismissed = dismissedAlertWarnings[warn];
+                                  return (
+                                    <div 
+                                      key={idx} 
+                                      className={`flex items-start gap-2 text-xs p-2.5 rounded-lg transition-all ${
+                                        isDismissed 
+                                          ? 'bg-slate-50 text-slate-400' 
+                                          : 'bg-amber-50/50 text-amber-800'
+                                      }`}
+                                    >
+                                      <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                                      <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                          onClick={() => {
+                                            const dayMatch = warn.match(/روز (\d+)/);
+                                            if (dayMatch) {
+                                              const day = parseInt(dayMatch[1]);
+                                              handleAlertClick(alert.personnelId, day);
+                                            }
+                                          }}
+                                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
+                                            isDismissed 
+                                              ? 'text-slate-400 border-slate-200 bg-white/50' 
+                                              : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
+                                          }`}
+                                        >
+                                          رفتن به سلول
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            handleDismissAlert(warn);
+                                            // بعد از تغییر، aggregated alerts را به‌روزرسانی کن
+                                            if (schedule) {
+                                              const activeWarnings = getVisibleWarnings();
+                                              handleAggregateAlerts(activeWarnings);
+                                            }
+                                          }}
+                                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
+                                            isDismissed 
+                                              ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
+                                              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+                                          }`}
+                                          title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
+                                        >
+                                          {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
+                                        </button>
+                                      </div>
                                     </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 )}
               </div>
@@ -4267,7 +4311,6 @@ export default function Home() {
                                     >
                                       <Trash2 className="w-3.5 h-3.5" /> حذف همه
                                     </button>
-                                    {/* ====== درخواست ۸: دکمه ویرایش درخواست برای پرسنل ====== */}
                                     <button
                                       onClick={() => {
                                         if (pReqs.length > 0) {
