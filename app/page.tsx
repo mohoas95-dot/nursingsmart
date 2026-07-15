@@ -4939,7 +4939,7 @@ export default function Home() {
                               } : {})
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, settings, updated, customHolidays, undefined, { mode: 'full_resolve' });
+                            saveState(personnel, requests, settings, updated, customHolidays, { mode: 'full_resolve' });
                           }}
                           className="sr-only peer"
                         />
