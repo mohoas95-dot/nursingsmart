@@ -1790,55 +1790,88 @@ export default function Home() {
   };
 
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
-    if (!schedule) return;
+  const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
+  if (!schedule) return;
+  
+  try {
+    const updatedAssignments = { ...schedule.assignments };
+    if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
+    updatedAssignments[pId][day] = shift;
+
+    const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
+
+    // دریافت کپی از دیتابیس فعلی بدون تریگر کردن setFullDbState
+    const nextDb = fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
+    if (!nextDb.deptData) nextDb.deptData = {};
     
-    try {
-      const updatedAssignments = { ...schedule.assignments };
-      if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
-      updatedAssignments[pId][day] = shift;
+    const deptId = selectedDepartmentId || 'sepehr';
+    const oldDept = nextDb.deptData[deptId] || {
+      personnel: [],
+      requests: [],
+      settings_system: INITIAL_SETTINGS,
+      settings_credentials: { username: 'headnurse', password: '123456' },
+      holidays: {},
+      firstDayOfWeek: {},
+      schedules: {},
+    };
 
-      const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
-
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
-      if (!nextDb.deptData) nextDb.deptData = {};
-      
-      const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
-
-      const updatedDept = {
-        ...oldDept,
-        schedules: {
-          ...oldDept.schedules,
-          [`${currentYear}_${currentMonth}`]: {
-            year: currentYear,
-            month: currentMonth,
-            assignments: updatedAssignments,
-            shiftLeaders: verification.shiftLeaders,
-            warnings: verification.warnings,
-            finalized: false,
-            dismissedWarnings: dismissedWarnings,
-            lockedRows: lockedRows
-          }
+    const key = `${currentYear}_${currentMonth}`;
+    const updatedDept = {
+      ...oldDept,
+      schedules: {
+        ...oldDept.schedules,
+        [key]: {
+          year: currentYear,
+          month: currentMonth,
+          assignments: updatedAssignments,
+          shiftLeaders: verification.shiftLeaders,
+          warnings: verification.warnings,
+          finalized: false,
+          dismissedWarnings: dismissedWarnings,
+          lockedRows: lockedRows,
+          changeLogs: [...(oldDept.schedules?.[key]?.changeLogs || []), `تغییر دستی شیفت پرسنل ${pId} در روز ${day} به ${shift} در تاریخ ${new Date().toLocaleString('fa-IR')}`]
         }
-      };
+      }
+    };
 
-      nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
+    nextDb.deptData[deptId] = updatedDept;
+    
+    // ذخیره مستقیم در دیتابیس بدون تریگر کردن setIsSavingDb
+    setFullDbState(nextDb);
+    
+    // آپدیت state های محلی
+    setSchedule({
+      year: currentYear,
+      month: currentMonth,
+      assignments: updatedAssignments,
+      shiftLeaders: verification.shiftLeaders,
+      warnings: verification.warnings,
+      dismissedWarnings: dismissedWarnings,
+      lockedRows: lockedRows,
+      changeLogs: updatedDept.schedules[key].changeLogs
+    });
 
-      setEditingCell(null);
-    } catch (error) {
-      console.error("Error setting manual shift change:", error);
-      alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
+    // ذخیره در سرور بدون نمایش لودینگ
+    try {
+      const res = await fetch('/api/storage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: nextDb })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        console.error("S3 Object Storage save failed: ", data.error);
+      }
+    } catch (err) {
+      console.error("Network error saving to S3 Object Storage:", err);
     }
-  };
+
+    setEditingCell(null);
+  } catch (error) {
+    console.error("Error setting manual shift change:", error);
+    alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
+  }
+};
 
   // --- Dynamic System Configuration ---
   const handleSaveSettings = async (e: React.FormEvent) => {
