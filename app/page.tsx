@@ -82,8 +82,7 @@ import {
   Menu,
   X,
   Settings2,
-  History,
-  ChevronDown as ChevronDownIcon
+  History
 } from 'lucide-react';
 
 // Department interface for multi-department management
@@ -314,9 +313,9 @@ export default function Home() {
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
   const [editingPersonnelRequest, setEditingPersonnelRequest] = useState<ShiftRequest | null>(null);
   
-  // درخواست ۵: state برای collapsible هشدارها
-  const [expandedAlertId, setExpandedAlertId] = useState<string | null>(null);
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
+  const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
+  const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
 
   const personnelRef = React.useRef(personnel);
   const requestsRef = React.useRef(requests);
@@ -386,17 +385,9 @@ export default function Home() {
 
   // ====== STATE‌های جدید برای درخواست‌ها ======
   
-  // برای هشدارهای زنجیره‌ای (درخواست ۵)
-  const [aggregatedAlerts, setAggregatedAlerts] = useState<AggregatedAlert[]>([]);
-
-  // برای کلیک روی هشدار و اسکرول (درخواست ۴)
-  const [scrollTarget, setScrollTarget] = useState<{ personnelId: string; day: number } | null>(null);
-
   // برای قفل ردیف‌ها (درخواست ۶)
   const [lockedRows, setLockedRows] = useState<string[]>([]);
 
-  // برای پیشنهادات هوشمند (درخواست ۷)
-  const [smartSuggestions, setSmartSuggestions] = useState<SmartSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
 
   const [isSavingDb, setIsSavingDb] = useState<boolean>(false);
@@ -625,44 +616,23 @@ export default function Home() {
     loadDatabase();
   }, [selectedDepartmentId, currentYear, currentMonth]);
 
-  // ====== تابع ادغام هشدارها (درخواست ۵) ======
-  const handleAggregateAlerts = (warningsList: string[]) => {
-    if (!schedule) return;
-    // فقط هشدارهای فعال را گروه‌بندی کن
-    const activeWarnings = warningsList.filter(w => 
-      !dismissedWarnings.includes(w) && 
-      !dismissedAlertWarnings[w]
-    );
-    const grouped = aggregateWarnings(activeWarnings, personnel);
-    setAggregatedAlerts(grouped);
-    
-    // تولید پیشنهادات هوشمند (درخواست ۷)
-    const suggestions = generateSmartSuggestions(
-      currentYear,
-      currentMonth,
-      personnel,
-      requests,
-      schedule.assignments,
-      activeWarnings,
-      customHolidays,
-      firstDayOfWeekIndex
-    );
-    setSmartSuggestions(suggestions);
+  const extractWarningDay = (warningText: string) => {
+    const dayMatch = warningText.match(/روز (\d+)/);
+    return dayMatch ? parseInt(dayMatch[1], 10) : null;
   };
 
   // ====== تابع کلیک روی هشدار و اسکرول (درخواست ۴) ======
   const handleAlertClick = (personnelId: string, day: number) => {
-    setScrollTarget({ personnelId, day });
-    
     setTimeout(() => {
       const cellId = `cell-${personnelId}-${day}`;
       const element = document.getElementById(cellId);
       if (element) {
+        setShowAlertCenter(false);
+        setHighlightedCellId(cellId);
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        element.classList.add('ring-4', 'ring-yellow-400', 'ring-offset-2', 'animate-pulse');
         setTimeout(() => {
-          element.classList.remove('ring-4', 'ring-yellow-400', 'ring-offset-2', 'animate-pulse');
-        }, 3000);
+          setHighlightedCellId(current => current === cellId ? null : current);
+        }, 3200);
       }
     }, 100);
   };
@@ -689,12 +659,6 @@ export default function Home() {
   };
 
   // ====== درخواست ۵: توابع مدیریت هشدارها ======
-  
-  const handleToggleAlert = (alertId: string) => {
-    // اگر alertId برابر با alertId باز شده باشد، آن را می‌بندیم وگرنه باز می‌کنیم
-    setExpandedAlertId(prev => prev === alertId ? null : alertId);
-  };
-
   const handleDismissAlert = (warningText: string) => {
     // اگر قبلاً نادیده گرفته شده، بازگردانی کن
     if (dismissedAlertWarnings[warningText]) {
@@ -730,134 +694,63 @@ export default function Home() {
       }));
       handleDismissWarning(warningText);
     }
-    
-    // به‌روزرسانی aggregated alerts بعد از تغییر
-    if (schedule) {
-      const activeWarnings = getVisibleWarnings();
-      handleAggregateAlerts(activeWarnings);
-    }
   };
 
   const getVisibleWarnings = () => {
     if (!schedule) return [];
     // هشدارهایی که نه در dismissedWarnings هستند و نه در dismissedAlertWarnings
-    const visible = schedule.warnings.filter(w => 
-      !dismissedWarnings.includes(w) && 
-      !dismissedAlertWarnings[w]
-    );
+    const visible = filterActiveWarnings(schedule.warnings, dismissedWarnings)
+      .filter(w => !dismissedAlertWarnings[w]);
     return visible;
   };
 
-  // ====== درخواست ۷: کامپوننت Collapsible هشدارها ======
-  
-  const CollapsibleAlerts = () => {
-    const activeAlerts = aggregatedAlerts.filter(a => a.warnings.length > 0);
-    
-    if (activeAlerts.length === 0) {
-      return (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-800 text-xs font-bold text-center">
-          ✨ تمامی هشدارها رفع شده‌اند
-        </div>
-      );
-    }
+  const handleRestoreAllWarnings = async () => {
+    setDismissedWarnings([]);
+    setDismissedAlertWarnings({});
 
-    return (
-      <div className="space-y-2">
-        {activeAlerts.map(alert => {
-          const activeWarnings = alert.warnings.filter(w => !dismissedAlertWarnings[w]);
-          const dismissedCount = alert.warnings.length - activeWarnings.length;
-          
-          return (
-            <div key={alert.personnelId} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-              <button
-                onClick={() => handleToggleAlert(alert.personnelId)}
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`text-lg ${
-                    alert.severity === 'high' ? '🔴' :
-                    alert.severity === 'medium' ? '🟡' : '🔵'
-                  }`} />
-                  <div className="text-right">
-                    <div className="font-bold text-slate-800 text-sm">{alert.personnelName}</div>
-                    <div className="text-xs text-slate-500">{activeWarnings.length} مشکل {dismissedCount > 0 && `(${dismissedCount} نادیده گرفته شده)`}</div>
-                  </div>
-                </div>
-                <ChevronDownIcon className={`w-4 h-4 text-slate-400 transition-transform ${
-                  expandedAlertId === alert.personnelId ? 'rotate-180' : ''
-                }`} />
-              </button>
-              
-              {expandedAlertId === alert.personnelId && (
-                <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 space-y-2">
-                  {alert.warnings.map((warn, idx) => {
-                    const isDismissed = dismissedAlertWarnings[warn];
-                    return (
-                      <div 
-                        key={idx} 
-                        className={`flex items-start gap-2 text-xs p-2 rounded-lg transition-all ${
-                          isDismissed 
-                            ? 'bg-slate-50 text-slate-400' 
-                            : 'bg-amber-50/50 text-amber-800'
-                        }`}
-                      >
-                        <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
-                        <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            onClick={() => {
-                              const dayMatch = warn.match(/روز (\d+)/);
-                              if (dayMatch) {
-                                const day = parseInt(dayMatch[1]);
-                                handleAlertClick(alert.personnelId, day);
-                              }
-                            }}
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
-                              isDismissed 
-                                ? 'text-slate-400 border-slate-200 bg-white/50' 
-                                : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
-                            }`}
-                          >
-                            رفتن به سلول
-                          </button>
-                          <button
-                            onClick={() => {
-                              handleDismissAlert(warn);
-                              // بعد از تغییر، aggregated alerts را به‌روزرسانی کن
-                              if (schedule) {
-                                const activeWarnings = getVisibleWarnings();
-                                handleAggregateAlerts(activeWarnings);
-                              }
-                            }}
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
-                              isDismissed 
-                                ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
-                                : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-                            }`}
-                            title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
-                          >
-                            {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
+    const key = `${currentYear}_${currentMonth}`;
+    const nextDb = getFreshDbCopy();
+    const deptId = selectedDepartmentId || 'sepehr';
+    const oldDept = nextDb.deptData[deptId];
+
+    if (oldDept && oldDept.schedules?.[key]) {
+      nextDb.deptData[deptId] = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...oldDept.schedules[key],
+            dismissedWarnings: []
+          }
+        }
+      };
+      await saveDbState(nextDb);
+    }
   };
 
-  // استفاده از useEffect برای آپدیت هشدارها
-  useEffect(() => {
-    if (schedule) {
-      const activeWarnings = getVisibleWarnings();
-      handleAggregateAlerts(activeWarnings);
-    }
-  }, [schedule, dismissedWarnings, dismissedAlertWarnings, personnel]);
+  const visibleWarnings = React.useMemo(() => {
+    if (!schedule) return [];
+    return filterActiveWarnings(schedule.warnings, dismissedWarnings)
+      .filter(w => !dismissedAlertWarnings[w]);
+  }, [schedule, dismissedWarnings, dismissedAlertWarnings]);
+
+  const aggregatedAlerts = React.useMemo<AggregatedAlert[]>(() => {
+    return aggregateWarnings(visibleWarnings, personnel);
+  }, [visibleWarnings, personnel]);
+
+  const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
+    if (!schedule) return [];
+    return generateSmartSuggestions(
+      currentYear,
+      currentMonth,
+      personnel,
+      requests,
+      schedule.assignments,
+      visibleWarnings,
+      customHolidays,
+      firstDayOfWeekIndex
+    );
+  }, [schedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
 
   const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
   const [newUsernameValue, setNewUsernameValue] = useState<string>('');
@@ -3134,29 +3027,37 @@ export default function Home() {
             </div>
           </div>
 
-          {/* ====== بخش ادغام شده هشدارها (درخواست ۵) ====== */}
-          {schedule && getVisibleWarnings().length > 0 && (
+          {/* ====== مرکز هشدارها فقط برای داشبورد سرپرستار ====== */}
+          {role === 'headnurse' && activeTab === 'schedule' && schedule && getVisibleWarnings().length > 0 && (
             <div className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden">
-              {/* هدر با تعداد کل هشدارها */}
-              <div className="bg-amber-50/70 border-b border-amber-200/60 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
+              <div className="bg-amber-50/70 px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <AlertTriangle className="w-5 h-5 text-amber-600" />
                     <h3 className="text-sm font-black text-slate-800">
-                      هشدارهای باقی‌مانده
+                      مرکز هشدارهای باقی‌مانده
                     </h3>
                     <span className="bg-amber-100 text-amber-800 text-xs font-black px-2.5 py-0.5 rounded-full">
                       {getVisibleWarnings().length} مورد
                     </span>
                   </div>
+                  <p className="text-xs font-bold text-slate-600">
+                    هشدارها فقط در داشبورد پنل سرپرستار نمایش داده می‌شوند و با یک کلیک در پنجره جداگانه باز خواهند شد.
+                  </p>
+                </div>
+                
+                <div className="flex items-center gap-2">
                   {smartSuggestions.length > 0 && (
                     <span className="bg-indigo-100 text-indigo-700 text-xs font-black px-2.5 py-0.5 rounded-full">
                       {smartSuggestions.length} پیشنهاد
                     </span>
                   )}
-                </div>
-                
-                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowAlertCenter(true)}
+                    className="text-xs bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm"
+                  >
+                    مشاهده هشدارها در پنجره
+                  </button>
                   <button
                     onClick={() => setShowSuggestions(!showSuggestions)}
                     className="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
@@ -3165,10 +3066,7 @@ export default function Home() {
                   </button>
                   {dismissedWarnings.length > 0 && (
                     <button
-                      onClick={() => {
-                        setDismissedWarnings([]);
-                        setDismissedAlertWarnings({});
-                      }}
+                      onClick={handleRestoreAllWarnings}
                       className="text-amber-700 hover:text-amber-950 font-bold text-[10px] bg-amber-100/70 border border-amber-200 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
                     >
                       بازیابی همه ({dismissedWarnings.length})
@@ -3255,137 +3153,16 @@ export default function Home() {
                 </div>
               )}
 
-              {/* لیست هشدارها با قابلیت جمع‌شدن */}
-              <div className="p-4">
-                {aggregatedAlerts.filter(a => a.warnings.length > 0).length === 0 ? (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-emerald-800 text-xs font-bold text-center">
-                    ✨ تمامی هشدارهای این ماه توسط شما نادیده گرفته شده‌اند.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {aggregatedAlerts
-                      .filter(a => a.warnings.length > 0)
-                      .map((alert) => {
-                        // محاسبه تعداد هشدارهای فعال (نادیده گرفته نشده)
-                        const activeWarnings = alert.warnings.filter(w => !dismissedAlertWarnings[w]);
-                        const dismissedCount = alert.warnings.length - activeWarnings.length;
-                        
-                        return (
-                          <div 
-                            key={alert.personnelId}
-                            className={`bg-white border rounded-xl overflow-hidden transition-all ${
-                              alert.severity === 'high' ? 'border-red-200' :
-                              alert.severity === 'medium' ? 'border-amber-200' : 'border-blue-200'
-                            } ${expandedAlertId === alert.personnelId ? 'shadow-md' : 'shadow-sm'}`}
-                          >
-                            {/* هدر هر ردیف هشدار - قابل کلیک */}
-                            <button
-                              onClick={() => {
-                                // toggle: اگر باز است ببند، اگر بسته است باز کن
-                                setExpandedAlertId(expandedAlertId === alert.personnelId ? null : alert.personnelId);
-                                // اگر هشدار وجود دارد و بسته است، به اولین هشدار اسکرول کن
-                                if (expandedAlertId !== alert.personnelId && alert.warnings.length > 0) {
-                                  const firstWarning = alert.warnings[0];
-                                  const dayMatch = firstWarning.match(/روز (\d+)/);
-                                  if (dayMatch) {
-                                    const day = parseInt(dayMatch[1]);
-                                    handleAlertClick(alert.personnelId, day);
-                                  }
-                                }
-                              }}
-                              className={`w-full px-4 py-3 flex items-center justify-between text-right transition-all hover:bg-slate-50/80 ${
-                                expandedAlertId === alert.personnelId ? 'bg-slate-50/50' : ''
-                              }`}
-                            >
-                              <div className="flex items-center gap-3">
-                                <span className={`text-sm font-black ${
-                                  alert.severity === 'high' ? 'text-red-600' :
-                                  alert.severity === 'medium' ? 'text-amber-600' : 'text-blue-600'
-                                }`}>
-                                  {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
-                                </span>
-                                <span className="font-bold text-slate-800 text-sm">{alert.personnelName}</span>
-                                <span className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
-                                  alert.severity === 'high' ? 'bg-red-100 text-red-700' :
-                                  alert.severity === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
-                                }`}>
-                                  {activeWarnings.length} مشکل {dismissedCount > 0 && `(${dismissedCount} نادیده گرفته شده)`}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {dismissedCount > 0 && (
-                                  <span className="text-[10px] text-slate-400 font-bold">(نادیده گرفته شده‌ها)</span>
-                                )}
-                                <span className={`text-slate-400 text-sm transition-transform duration-200 ${
-                                  expandedAlertId === alert.personnelId ? 'rotate-180' : ''
-                                }`}>
-                                  ▼
-                                </span>
-                              </div>
-                            </button>
-                            
-                            {/* محتوای باز شده - لیست هشدارها */}
-                            {expandedAlertId === alert.personnelId && (
-                              <div className="px-4 pb-3 pt-1 space-y-1.5 border-t border-slate-100">
-                                {alert.warnings.map((warn, idx) => {
-                                  const isDismissed = dismissedAlertWarnings[warn];
-                                  return (
-                                    <div 
-                                      key={idx} 
-                                      className={`flex items-start gap-2 text-xs p-2.5 rounded-lg transition-all ${
-                                        isDismissed 
-                                          ? 'bg-slate-50 text-slate-400' 
-                                          : 'bg-amber-50/50 text-amber-800'
-                                      }`}
-                                    >
-                                      <span className={`font-black ml-1 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
-                                      <span className={`leading-relaxed flex-1 ${isDismissed ? 'line-through' : ''}`}>{warn}</span>
-                                      <div className="flex items-center gap-1.5 shrink-0">
-                                        <button
-                                          onClick={() => {
-                                            const dayMatch = warn.match(/روز (\d+)/);
-                                            if (dayMatch) {
-                                              const day = parseInt(dayMatch[1]);
-                                              handleAlertClick(alert.personnelId, day);
-                                            }
-                                          }}
-                                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
-                                            isDismissed 
-                                              ? 'text-slate-400 border-slate-200 bg-white/50' 
-                                              : 'text-indigo-600 border-indigo-200 bg-white/80 hover:bg-indigo-50'
-                                          }`}
-                                        >
-                                          رفتن به سلول
-                                        </button>
-                                        <button
-                                          onClick={() => {
-                                            handleDismissAlert(warn);
-                                            // بعد از تغییر، aggregated alerts را به‌روزرسانی کن
-                                            if (schedule) {
-                                              const activeWarnings = getVisibleWarnings();
-                                              handleAggregateAlerts(activeWarnings);
-                                            }
-                                          }}
-                                          className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-all ${
-                                            isDismissed 
-                                              ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200' 
-                                              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-                                          }`}
-                                          title={isDismissed ? 'بازگردانی هشدار' : 'نادیده گرفتن این هشدار'}
-                                        >
-                                          {isDismissed ? '↩ بازگردانی' : '✕ نادیده گرفتن'}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                  </div>
-                )}
+              <div className="px-5 py-4 border-t border-amber-200/60 bg-white flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs font-bold text-slate-600">
+                  {aggregatedAlerts.filter(a => a.warnings.length > 0).length} گروه هشدار فعال برای بررسی وجود دارد.
+                </div>
+                <button
+                  onClick={() => setShowAlertCenter(true)}
+                  className="text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 font-black px-3.5 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  باز کردن پنجره جزئیات
+                </button>
               </div>
             </div>
           )}
@@ -3393,7 +3170,7 @@ export default function Home() {
           {(activeTab === 'schedule' || activeTab === 'reports') && (
             <>
               {role !== 'personnel' ? (
-                <div className={`grid grid-cols-2 gap-4 print:hidden lg:grid-cols-4`}>
+                <div className={`grid grid-cols-2 gap-4 print:hidden ${role === 'headnurse' && activeTab === 'schedule' ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
                     <div>
                       <div className="text-slate-500 text-[10px] font-black mb-1">کل پرسنل فعال</div>
@@ -3414,22 +3191,27 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-orange-500 flex flex-col justify-between animate-fade-in">
-                    <div>
-                      <div className="text-slate-500 text-[10px] font-black mb-1">هشدارهای پوشش شیفت</div>
-                      <div className="text-2xl font-black text-orange-600 font-mono">
-                        {schedule ? schedule.warnings.filter(w => !dismissedWarnings.includes(w) && !dismissedAlertWarnings[w]).length : 0} مورد
-                        {schedule && schedule.warnings.length > schedule.warnings.filter(w => !dismissedWarnings.includes(w) && !dismissedAlertWarnings[w]).length && (
-                          <span className="text-xs text-slate-400 font-sans font-medium mr-1.5">
-                            ({schedule.warnings.length - schedule.warnings.filter(w => !dismissedWarnings.includes(w) && !dismissedAlertWarnings[w]).length} حذف‌شده)
-                          </span>
-                        )}
+                  {role === 'headnurse' && activeTab === 'schedule' && (
+                    <button
+                      onClick={() => setShowAlertCenter(true)}
+                      className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-orange-500 flex flex-col justify-between animate-fade-in text-right cursor-pointer hover:border-orange-300 hover:shadow-md transition-all"
+                    >
+                      <div>
+                        <div className="text-slate-500 text-[10px] font-black mb-1">هشدارهای پوشش شیفت</div>
+                        <div className="text-2xl font-black text-orange-600 font-mono">
+                          {getVisibleWarnings().length} مورد
+                          {schedule && schedule.warnings.length > getVisibleWarnings().length && (
+                            <span className="text-xs text-slate-400 font-sans font-medium mr-1.5">
+                              ({schedule.warnings.length - getVisibleWarnings().length} حذف‌شده)
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <div className="text-orange-600 text-[10px] mt-2 font-bold bg-orange-50 border border-orange-100/50 px-2 py-0.5 rounded w-max">
-                      مغایرت قوانین کادر
-                    </div>
-                  </div>
+                      <div className="text-orange-600 text-[10px] mt-2 font-bold bg-orange-50 border border-orange-100/50 px-2 py-0.5 rounded w-max">
+                        برای مشاهده، کلیک کنید
+                      </div>
+                    </button>
+                  )}
 
                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-blue-500 flex flex-col justify-between">
                     <div>
@@ -3659,6 +3441,7 @@ export default function Home() {
 
                               {calendarDays.map(d => {
                                 const currentShift = pAssignments[d.day] || 'OFF';
+                                const cellId = `cell-${p.id}-${d.day}`;
                                 
                                 const isShiftLeaderM = schedule?.shiftLeaders?.[d.day]?.morning === p.id;
                                 const isShiftLeaderE = schedule?.shiftLeaders?.[d.day]?.afternoon === p.id;
@@ -3739,9 +3522,9 @@ export default function Home() {
                                       <button 
                                         onClick={() => handleCellClick(p.id, d.day)}
                                         disabled={role === 'personnel' || lockedRows.includes(p.id)}
-                                        className={`w-full max-w-[32px] h-8 rounded-lg flex items-center justify-center transition-all ${badgeClass} ${(role !== 'personnel' && !lockedRows.includes(p.id)) ? 'hover:scale-105 hover:shadow cursor-pointer' : ''}`}
+                                        className={`w-full max-w-[32px] h-8 rounded-lg flex items-center justify-center transition-all ${badgeClass} ${highlightedCellId === cellId ? 'ring-4 ring-red-500 ring-offset-2 ring-offset-white animate-[pulse_0.7s_ease-in-out_5]' : ''} ${(role !== 'personnel' && !lockedRows.includes(p.id)) ? 'hover:scale-105 hover:shadow cursor-pointer' : ''}`}
                                         title={`${p.firstName} ${p.lastName} • روز ${d.day} \nکلیک برای ویرایش دستی`}
-                                        id={`cell-${p.id}-${d.day}`}
+                                        id={cellId}
                                       >
                                         {displayVal}
                                       </button>
@@ -5796,6 +5579,130 @@ export default function Home() {
                 ثبت اطلاعات و به‌روزرسانی بانک داده
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showAlertCenter && role === 'headnurse' && activeTab === 'schedule' && (
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-[60] p-4 print:hidden animate-fade-in" id="alert-center-modal" dir="rtl">
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="px-5 py-4 border-b border-slate-200 bg-amber-50/70 flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-600" />
+                  <h3 className="text-base font-black text-slate-800">پنجره هشدارهای باقی‌مانده</h3>
+                </div>
+                <p className="text-xs font-bold text-slate-600 mt-1">
+                  تمام هشدارهای پرسنلی و عمومی این ماه در این پنجره قابل مشاهده هستند.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-100 text-amber-800 text-xs font-black px-2.5 py-1 rounded-full">
+                  {getVisibleWarnings().length} هشدار فعال
+                </span>
+                <button
+                  onClick={() => setShowAlertCenter(false)}
+                  className="text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl p-2 bg-white transition-colors cursor-pointer"
+                  title="بستن پنجره هشدارها"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 bg-slate-50 space-y-4">
+              {aggregatedAlerts.filter(a => a.warnings.length > 0).length === 0 ? (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-emerald-800 text-sm font-black text-center">
+                  ✨ هشدار فعالی برای این ماه باقی نمانده است.
+                </div>
+              ) : (
+                aggregatedAlerts
+                  .filter(a => a.warnings.length > 0)
+                  .map((alert) => {
+                    const activeWarnings = alert.warnings.filter(w => !dismissedAlertWarnings[w]);
+                    const severityClasses =
+                      alert.severity === 'high'
+                        ? 'border-red-200 bg-red-50/40'
+                        : alert.severity === 'medium'
+                          ? 'border-amber-200 bg-amber-50/40'
+                          : 'border-blue-200 bg-blue-50/40';
+
+                    return (
+                      <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <span className={`text-sm font-black ${
+                              alert.severity === 'high'
+                                ? 'text-red-600'
+                                : alert.severity === 'medium'
+                                  ? 'text-amber-600'
+                                  : 'text-blue-600'
+                            }`}>
+                              {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
+                            </span>
+                            <div>
+                              <div className="font-black text-slate-800 text-sm">{alert.personnelName}</div>
+                              <div className="text-[11px] font-bold text-slate-500">
+                                {activeWarnings.length} هشدار فعال
+                                {alert.groupType === 'general' ? ' • هشدارهای بدون پرسنل مشخص' : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600">
+                            {alert.groupType === 'general' ? 'عمومی' : 'پرسنلی'}
+                          </span>
+                        </div>
+
+                        <div className="mt-4 space-y-2">
+                          {activeWarnings.map((warn, idx) => {
+                            const day = extractWarningDay(warn);
+                            const canNavigateToCell = alert.groupType !== 'general' && day !== null;
+
+                            return (
+                              <div key={`${alert.personnelId}-${idx}`} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="flex items-start gap-2 flex-1">
+                                  <span className="text-amber-600 font-black mt-0.5">•</span>
+                                  <div className="space-y-1">
+                                    <div className="text-xs font-bold text-slate-700 leading-6">{warn}</div>
+                                    {day !== null && (
+                                      <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                                        روز {day}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {canNavigateToCell && day !== null ? (
+                                    <button
+                                      onClick={() => handleAlertClick(alert.personnelId, day)}
+                                      className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
+                                    >
+                                      رفتن به سلول
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
+                                      فاقد سلول مستقیم
+                                    </span>
+                                  )}
+
+                                  <button
+                                    onClick={() => handleDismissAlert(warn)}
+                                    className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+                                    title="نادیده گرفتن این هشدار"
+                                  >
+                                    نادیده گرفتن
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
           </div>
         </div>
       )}
