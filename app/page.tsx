@@ -142,104 +142,6 @@ function toEnglishDigits(str: string): string {
   return res;
 }
 
-// ====== درخواست ۸: Modal برای ویرایش درخواست در پنل پرسنل ======
-function EditRequestModal({ 
-  request, 
-  onClose, 
-  onSave 
-}: { 
-  request: ShiftRequest;
-  onClose: () => void;
-  onSave: (updated: ShiftRequest) => void;
-}) {
-  const [editingType, setEditingType] = useState(request.requestType);
-  const [editingShift, setEditingShift] = useState(request.preferredShift);
-  const [editingScope, setEditingScope] = useState(request.scope);
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
-      <div className="bg-white border rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-black text-slate-800">ویرایش درخواست</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-bold text-slate-500 mb-1">نوع درخواست</label>
-            <select 
-              value={editingType}
-              onChange={(e) => setEditingType(e.target.value as any)}
-              className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="shift">درخواست شیفت</option>
-              <option value="OFF">آف</option>
-              <option value="leave">مرخصی</option>
-              <option value="avoid_shift">شیفت ممنوعه</option>
-            </select>
-          </div>
-
-          {(editingType === 'shift' || editingType === 'avoid_shift') && (
-            <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1">شیفت</label>
-              <select 
-                value={editingShift}
-                onChange={(e) => setEditingShift(e.target.value as any)}
-                className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-              >
-                <option value="M">صبح (M)</option>
-                <option value="E">عصر (E)</option>
-                <option value="N">شب (N)</option>
-                <option value="ME">عصر-صبح (ME)</option>
-                <option value="EN">شب-عصر (EN)</option>
-                <option value="MN">شب-صبح (MN)</option>
-                {editingType === 'shift' && <option value="MEN">تمام روز (MEN)</option>}
-              </select>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-bold text-slate-500 mb-1">دامنه</label>
-            <select 
-              value={editingScope}
-              onChange={(e) => setEditingScope(e.target.value as any)}
-              className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="all">تمام روزهای ماه</option>
-              <option value="even">تاریخ زوج</option>
-              <option value="odd">تاریخ فرد</option>
-              <option value="weekly_even">روزهای زوج هفته</option>
-              <option value="weekly_odd">روزهای فرد هفته</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="flex gap-2 border-t border-slate-100 pt-4">
-          <button
-            onClick={onClose}
-            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 rounded-lg transition-all"
-          >
-            انصراف
-          </button>
-          <button
-            onClick={() => onSave({
-              ...request,
-              requestType: editingType,
-              preferredShift: editingShift,
-              scope: editingScope
-            })}
-            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2 rounded-lg transition-all"
-          >
-            ذخیره تغییرات
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function Home() {
   // --- Dynamic Department routing helper ---
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(() => {
@@ -311,7 +213,6 @@ export default function Home() {
   const [schedule, setSchedule] = useState<MonthlySchedule | null>(null);
 
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
-  const [editingPersonnelRequest, setEditingPersonnelRequest] = useState<ShiftRequest | null>(null);
   
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
@@ -390,13 +291,20 @@ export default function Home() {
 
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
 
-  const [isSavingDb, setIsSavingDb] = useState<boolean>(false);
+  const [pendingDbSaveCount, setPendingDbSaveCount] = useState<number>(0);
+  const [blockingDbSaveCount, setBlockingDbSaveCount] = useState<number>(0);
+  const isSavingDb = pendingDbSaveCount > 0;
+  const isBlockingDbSave = blockingDbSaveCount > 0;
 
   const getFreshDbCopy = (): AppDatabaseState => {
     return fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
   };
 
-  const saveDbState = async (updatedDb: AppDatabaseState) => {
+  const saveDbState = async (
+    updatedDb: AppDatabaseState,
+    options: { showBusyOverlay?: boolean } = {}
+  ) => {
+    const { showBusyOverlay = true } = options;
     setFullDbState(updatedDb);
     
     const deptId = selectedDepartmentId || 'sepehr';
@@ -479,7 +387,10 @@ export default function Home() {
     }
 
     try {
-      setIsSavingDb(true);
+      setPendingDbSaveCount(count => count + 1);
+      if (showBusyOverlay) {
+        setBlockingDbSaveCount(count => count + 1);
+      }
       const res = await fetch('/api/storage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -492,7 +403,10 @@ export default function Home() {
     } catch (err) {
       console.error("Network error saving to S3 Object Storage:", err);
     } finally {
-      setIsSavingDb(false);
+      setPendingDbSaveCount(count => Math.max(0, count - 1));
+      if (showBusyOverlay) {
+        setBlockingDbSaveCount(count => Math.max(0, count - 1));
+      }
     }
   };
 
@@ -637,27 +551,6 @@ export default function Home() {
     }, 100);
   };
 
-  // ====== درخواست ۸: توابع ویرایش درخواست برای پرسنل ======
-  
-  const handleEditPersonnelRequest = (request: ShiftRequest) => {
-    setEditingPersonnelRequest(request);
-  };
-
-  const handleSaveEditedRequest = async (updatedRequest: ShiftRequest) => {
-    try {
-      const updatedRequests = requests.map(r => r.id === updatedRequest.id ? updatedRequest : r);
-      await saveState(personnel, updatedRequests, settings, customHolidays, {
-        mode: 'refresh_personnel',
-        personnelIds: [updatedRequest.personnelId]
-      });
-      setEditingPersonnelRequest(null);
-      alert('درخواست با موفقیت ویرایش شد');
-    } catch (error) {
-      console.error('Error editing request:', error);
-      alert('خطای ویرایش درخواست');
-    }
-  };
-
   // ====== درخواست ۵: توابع مدیریت هشدارها ======
   const handleDismissAlert = (warningText: string) => {
     // اگر قبلاً نادیده گرفته شده، بازگردانی کن
@@ -685,7 +578,7 @@ export default function Home() {
           }
         };
         nextDb.deptData[deptId] = updatedDept;
-        saveDbState(nextDb);
+        saveDbState(nextDb, { showBusyOverlay: false });
       }
     } else {
       setDismissedAlertWarnings(prev => ({
@@ -724,7 +617,7 @@ export default function Home() {
           }
         }
       };
-      await saveDbState(nextDb);
+      await saveDbState(nextDb, { showBusyOverlay: false });
     }
   };
 
@@ -1292,7 +1185,7 @@ export default function Home() {
       };
 
       nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
+      await saveDbState(nextDb, { showBusyOverlay: false });
     } catch (error) {
       console.error("Error dismissing warning:", error);
     }
@@ -1831,7 +1724,7 @@ export default function Home() {
       };
 
       nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
+      await saveDbState(nextDb, { showBusyOverlay: false });
 
       setEditingCell(null);
     } catch (error) {
@@ -2263,7 +2156,7 @@ export default function Home() {
         ? 'در حال بازتولید هوشمند برنامه کمک بهیاران و ثبت تغییرات در سامانه...'
         : isAiProcessing
           ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
-          : isSavingDb
+          : isBlockingDbSave
             ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
             : null;
 
@@ -3135,7 +3028,7 @@ export default function Home() {
                                   }
                                 };
                                 nextDb.deptData[deptId] = updatedDept;
-                                await saveDbState(nextDb);
+                                await saveDbState(nextDb, { showBusyOverlay: false });
                                 setShowSuggestions(false);
                               }
                             }
@@ -3418,7 +3311,7 @@ export default function Home() {
                                               }
                                             };
                                             nextDb.deptData[deptId] = updatedDept;
-                                            await saveDbState(nextDb);
+                                            await saveDbState(nextDb, { showBusyOverlay: false });
                                           }
                                         }
                                       }}
@@ -4057,55 +3950,6 @@ export default function Home() {
                               <tr>
                                 <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
                                   هیچ درخواستی برای این ماه ثبت نشده است.
-                                </td>
-                              </tr>
-                            );
-                          }
-
-                          if (role === 'personnel' && selectedPersonnelUser) {
-                            const p = selectedPersonnelUser;
-                            const pReqs = filteredRequests;
-                            const hasEssential = pReqs.some(r => r.isEssential);
-                            return (
-                              <tr className="hover:bg-slate-50/50 transition-colors">
-                                <td className="px-6 py-4">
-                                  <span className="font-extrabold text-slate-800">{p.firstName} {p.lastName}</span>
-                                  <span className="text-xs text-slate-400 block mt-0.5">کد پرسنلی: {p.personalCode}</span>
-                                </td>
-                                <td colSpan={3} className="px-6 py-4">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {pReqs.map((r) => (
-                                      <span key={`pReq-pers-${r.id}`} className="text-[10px] bg-slate-50 border border-slate-150 text-slate-705 font-black px-2 py-1 rounded-xl flex items-center gap-1 shadow-2xs">
-                                        {getRequestSummaryText(r)}
-                                      </span>
-                                    ))}
-                                    <span className="bg-indigo-50 text-indigo-700 text-[10px] px-2.5 py-1 rounded-xl font-bold">مجموعاً {pReqs.length} درخواست ثبت‌شده شما</span>
-                                  </div>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  <span className="bg-slate-100 text-slate-600 font-bold text-[10px] px-3 py-1 rounded-full">عادی (مدیریت توسط سرپرستار)</span>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    <button
-                                      onClick={() => handleDeleteAllPersonRequests(p.id, "درخواست‌های ثبت‌شده تان")}
-                                      className="text-red-500 hover:text-red-700 bg-red-50/50 hover:bg-red-50 border border-red-100 p-1.5 rounded-xl transition-all cursor-pointer inline-flex items-center gap-1 font-bold text-xs px-2.5 py-1.5"
-                                      title="حذف کلیه درخواست‌ها"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" /> حذف همه
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        if (pReqs.length > 0) {
-                                          handleEditPersonnelRequest(pReqs[0]);
-                                        }
-                                      }}
-                                      className="text-indigo-600 hover:text-indigo-700 bg-indigo-50/50 hover:bg-indigo-50 border border-indigo-100 p-1.5 rounded-xl transition-all cursor-pointer inline-flex items-center gap-1 font-bold text-xs px-2.5 py-1.5"
-                                      title="ویرایش درخواست"
-                                    >
-                                      <Edit className="w-3.5 h-3.5" /> ویرایش
-                                    </button>
-                                  </div>
                                 </td>
                               </tr>
                             );
@@ -5940,15 +5784,6 @@ export default function Home() {
             </form>
           </div>
         </div>
-      )}
-
-      {/* ====== درخواست ۸: Modal ویرایش درخواست برای پرسنل ====== */}
-      {editingPersonnelRequest && (
-        <EditRequestModal
-          request={editingPersonnelRequest}
-          onClose={() => setEditingPersonnelRequest(null)}
-          onSave={handleSaveEditedRequest}
-        />
       )}
 
     </div>
