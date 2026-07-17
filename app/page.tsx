@@ -631,6 +631,14 @@ export default function Home() {
     return aggregateWarnings(visibleWarnings, personnel);
   }, [visibleWarnings, personnel]);
 
+  // تمام هشدارها (شامل نادیده‌گرفته‌شده‌ها) برای پنجره هشدار
+  const allAlertsForDialog = React.useMemo<AggregatedAlert[]>(() => {
+    if (!schedule) return [];
+    // فقط dismissedWarnings (ذخیره‌شده در دیتابیس) فیلتر شوند، نه dismissedAlertWarnings
+    const warningsForDialog = filterActiveWarnings(schedule.warnings, dismissedWarnings);
+    return aggregateWarnings(warningsForDialog, personnel);
+  }, [schedule, dismissedWarnings, personnel]);
+
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
     if (!schedule) return [];
     return generateSmartSuggestions(
@@ -845,6 +853,8 @@ export default function Home() {
           ).filter(id => {
             const p = updatedP.find(per => per.id === id);
             if (!p) return false;
+            // چک قفل گروهی و قفل ردیف فردی
+            if (lockedRows.includes(id)) return false;
             return p.jobGroup === 'nurse' ? !isLockedNurses : !isLockedAssistants;
           });
 
@@ -879,7 +889,8 @@ export default function Home() {
           const nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
           for (const p of updatedP) {
             const isLocked = p.jobGroup === 'nurse' ? isLockedNurses : isLockedAssistants;
-            if (!isLocked) {
+            // چک قفل گروهی و قفل ردیف فردی - اگر قفل باشد، شیفت‌های این پرسنل تغییر نمی‌کند
+            if (!isLocked && !lockedRows.includes(p.id)) {
               nextAssignments[p.id] = { ...(freshSolved.assignments[p.id] || {}) };
             }
           }
@@ -5455,96 +5466,202 @@ export default function Home() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 bg-slate-50 space-y-4">
-              {aggregatedAlerts.filter(a => a.warnings.length > 0).length === 0 ? (
+              {allAlertsForDialog.filter(a => a.warnings.length > 0).length === 0 ? (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-emerald-800 text-sm font-black text-center">
                   ✨ هشدار فعالی برای این ماه باقی نمانده است.
                 </div>
               ) : (
-                aggregatedAlerts
-                  .filter(a => a.warnings.length > 0)
-                  .map((alert) => {
-                    const activeWarnings = alert.warnings.filter(w => !dismissedAlertWarnings[w]);
-                    const severityClasses =
-                      alert.severity === 'high'
-                        ? 'border-red-200 bg-red-50/40'
-                        : alert.severity === 'medium'
-                          ? 'border-amber-200 bg-amber-50/40'
-                          : 'border-blue-200 bg-blue-50/40';
-
+                <>
+                  {/* بخش هشدارهای عمومی */}
+                  {(() => {
+                    const generalAlerts = allAlertsForDialog.filter(a => a.groupType === 'general' && a.warnings.length > 0);
+                    if (generalAlerts.length === 0) return null;
                     return (
-                      <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <span className={`text-sm font-black ${
-                              alert.severity === 'high'
-                                ? 'text-red-600'
-                                : alert.severity === 'medium'
-                                  ? 'text-amber-600'
-                                  : 'text-blue-600'
-                            }`}>
-                              {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
-                            </span>
-                            <div>
-                              <div className="font-black text-slate-800 text-sm">{alert.personnelName}</div>
-                              <div className="text-[11px] font-bold text-slate-500">
-                                {activeWarnings.length} هشدار فعال
-                                {alert.groupType === 'general' ? ' • هشدارهای بدون پرسنل مشخص' : ''}
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600">
-                            {alert.groupType === 'general' ? 'عمومی' : 'پرسنلی'}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 px-1 pt-1">
+                          <div className="w-3 h-3 rounded-full bg-indigo-500"></div>
+                          <h4 className="text-sm font-black text-indigo-800">هشدارهای عمومی</h4>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                            {generalAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0)} مورد
                           </span>
                         </div>
+                        {generalAlerts.map((alert) => {
+                          const allWarnings = alert.warnings;
+                          const severityClasses =
+                            alert.severity === 'high'
+                              ? 'border-red-200 bg-red-50/40'
+                              : alert.severity === 'medium'
+                                ? 'border-amber-200 bg-amber-50/40'
+                                : 'border-blue-200 bg-blue-50/40';
 
-                        <div className="mt-4 space-y-2">
-                          {activeWarnings.map((warn, idx) => {
-                            const day = extractWarningDay(warn);
-                            const canNavigateToCell = alert.groupType !== 'general' && day !== null;
-
-                            return (
-                              <div key={`${alert.personnelId}-${idx}`} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                <div className="flex items-start gap-2 flex-1">
-                                  <span className="text-amber-600 font-black mt-0.5">•</span>
-                                  <div className="space-y-1">
-                                    <div className="text-xs font-bold text-slate-700 leading-6">{warn}</div>
-                                    {day !== null && (
-                                      <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                                        روز {day}
-                                      </span>
-                                    )}
+                          return (
+                            <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex items-center gap-3">
+                                  <span className={`text-sm font-black ${
+                                    alert.severity === 'high'
+                                      ? 'text-red-600'
+                                      : alert.severity === 'medium'
+                                        ? 'text-amber-600'
+                                        : 'text-blue-600'
+                                  }`}>
+                                    {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
+                                  </span>
+                                  <div>
+                                    <div className="font-black text-slate-800 text-sm">{alert.personnelName}</div>
+                                    <div className="text-[11px] font-bold text-slate-500">
+                                      {allWarnings.filter(w => !dismissedAlertWarnings[w]).length} هشدار فعال
+                                      {' • هشدارهای بدون پرسنل مشخص'}
+                                    </div>
                                   </div>
                                 </div>
-
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {canNavigateToCell && day !== null ? (
-                                    <button
-                                      onClick={() => handleAlertClick(alert.personnelId, day)}
-                                      className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
-                                    >
-                                      رفتن به سلول
-                                    </button>
-                                  ) : (
-                                    <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
-                                      فاقد سلول مستقیم
-                                    </span>
-                                  )}
-
-                                  <button
-                                    onClick={() => handleDismissAlert(warn)}
-                                    className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
-                                    title="نادیده گرفتن این هشدار"
-                                  >
-                                    نادیده گرفتن
-                                  </button>
-                                </div>
+                                <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-indigo-100 border border-indigo-200 text-indigo-700">
+                                  عمومی
+                                </span>
                               </div>
-                            );
-                          })}
-                        </div>
+
+                              <div className="mt-4 space-y-2">
+                                {allWarnings.map((warn, idx) => {
+                                  const day = extractWarningDay(warn);
+                                  const isDismissed = !!dismissedAlertWarnings[warn];
+
+                                  return (
+                                    <div key={`${alert.personnelId}-${idx}`} className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'}`}>
+                                      <div className="flex items-start gap-2 flex-1">
+                                        <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                                        <div className="space-y-1">
+                                          <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{warn}</div>
+                                          {day !== null && (
+                                            <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                                              روز {day}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
+                                          فاقد سلول مستقیم
+                                        </span>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleDismissAlert(warn); }}
+                                          className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${isDismissed ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'}`}
+                                          title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
+                                        >
+                                          {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     );
-                  })
+                  })()}
+
+                  {/* بخش هشدارهای پرسنلی */}
+                  {(() => {
+                    const personnelAlerts = allAlertsForDialog.filter(a => a.groupType !== 'general' && a.warnings.length > 0);
+                    if (personnelAlerts.length === 0) return null;
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 px-1 pt-2">
+                          <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+                          <h4 className="text-sm font-black text-amber-800">هشدارهای پرسنلی</h4>
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                            {personnelAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0)} مورد
+                          </span>
+                        </div>
+                        {personnelAlerts.map((alert) => {
+                          const allWarnings = alert.warnings;
+                          const severityClasses =
+                            alert.severity === 'high'
+                              ? 'border-red-200 bg-red-50/40'
+                              : alert.severity === 'medium'
+                                ? 'border-amber-200 bg-amber-50/40'
+                                : 'border-blue-200 bg-blue-50/40';
+
+                          return (
+                            <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex items-center gap-3">
+                                  <span className={`text-sm font-black ${
+                                    alert.severity === 'high'
+                                      ? 'text-red-600'
+                                      : alert.severity === 'medium'
+                                        ? 'text-amber-600'
+                                        : 'text-blue-600'
+                                  }`}>
+                                    {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
+                                  </span>
+                                  <div>
+                                    <div className="font-black text-slate-800 text-sm">{alert.personnelName}</div>
+                                    <div className="text-[11px] font-bold text-slate-500">
+                                      {allWarnings.filter(w => !dismissedAlertWarnings[w]).length} هشدار فعال
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-700">
+                                  پرسنلی
+                                </span>
+                              </div>
+
+                              <div className="mt-4 space-y-2">
+                                {allWarnings.map((warn, idx) => {
+                                  const day = extractWarningDay(warn);
+                                  const canNavigateToCell = day !== null;
+                                  const isDismissed = !!dismissedAlertWarnings[warn];
+
+                                  return (
+                                    <div key={`${alert.personnelId}-${idx}`} className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'}`}>
+                                      <div className="flex items-start gap-2 flex-1">
+                                        <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                                        <div className="space-y-1">
+                                          <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{warn}</div>
+                                          {day !== null && (
+                                            <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                                              روز {day}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        {canNavigateToCell && day !== null && !isDismissed ? (
+                                          <button
+                                            onClick={() => handleAlertClick(alert.personnelId, day)}
+                                            className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
+                                          >
+                                            رفتن به سلول
+                                          </button>
+                                        ) : !isDismissed ? (
+                                          <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
+                                            فاقد سلول مستقیم
+                                          </span>
+                                        ) : null}
+
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleDismissAlert(warn); }}
+                                          className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${isDismissed ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'}`}
+                                          title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
+                                        >
+                                          {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </>
               )}
             </div>
           </div>
