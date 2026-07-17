@@ -216,6 +216,7 @@ export default function Home() {
   
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
+  const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean}>({general: true, personnel: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
 
   const personnelRef = React.useRef(personnel);
@@ -1008,7 +1009,8 @@ export default function Home() {
           ? { ...baseAssignments }
           : normalizeScheduleAssignments(optimized.assignments, personnel);
 
-        const targetPersonnel = personnel.filter(p => p.jobGroup === jobGroup);
+        // فقط پرسنلی که قفل نیستند تغییر کنند
+        const targetPersonnel = personnel.filter(p => p.jobGroup === jobGroup && !lockedRows.includes(p.id));
         for (const person of targetPersonnel) {
           mergedAssignments[person.id] = { ...(optimized.assignments[person.id] || {}) };
         }
@@ -2951,22 +2953,11 @@ export default function Home() {
                 </div>
                 
                 <div className="flex items-center gap-2">
-                  {smartSuggestions.length > 0 && (
-                    <span className="bg-indigo-100 text-indigo-700 text-xs font-black px-2.5 py-0.5 rounded-full">
-                      {smartSuggestions.length} پیشنهاد
-                    </span>
-                  )}
                   <button
                     onClick={() => setShowAlertCenter(true)}
                     className="text-xs bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm"
                   >
                     مشاهده هشدارها در پنجره
-                  </button>
-                  <button
-                    onClick={() => setShowSuggestions(!showSuggestions)}
-                    className="text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
-                  >
-                    💡 {showSuggestions ? 'بستن پیشنهادات' : 'نمایش پیشنهادات هوشمند'}
                   </button>
                   {dismissedWarnings.length > 0 && (
                     <button
@@ -2979,8 +2970,8 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* بخش پیشنهادات هوشمند (قابل جمع‌شدن) */}
-              {showSuggestions && smartSuggestions.length > 0 && (
+              {/* بخش پیشنهادات هوشمند حذف شد */}
+              {false && (
                 <div className="bg-indigo-50/80 border-b border-indigo-200 p-4 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-indigo-800">💡 پیشنهادات هوشمند برای رفع تناقضات:</span>
@@ -5448,7 +5439,7 @@ export default function Home() {
                   <h3 className="text-base font-black text-slate-800">پنجره هشدارهای باقی‌مانده</h3>
                 </div>
                 <p className="text-xs font-bold text-slate-600 mt-1">
-                  تمام هشدارهای پرسنلی و عمومی این ماه در این پنجره قابل مشاهده هستند.
+                  روی هر بخش کلیک کنید تا هشدارها باز/بسته شوند.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -5472,20 +5463,28 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  {/* بخش هشدارهای عمومی */}
+                  {/* بخش هشدارهای عمومی - کرکره‌ای */}
                   {(() => {
                     const generalAlerts = allAlertsForDialog.filter(a => a.groupType === 'general' && a.warnings.length > 0);
                     if (generalAlerts.length === 0) return null;
+                    const activeCount = generalAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0);
                     return (
                       <div className="space-y-3">
-                        <div className="flex items-center gap-2 px-1 pt-1">
-                          <div className="w-3 h-3 rounded-full bg-indigo-500"></div>
-                          <h4 className="text-sm font-black text-indigo-800">هشدارهای عمومی</h4>
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
-                            {generalAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0)} مورد
-                          </span>
-                        </div>
-                        {generalAlerts.map((alert) => {
+                        <button
+                          type="button"
+                          onClick={() => setExpandedAlertSections(prev => ({...prev, general: !prev.general}))}
+                          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl cursor-pointer transition-all"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-indigo-500"></div>
+                            <h4 className="text-sm font-black text-indigo-800">هشدارهای عمومی</h4>
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                              {activeCount} مورد
+                            </span>
+                          </div>
+                          <ChevronDown className={`w-5 h-5 text-indigo-600 transition-transform ${expandedAlertSections.general ? 'rotate-180' : ''}`} />
+                        </button>
+                        {expandedAlertSections.general && generalAlerts.map((alert) => {
                           const allWarnings = alert.warnings;
                           const severityClasses =
                             alert.severity === 'high'
@@ -5562,20 +5561,28 @@ export default function Home() {
                     );
                   })()}
 
-                  {/* بخش هشدارهای پرسنلی */}
+                  {/* بخش هشدارهای پرسنلی - کرکره‌ای */}
                   {(() => {
                     const personnelAlerts = allAlertsForDialog.filter(a => a.groupType !== 'general' && a.warnings.length > 0);
                     if (personnelAlerts.length === 0) return null;
+                    const activeCount = personnelAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0);
                     return (
                       <div className="space-y-3">
-                        <div className="flex items-center gap-2 px-1 pt-2">
-                          <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-                          <h4 className="text-sm font-black text-amber-800">هشدارهای پرسنلی</h4>
-                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                            {personnelAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0)} مورد
-                          </span>
-                        </div>
-                        {personnelAlerts.map((alert) => {
+                        <button
+                          type="button"
+                          onClick={() => setExpandedAlertSections(prev => ({...prev, personnel: !prev.personnel}))}
+                          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl cursor-pointer transition-all"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+                            <h4 className="text-sm font-black text-amber-800">هشدارهای پرسنلی</h4>
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                              {activeCount} مورد
+                            </span>
+                          </div>
+                          <ChevronDown className={`w-5 h-5 text-amber-600 transition-transform ${expandedAlertSections.personnel ? 'rotate-180' : ''}`} />
+                        </button>
+                        {expandedAlertSections.personnel && personnelAlerts.map((alert) => {
                           const allWarnings = alert.warnings;
                           const severityClasses =
                             alert.severity === 'high'
