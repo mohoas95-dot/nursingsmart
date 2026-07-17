@@ -64,7 +64,8 @@ export function aggregateWarnings(
     });
   }
   
-  result.sort((a, b) => b.warningCount - a.warningCount);
+  // مرتب‌سازی حذف شد تا ترتیب ثابت بماند و با dismiss کردن هشدار، پرش رخ ندهد
+  // result.sort((a, b) => b.warningCount - a.warningCount);
   return result;
 }
 
