@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Vazirmatn } from 'next/font/google';
 import './globals.css';
 
@@ -11,13 +11,16 @@ const vazirmatn = Vazirmatn({
 export const metadata: Metadata = {
   title: 'سامانه هوشمند برنامه‌ریزی شیفت پرستاری بیمارستان',
   description: 'سیستم هوشمند تخصیص خودکار و عادلانه شیفت پرسنل با موتور الگوریتمی پیشرفته',
-  themeColor: '#000000',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
     title: 'NursePlan',
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#000000',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

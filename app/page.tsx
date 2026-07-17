@@ -2878,36 +2878,6 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2.5">
-              {role === 'headnurse' && (
-                <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => setIsChangingPassword(!isChangingPassword)}
-                    className="text-xs bg-slate-100 hover:bg-slate-200 border border-slate-200 font-bold px-3 py-1.5 rounded-xl text-slate-800 transition-all cursor-pointer"
-                    id="btn-toggle-change-pass"
-                  >
-                    تغییر مشخصات سرپرستار
-                  </button>
-                  {isChangingPassword && (
-                    <div className="flex gap-1 items-center">
-                      <input 
-                        type="text" 
-                        placeholder="نام کاربری جدید" 
-                        value={newUsernameValue}
-                        onChange={(e) => setNewUsernameValue(e.target.value)}
-                        className="text-xs border border-slate-300 px-2.5 py-1.5 rounded-xl bg-white w-28 focus:outline-none"
-                      />
-                      <input 
-                        type="password" 
-                        placeholder="رمز جدید" 
-                        value={newPasswordValue}
-                        onChange={(e) => setNewPasswordValue(e.target.value)}
-                        className="text-xs border border-slate-300 px-2.5 py-1.5 rounded-xl bg-white w-24 focus:outline-none"
-                      />
-                      <button onClick={handleChangeCredentials} className="bg-sky-600 text-white text-xs px-2.5 py-1.5 rounded-xl font-bold hover:bg-sky-700 cursor-pointer">ثبت</button>
-                    </div>
-                  )}
-                </div>
-              )}
               {role !== 'personnel' && (
                 <div className="flex flex-wrap items-center gap-2">
                   <button
@@ -3048,24 +3018,14 @@ export default function Home() {
                 </div>
               )}
 
-              <div className="px-5 py-4 border-t border-amber-200/60 bg-white flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs font-bold text-slate-600">
-                  {aggregatedAlerts.filter(a => a.warnings.length > 0).length} گروه هشدار فعال برای بررسی وجود دارد.
-                </div>
-                <button
-                  onClick={() => setShowAlertCenter(true)}
-                  className="text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 font-black px-3.5 py-2 rounded-xl transition-all cursor-pointer"
-                >
-                  باز کردن پنجره جزئیات
-                </button>
-              </div>
+
             </div>
           )}
 
           {(activeTab === 'schedule' || activeTab === 'reports') && (
             <>
               {role !== 'personnel' ? (
-                <div className={`grid grid-cols-2 gap-4 print:hidden ${role === 'headnurse' && activeTab === 'schedule' ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+                <div className="grid grid-cols-2 gap-4 print:hidden lg:grid-cols-4">
                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
                     <div>
                       <div className="text-slate-500 text-[10px] font-black mb-1">کل پرسنل فعال</div>
@@ -3076,37 +3036,35 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                    <div>
-                      <div className="text-slate-500 text-[10px] font-black mb-1">میانگین موظفی کادر</div>
-                      <div className="text-2xl font-black text-slate-900 font-mono">{monthlyDutyHours ? monthlyDutyHours.official : settings.dutyHours.official} ساعت</div>
+                  <div className="col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-slate-800 text-xs font-black">ساعت موظفی بر اساس شیوه استخدام</div>
+                        <div className="text-slate-400 text-[9px] font-bold mt-1">
+                          {monthlyDutyHours ? 'مقادیر تصویب‌شده برای ماه جاری' : 'مقادیر پایه تنظیمات استخدامی'}
+                        </div>
+                      </div>
+                      <span className="shrink-0 rounded-lg bg-emerald-50 p-2 text-emerald-600">
+                        <Clock className="h-4 w-4" />
+                      </span>
                     </div>
-                    <div className="text-slate-500 text-[10px] mt-2 font-bold bg-slate-100 px-2 py-0.5 rounded w-max">
-                      {monthlyDutyHours ? 'تصویب شده این ماه' : 'بر اساس قانون استخدام'}
+                    <div className="grid grid-cols-3 gap-2" dir="rtl">
+                      {[
+                        { label: 'رسمی', value: monthlyDutyHours?.official ?? settings.dutyHours.official, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+                        { label: 'قراردادی', value: monthlyDutyHours?.contract ?? settings.dutyHours.contract, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+                        { label: 'طرح / وظیفه', value: monthlyDutyHours?.conscript ?? settings.dutyHours.conscript, tone: 'bg-violet-50 text-violet-700 border-violet-100' }
+                      ].map((item) => (
+                        <div key={item.label} className={`rounded-lg border px-2 py-2.5 text-center ${item.tone}`}>
+                          <div className="text-[9px] font-black sm:text-[10px]">{item.label}</div>
+                          <div className="mt-1 whitespace-nowrap font-mono text-lg font-black sm:text-xl">
+                            {item.value} <span className="font-sans text-[9px] font-bold">ساعت</span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
-                  {role === 'headnurse' && activeTab === 'schedule' && (
-                    <button
-                      onClick={() => setShowAlertCenter(true)}
-                      className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-orange-500 flex flex-col justify-between animate-fade-in text-right cursor-pointer hover:border-orange-300 hover:shadow-md transition-all"
-                    >
-                      <div>
-                        <div className="text-slate-500 text-[10px] font-black mb-1">هشدارهای پوشش شیفت</div>
-                        <div className="text-2xl font-black text-orange-600 font-mono">
-                          {getVisibleWarnings().length} مورد
-                          {schedule && schedule.warnings.length > getVisibleWarnings().length && (
-                            <span className="text-xs text-slate-400 font-sans font-medium mr-1.5">
-                              ({schedule.warnings.length - getVisibleWarnings().length} حذف‌شده)
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="text-orange-600 text-[10px] mt-2 font-bold bg-orange-50 border border-orange-100/50 px-2 py-0.5 rounded w-max">
-                        برای مشاهده، کلیک کنید
-                      </div>
-                    </button>
-                  )}
+
 
                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-blue-500 flex flex-col justify-between">
                     <div>
