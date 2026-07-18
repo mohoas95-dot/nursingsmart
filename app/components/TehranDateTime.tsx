@@ -35,14 +35,20 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
           </div>
         </div>
 
-        <div className="relative h-20 w-20 shrink-0 rounded-full border-4 border-white/25 bg-slate-900/25 shadow-inner sm:h-24 sm:w-24" aria-label="ساعت عقربه‌ای تهران">
-          {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(i => (
-            <span key={i} className="absolute left-1/2 top-1/2 h-[2px] w-1.5 origin-[-30px] rounded bg-white/70 sm:origin-[-38px]" style={{ transform: `translate(30px,-1px) rotate(${i * 30}deg)` }} />
-          ))}
-          <span className="absolute left-1/2 top-1/2 h-[25%] w-1 -translate-x-1/2 -translate-y-full origin-bottom rounded-full bg-white" style={{ transform: `translate(-50%, -100%) rotate(${hours * 30 + minutes / 2}deg)` }} />
-          <span className="absolute left-1/2 top-1/2 h-[34%] w-0.5 -translate-x-1/2 -translate-y-full origin-bottom rounded-full bg-emerald-200" style={{ transform: `translate(-50%, -100%) rotate(${minutes * 6}deg)` }} />
-          <span className="absolute left-1/2 top-1/2 h-[38%] w-px -translate-x-1/2 -translate-y-full origin-bottom bg-rose-400" style={{ transform: `translate(-50%, -100%) rotate(${seconds * 6}deg)` }} />
-          <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-emerald-200 bg-white" />
+        <div className="relative h-24 w-24 shrink-0 rounded-full border-[5px] border-slate-300 bg-white shadow-[inset_0_0_0_2px_#94a3b8,0_5px_16px_rgba(0,0,0,.3)] sm:h-28 sm:w-28" aria-label="ساعت عقربه‌ای تهران">
+          {Array.from({ length: 60 }, (_, i) => {
+            const angle = i * 6 * Math.PI / 180;
+            const radius = i % 5 === 0 ? 41 : 42;
+            return <i key={i} className={`absolute rounded-full bg-slate-800 ${i % 5 === 0 ? 'h-1.5 w-0.5' : 'h-1 w-px opacity-60'}`} style={{ left: `calc(50% + ${Math.sin(angle) * radius}%)`, top: `calc(50% - ${Math.cos(angle) * radius}%)`, transform: `translate(-50%,-50%) rotate(${i * 6}deg)` }} />;
+          })}
+          <b className="absolute left-1/2 top-[7%] -translate-x-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۱۲</b>
+          <b className="absolute right-[8%] top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۳</b>
+          <b className="absolute bottom-[5%] left-1/2 -translate-x-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۶</b>
+          <b className="absolute left-[8%] top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۹</b>
+          <span className="absolute left-1/2 top-1/2 h-[25%] w-1.5 origin-bottom rounded-full bg-slate-950 shadow" style={{ transform: `translate(-50%, -100%) rotate(${hours * 30 + minutes / 2}deg)` }} />
+          <span className="absolute left-1/2 top-1/2 h-[34%] w-1 origin-bottom rounded-full bg-slate-900 shadow" style={{ transform: `translate(-50%, -100%) rotate(${minutes * 6}deg)` }} />
+          <span className="absolute left-1/2 top-1/2 h-[38%] w-0.5 origin-bottom bg-red-500" style={{ transform: `translate(-50%, -100%) rotate(${seconds * 6}deg)` }} />
+          <span className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-slate-700 bg-slate-950 shadow" />
         </div>
       </div>
     </section>

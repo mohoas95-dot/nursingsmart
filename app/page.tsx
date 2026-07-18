@@ -214,19 +214,28 @@ export default function Home() {
   // دریافت خودکار تعطیلات و مناسبت‌های رسمی ایران؛ تمام محاسبات موجود از customHolidays استفاده می‌کنند.
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setCalendarOnline(false);
-    fetch(`/api/calendar?year=${currentYear}&month=${currentMonth}`)
-      .then(response => { if (!response.ok) throw new Error('calendar sync failed'); return response.json(); })
-      .then(data => {
-        if (cancelled) return;
-        setCustomHolidays(previous => ({ ...data.holidays, ...previous }));
+    setCalendarOccasions({});
+
+    const syncOfficialCalendar = async (attempt = 0) => {
+      try {
+        const response = await fetch(`/api/calendar?year=${currentYear}&month=${currentMonth}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('calendar sync failed');
+        const data = await response.json();
+        if (cancelled || data.year !== currentYear || data.month !== currentMonth || !data.online) return;
+        // در حالت آنلاین، مرجع تمام جدول‌ها فقط داده رسمی همان ماه است؛ داده ماه قبل ادغام نمی‌شود.
+        setCustomHolidays(data.holidays || {});
         setCalendarOccasions(data.occasions || {});
         setFirstDayOfWeekIndex(data.firstDayOfWeek);
         setCalendarSyncedAt(data.syncedAt || new Date().toISOString());
         setCalendarOnline(true);
-      })
-      .catch(() => { if (!cancelled) setCalendarOnline(false); });
-    return () => { cancelled = true; };
+      } catch {
+        if (!cancelled && attempt < 3) retryTimer = setTimeout(() => syncOfficialCalendar(attempt + 1), 2500 * (attempt + 1));
+      }
+    };
+    syncOfficialCalendar();
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [currentYear, currentMonth]);
 
   // ساعت رسمی و قراردادی همیشه از تقویم فعال محاسبه می‌شود و امکان ورود دستی ندارد.
