@@ -40,7 +40,7 @@ export function buildOfficialMonth(payload: OfficialCalendarPayload): OfficialMo
 }
 
 export async function fetchOfficialMonth(year: number, month: number, signal?: AbortSignal): Promise<OfficialMonth> {
-  const response = await fetch(`/api/calendar?year=${year}&month=${month}`, { cache: 'no-store', signal });
+  const response = await fetch(`/api/calendar?year=${year}&month=${month}&provider=bahesab-v1`, { cache: 'no-store', signal });
   if (!response.ok) throw new Error('OFFICIAL_CALENDAR_UNAVAILABLE');
   const payload = await response.json() as OfficialCalendarPayload;
   if (!payload.online || payload.year !== year || payload.month !== month) throw new Error('INVALID_OFFICIAL_CALENDAR');

@@ -5762,7 +5762,11 @@ export default function Home() {
                       {reqSelectedDays.length === calendarDays.length ? 'حذف همه انتخاب‌ها' : 'انتخاب تمام روزهای ماه'}
                     </button>
                   </div>
-                  <div className="grid grid-cols-6 sm:grid-cols-7 gap-1.5 max-h-[160px] overflow-y-auto p-1.5 scrollbar-thin rounded-xl border border-slate-150 bg-white">
+                  <div className="grid grid-cols-7 gap-1.5 max-h-[210px] overflow-y-auto p-2 scrollbar-thin rounded-2xl border border-slate-200 bg-white shadow-inner">
+                    {WEEKDAYS.map((weekday, index) => (
+                      <div key={`req-weekday-${weekday}`} className={`sticky top-0 z-10 rounded-lg py-1 text-center text-[8px] font-black ${index === 6 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{weekday[0]}</div>
+                    ))}
+                    {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, index) => <span key={`req-empty-${index}`} />)}
                     {calendarDays.map(d => {
                       const isSelected = reqSelectedDays.includes(d.day);
                       return (
@@ -5776,19 +5780,27 @@ export default function Home() {
                               setReqSelectedDays([...reqSelectedDays, d.day].sort((a,b) => a-b));
                             }
                           }}
-                          className={`py-1.5 text-[11px] font-black rounded-xl border transition-all flex flex-col items-center justify-center cursor-pointer ${
+                          title={d.holidayTitle || (calendarOccasions[d.day] || []).join('، ')}
+                          className={`relative min-h-12 py-1.5 text-[11px] font-black rounded-xl border transition-all flex flex-col items-center justify-center cursor-pointer ${
                             isSelected
-                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105'
-                              : d.dayOfWeek === 6
-                                ? 'bg-rose-50 text-rose-700 border-rose-100 hover:bg-rose-100/50'
-                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                              ? d.isHoliday
+                                ? 'bg-rose-600 text-white border-rose-700 shadow-md scale-105'
+                                : 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105'
+                              : d.isHoliday
+                                ? 'bg-rose-100 text-rose-700 border-rose-300 hover:bg-rose-200'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
                           }`}
                         >
+                          {d.isHoliday && <span className={`absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-rose-500'}`} />}
                           <span className="text-xs font-mono font-extrabold">{d.day}</span>
                           <span className="text-[8px] opacity-75">{WEEKDAYS[d.dayOfWeek][0]}</span>
                         </button>
                       );
                     })}
+                  </div>
+                  <div className="flex items-center gap-3 px-1 text-[9px] font-bold text-slate-500">
+                    <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-rose-100 ring-1 ring-rose-300" /> جمعه و تعطیل رسمی</span>
+                    <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-indigo-600" /> روز انتخاب‌شده</span>
                   </div>
                   <div className="text-[11px] text-slate-500 font-bold flex justify-between items-center px-1">
                     <span>تعداد روزهای انتخاب‌شده:</span>

@@ -9,8 +9,46 @@ const cache = new Map<string, { expires: number; value: unknown }>();
 const SOURCES = {
   holidays: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/holidays-iran.json',
   jalali: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/iran-jalali-data.txt',
-  hijri: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/iran-hijri-data.txt'
+  hijri: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/iran-hijri-data.txt',
+  bahesab: 'https://www.bahesab.ir/time/calendar/'
 };
+
+const MONTH_NAMES = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
+
+function englishDigits(value: string) {
+  return value.replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+}
+
+/** استخراج مناسبت همان سال از منبع به‌روز معرفی‌شده؛ «تعطیل» معیار رسمی بودن است. */
+function parseBahesab(html: string, year: number, month: number) {
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&laquo;|&#171;/g, '«').replace(/&raquo;|&#187;/g, '»')
+    .replace(/&nbsp;|&#160;/g, ' ').replace(/&zwnj;|&#8204;/g, '‌')
+    .replace(/\s+/g, ' ');
+  const monthName = MONTH_NAMES[month - 1];
+  const marker = `مناسبتهای ${monthName} ${year}`;
+  const normalized = englishDigits(text);
+  const start = normalized.indexOf(marker);
+  if (start < 0) return null;
+  const nextMonth = month === 12 ? '' : `مناسبتهای ${MONTH_NAMES[month]} ${year}`;
+  const end = nextMonth ? normalized.indexOf(nextMonth, start + marker.length) : -1;
+  const section = normalized.slice(start + marker.length, end > start ? end : undefined);
+  const occasions: Record<number, string[]> = {};
+  const holidays: Record<number, string> = {};
+  const dayPattern = new RegExp(`(\\d{1,2}) ${monthName} (.*?)(?= \\d{1,2} ${monthName} |$)`, 'g');
+  for (const match of section.matchAll(dayPattern)) {
+    const day = Number(match[1]);
+    if (day < 1 || day > 31) continue;
+    const titles = match[2].split(/\s+-\s+/).map(title => title.trim()).filter(Boolean);
+    occasions[day] = titles.map(title => title.replace(/\s*«تعطیل»\s*/g, '').trim());
+    const official = titles.filter(title => title.includes('«تعطیل»'));
+    if (official.length) holidays[day] = official.map(title => title.replace(/\s*«تعطیل»\s*/g, '').trim()).join('، ');
+  }
+  return Object.keys(occasions).length ? { occasions, holidays } : null;
+}
 
 function parseEvents(text: string): Map<string, string[]> {
   const result = new Map<string, string[]>();
@@ -50,13 +88,14 @@ export async function GET(request: NextRequest) {
   if (cached && cached.expires > Date.now()) return NextResponse.json(cached.value);
 
   try {
-    // سه فایل سبک به‌جای ۲۹ تا ۳۱ درخواست روزانه؛ زمان پاسخ از حدود چند دقیقه به چند ثانیه کاهش می‌یابد.
+    // منابع به‌صورت موازی دریافت می‌شوند؛ باحساب مرجع اصلی تاریخ‌های قمری متغیر است.
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    const [rulesText, jalaliText, hijriText] = await Promise.all([
+    const [rulesText, jalaliText, hijriText, bahesabText] = await Promise.all([
       fetchText(SOURCES.holidays, controller.signal),
       fetchText(SOURCES.jalali, controller.signal),
-      fetchText(SOURCES.hijri, controller.signal)
+      fetchText(SOURCES.hijri, controller.signal),
+      fetchText(SOURCES.bahesab, controller.signal).catch(() => null)
     ]);
     clearTimeout(timeout);
 
@@ -81,10 +120,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // برای سالی که باحساب منتشر کرده، داده آن جایگزین تبدیل تقریبی قمری Intl می‌شود؛ علت اختلاف یک‌روزه همین تبدیل بود.
+    const bahesabMonth = bahesabText ? parseBahesab(bahesabText, year, month) : null;
+    const finalHolidays = bahesabMonth?.holidays || holidays;
+    const finalOccasions = bahesabMonth?.occasions || occasions;
+
     const value = {
-      year, month, holidays, occasions,
+      year, month, holidays: finalHolidays, occasions: finalOccasions,
       firstDayOfWeek: iranWeekday(year, month, 1),
-      source: 'شورای مرکز تقویم مؤسسه ژئوفیزیک دانشگاه تهران / StarCalendar',
+      source: bahesabMonth ? 'bahesab.ir/time/calendar' : 'شورای مرکز تقویم مؤسسه ژئوفیزیک دانشگاه تهران / StarCalendar',
       online: true,
       syncedAt: new Date().toISOString()
     };
