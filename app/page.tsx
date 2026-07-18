@@ -209,6 +209,7 @@ export default function Home() {
   const [calendarOccasions, setCalendarOccasions] = useState<{ [day: number]: string[] }>({});
   const [calendarSyncedAt, setCalendarSyncedAt] = useState<string | null>(null);
   const [calendarOnline, setCalendarOnline] = useState(false);
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState<number | null>(null);
 
   // دریافت خودکار تعطیلات و مناسبت‌های رسمی ایران؛ تمام محاسبات موجود از customHolidays استفاده می‌کنند.
   useEffect(() => {
@@ -228,8 +229,26 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [currentYear, currentMonth]);
 
+  // ساعت رسمی و قراردادی همیشه از تقویم فعال محاسبه می‌شود و امکان ورود دستی ندارد.
+  useEffect(() => {
+    const days = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
+    const workDays = days.filter(day => !day.isHoliday).length;
+    const workingThursdays = days.filter(day => day.dayOfWeek === 5 && !day.isHoliday).length;
+    const official = (workDays * 7) - (workingThursdays * 2);
+    const contract = official + 14;
+    setSettings(previous => {
+      if (previous.dutyHours.official === official && previous.dutyHours.contract === contract && previous.autoCalculateDutyHours) return previous;
+      return { ...previous, autoCalculateDutyHours: true, dutyHours: { ...previous.dutyHours, official, contract } };
+    });
+  }, [currentYear, currentMonth, customHolidays, firstDayOfWeekIndex]);
+
   // State for monthly approved duty hours
   const [monthlyDutyHours, setMonthlyDutyHours] = useState<any>(null);
+  const effectiveDutyHours = {
+    ...(monthlyDutyHours || settings.dutyHours),
+    official: settings.dutyHours.official,
+    contract: settings.dutyHours.contract
+  };
 
   // Schedule matrix
   const [schedule, setSchedule] = useState<MonthlySchedule | null>(null);
@@ -276,7 +295,7 @@ export default function Home() {
   // Compiled reports from current schedule dynamically and reactively
   const reports = React.useMemo(() => {
     if (schedule && personnel.length > 0 && settings) {
-      return generatePersonnelReports(currentYear, currentMonth, personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
+      return generatePersonnelReports(currentYear, currentMonth, personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, effectiveDutyHours);
     }
     return [];
   }, [personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
@@ -3083,9 +3102,9 @@ export default function Home() {
                     </div>
                     <div className="grid grid-cols-3 gap-2" dir="rtl">
                       {[
-                        { label: 'رسمی', value: monthlyDutyHours?.official ?? settings.dutyHours.official, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
-                        { label: 'قراردادی', value: monthlyDutyHours?.contract ?? settings.dutyHours.contract, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-                        { label: 'طرح / وظیفه', value: monthlyDutyHours?.conscript ?? settings.dutyHours.conscript, tone: 'bg-violet-50 text-violet-700 border-violet-100' }
+                        { label: 'رسمی', value: effectiveDutyHours.official, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+                        { label: 'قراردادی', value: effectiveDutyHours.contract, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+                        { label: 'طرح / وظیفه', value: effectiveDutyHours.conscript, tone: 'bg-violet-50 text-violet-700 border-violet-100' }
                       ].map((item) => (
                         <div key={item.label} className={`rounded-lg border px-2 py-2.5 text-center ${item.tone}`}>
                           <div className="text-[9px] font-black sm:text-[10px]">{item.label}</div>
@@ -3122,19 +3141,41 @@ export default function Home() {
                         {Array.from({ length: firstDayOfWeekIndex || 0 }).map((_, i) => (
                           <div key={`empty-${i}`} className="p-2 border border-transparent"></div>
                         ))}
-                        {calendarDays.map((d) => (
-                          <div 
-                            key={d.day} 
-                            className={`flex flex-col items-center justify-center p-2 rounded-xl border relative ${
-                              d.isHoliday 
-                                ? 'border-rose-100 bg-rose-50/50 text-rose-700' 
-                                : 'border-slate-100 bg-white text-slate-700'
-                            }`}
-                          >
-                            <span className="text-xs font-mono font-bold block">{d.day}</span>
-                          </div>
-                        ))}
+                        {calendarDays.map((d) => {
+                          const hasOccasion = (calendarOccasions[d.day] || []).length > 0;
+                          return (
+                            <button
+                              type="button"
+                              key={d.day}
+                              onClick={() => setSelectedCalendarDay(d.day)}
+                              className={`relative flex min-h-11 flex-col items-center justify-center rounded-xl border p-2 transition-all ${
+                                d.isHoliday
+                                  ? 'border-rose-200 bg-rose-50 text-rose-700 shadow-sm'
+                                  : 'border-slate-100 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50'
+                              } ${selectedCalendarDay === d.day ? 'ring-2 ring-emerald-500 ring-offset-1' : ''}`}
+                              aria-label={`روز ${d.day}${d.isHoliday ? '، تعطیل' : ''}`}
+                            >
+                              <span className="block font-mono text-xs font-black">{d.day}</span>
+                              {hasOccasion && <span className={`mt-1 h-1.5 w-1.5 rounded-full ${d.isHoliday ? 'bg-rose-500' : 'bg-indigo-500'}`} />}
+                            </button>
+                          );
+                        })}
                       </div>
+                      <div className="mt-4 flex flex-wrap gap-3 text-[9px] font-bold text-slate-500">
+                        <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-rose-100 ring-1 ring-rose-300" /> تعطیل رسمی</span>
+                        <span className="flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-indigo-500" /> دارای مناسبت</span>
+                      </div>
+                      {selectedCalendarDay !== null && (
+                        <div className={`mt-4 rounded-2xl border p-4 text-right ${calendarDays.find(day => day.day === selectedCalendarDay)?.isHoliday ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <strong className="text-xs text-slate-800">{selectedCalendarDay} {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}</strong>
+                            {calendarDays.find(day => day.day === selectedCalendarDay)?.isHoliday && <span className="rounded-full bg-rose-600 px-2 py-1 text-[9px] font-black text-white">تعطیل رسمی</span>}
+                          </div>
+                          <p className="mt-2 text-[11px] font-bold leading-6 text-slate-600">
+                            {(calendarOccasions[selectedCalendarDay] || []).join('، ') || customHolidays[selectedCalendarDay] || (calendarDays.find(day => day.day === selectedCalendarDay)?.isFriday ? 'جمعه؛ تعطیل هفتگی' : 'مناسبت رسمی ثبت نشده است.')}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -3149,7 +3190,7 @@ export default function Home() {
                         استخدام: {selectedPersonnelUser?.employmentType === 'official' ? 'رسمی' : selectedPersonnelUser?.employmentType === 'contract' ? 'قراردادی' : selectedPersonnelUser?.employmentType === 'conscript' ? 'طرح/وظیفه' : 'اضافه‌کار'}
                       </div>
                       <div className="text-4xl font-mono font-black text-emerald-600">
-                        {monthlyDutyHours ? monthlyDutyHours[selectedPersonnelUser?.employmentType || 'official'] : settings.dutyHours[selectedPersonnelUser?.employmentType || 'official']} <span className="text-lg font-sans font-extrabold text-emerald-700/60">ساعت</span>
+                        {effectiveDutyHours[selectedPersonnelUser?.employmentType || 'official']} <span className="text-lg font-sans font-extrabold text-emerald-700/60">ساعت</span>
                       </div>
                     </div>
                   </div>
@@ -4733,6 +4774,14 @@ export default function Home() {
                   </div>
                 </div>
 
+                <details className="group mb-6 overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/40">
+                  <summary className="flex cursor-pointer list-none items-center justify-between p-4 text-sm font-black text-slate-800">
+                    <span>تنظیم ساعت دستی</span>
+                    <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] text-amber-700 group-open:hidden">خاموش</span>
+                    <span className="hidden rounded-full bg-emerald-100 px-2 py-1 text-[10px] text-emerald-700 group-open:inline">روشن</span>
+                  </summary>
+                  <div className="border-t border-amber-200 p-4">
+                    <p className="mb-4 text-[10px] font-bold leading-6 text-amber-700">فقط هنگامی استفاده کنید که اتصال تقویم آنلاین کشور با مشکل مواجه شده باشد.</p>
                 <div className="space-y-3 bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-6">
                   <div>
                     <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
@@ -4887,6 +4936,8 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
+                  </div>
+                </details>
 
               </div>
 
@@ -4908,92 +4959,19 @@ export default function Home() {
                         محاسبه و تنظیم ساعت موظفی ماهانه پرسنل
                       </h3>
                       <p className="text-xs text-slate-400 mt-1 font-semibold">
-                        ساعت موظفی پرسنل را می‌توانید به صورت دستی وارد کرده یا محاسبه خودکار آیین‌نامه‌ای بر اساس قرارهای کاری ماه طوری تنظیم کنید که با تغییر تعطیلات تقویم آپدیت شود.
+                        ساعت موظفی رسمی و قراردادی همواره و به‌صورت غیرقابل ویرایش از تقویم آنلاین محاسبه می‌شود؛ ساعت کادر طرح / وظیفه همچنان قابل ویرایش است.
                       </p>
                     </div>
 
-                    <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                      <div className="space-y-0.5 ml-4">
-                        <span className="text-xs font-black text-slate-800 block">محاسبه خودکار ساعت موظفی بر اساس تعطیلات تقویم (فرمول وزارتخانه)</span>
-                        <span className="text-[10px] text-slate-400 font-semibold block leading-relaxed">
-                          با فعال‌سازی این مورد، ساعت موظفی رسمی و قراردادی بر اساس تعداد روزهای غیرجمعه و پنجشنبه‌های غیرتعطیل ماه به صورت پویا محاسبه می‌شود.
-                        </span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                        <input 
-                          type="checkbox" 
-                          checked={!!settings.autoCalculateDutyHours} 
-                          onChange={(e) => {
-                            const isChecked = e.target.checked;
-                            const updated = {
-                              ...settings,
-                              autoCalculateDutyHours: isChecked,
-                              ...(isChecked ? {
-                                dutyHours: {
-                                  ...settings.dutyHours,
-                                  official: z_calc,
-                                  contract: contract_calc
-                                }
-                              } : {})
-                            };
-                            setSettings(updated);
-                            saveState(personnel, requests, settings, updated, customHolidays, { mode: 'full_resolve' });
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                      </label>
-                    </div>
-
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
-                      <div className="bg-slate-50 p-3.5 border border-slate-200 rounded-2xl relative">
-                        <label className="block text-[10px] font-black text-slate-500 mb-1.5 flex justify-between items-center">
-                          <span>ساعت موظفی رسمی (ساعت)</span>
-                          {settings.autoCalculateDutyHours && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold">محاسبه شده: {z_calc}h</span>}
-                        </label>
-                        <input 
-                          type="number"
-                          value={settings.dutyHours.official}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            const updated = {
-                              ...settings,
-                              autoCalculateDutyHours: false,
-                              dutyHours: {
-                                ...settings.dutyHours,
-                                official: val
-                              }
-                            };
-                            setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, { mode: 'full_resolve' });
-                          }}
-                          className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
-                        />
+                      <div className="bg-emerald-50 p-3.5 border border-emerald-200 rounded-2xl">
+                        <label className="block text-[10px] font-black text-emerald-700 mb-1.5">ساعت موظفی رسمی ـ محاسبه خودکار تقویم</label>
+                        <div className="w-full rounded-xl border border-emerald-200 bg-white px-2.5 py-2 text-center font-mono text-sm font-black text-slate-800">{z_calc}</div>
                       </div>
 
-                      <div className="bg-slate-50 p-3.5 border border-slate-200 rounded-2xl relative">
-                        <label className="block text-[10px] font-black text-slate-500 mb-1.5 flex justify-between items-center">
-                          <span>ساعت موظفی قراردادی (ساعت)</span>
-                          {settings.autoCalculateDutyHours && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold">محاسبه شده: {contract_calc}h</span>}
-                        </label>
-                        <input 
-                          type="number"
-                          value={settings.dutyHours.contract}
-                          onChange={(e) => {
-                            const val = Number(e.target.value);
-                            const updated = {
-                              ...settings,
-                              autoCalculateDutyHours: false,
-                              dutyHours: {
-                                ...settings.dutyHours,
-                                contract: val
-                              }
-                            };
-                            setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, { mode: 'full_resolve' });
-                          }}
-                          className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
-                        />
+                      <div className="bg-sky-50 p-3.5 border border-sky-200 rounded-2xl">
+                        <label className="block text-[10px] font-black text-sky-700 mb-1.5">ساعت موظفی قراردادی ـ محاسبه خودکار تقویم</label>
+                        <div className="w-full rounded-xl border border-sky-200 bg-white px-2.5 py-2 text-center font-mono text-sm font-black text-slate-800">{contract_calc}</div>
                       </div>
 
                       <div className="bg-slate-50 p-3.5 border border-slate-200 rounded-2xl">
