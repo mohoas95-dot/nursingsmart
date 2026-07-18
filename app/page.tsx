@@ -3059,6 +3059,16 @@ export default function Home() {
                     </div>
                   </div>
 
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-blue-500 flex flex-col justify-between">
+                    <div>
+                      <div className="text-slate-500 text-[10px] font-black mb-1">کل درخواست‌های ماه</div>
+                      <div className="text-2xl font-black text-blue-600 font-mono">{requests.length} درخواست</div>
+                    </div>
+                    <div className="text-blue-600 text-[10px] mt-2 font-bold bg-blue-50 border border-blue-100/50 px-2 py-0.5 rounded w-max">
+                      مرخصی و آف ثبت شده
+                    </div>
+                  </div>
+
                   <div className="col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div>
@@ -3089,15 +3099,6 @@ export default function Home() {
 
 
 
-                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm border-r-4 border-r-blue-500 flex flex-col justify-between">
-                    <div>
-                      <div className="text-slate-500 text-[10px] font-black mb-1">کل درخواست‌های ماه</div>
-                      <div className="text-2xl font-black text-blue-600 font-mono">{requests.length} درخواست</div>
-                    </div>
-                    <div className="text-blue-600 text-[10px] mt-2 font-bold bg-blue-50 border border-blue-100/50 px-2 py-0.5 rounded w-max">
-                      مرخصی و آف ثبت شده
-                    </div>
-                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden">
