@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import TehranDateTime from './components/TehranDateTime';
 import { AppDatabaseState } from '../lib/s3Storage';
 import { 
   getJalaliMonthDays, 
@@ -205,6 +206,27 @@ export default function Home() {
 
   const [customHolidays, setCustomHolidays] = useState<{ [day: number]: string }>(INITIAL_HOLIDAYS_1405_03);
   const [firstDayOfWeekIndex, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
+  const [calendarOccasions, setCalendarOccasions] = useState<{ [day: number]: string[] }>({});
+  const [calendarSyncedAt, setCalendarSyncedAt] = useState<string | null>(null);
+  const [calendarOnline, setCalendarOnline] = useState(false);
+
+  // دریافت خودکار تعطیلات و مناسبت‌های رسمی ایران؛ تمام محاسبات موجود از customHolidays استفاده می‌کنند.
+  useEffect(() => {
+    let cancelled = false;
+    setCalendarOnline(false);
+    fetch(`/api/calendar?year=${currentYear}&month=${currentMonth}`)
+      .then(response => { if (!response.ok) throw new Error('calendar sync failed'); return response.json(); })
+      .then(data => {
+        if (cancelled) return;
+        setCustomHolidays(previous => ({ ...data.holidays, ...previous }));
+        setCalendarOccasions(data.occasions || {});
+        setFirstDayOfWeekIndex(data.firstDayOfWeek);
+        setCalendarSyncedAt(data.syncedAt || new Date().toISOString());
+        setCalendarOnline(true);
+      })
+      .catch(() => { if (!cancelled) setCalendarOnline(false); });
+    return () => { cancelled = true; };
+  }, [currentYear, currentMonth]);
 
   // State for monthly approved duty hours
   const [monthlyDutyHours, setMonthlyDutyHours] = useState<any>(null);
@@ -2865,6 +2887,7 @@ export default function Home() {
         </div>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
+          <TehranDateTime lastSync={calendarSyncedAt} />
           
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-2 text-xs">
@@ -4696,7 +4719,11 @@ export default function Home() {
                     <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
                       <span className="text-xl">📅</span> تنظیمات تقویم هوشمند و مدیریت تعطیلات
                     </h3>
-                    <p className="text-slate-400 text-[11px] font-bold mt-1">تغییر دهنده روز شروع اول فیلد، و تخصیص مستقیم روزهای هفته و جمعه‌ها جهت اجرای خودکار شیفت‌ها</p>
+                    <p className="text-slate-400 text-[11px] font-bold mt-1">تقویم رسمی شمسی ایران؛ روز آغاز ماه، تعطیلات و مناسبت‌ها به‌صورت آنلاین دریافت و در محاسبات شیفت اعمال می‌شوند.</p>
+                    <div className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-black ${calendarOnline ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                      <span className={`h-2 w-2 rounded-full ${calendarOnline ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+                      {calendarOnline ? 'متصل به تقویم رسمی ایران • همگام‌سازی خودکار فعال' : 'در حال اتصال؛ محاسبات داخلی تقویم فعال است'}
+                    </div>
                   </div>
                   
                   <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-[11px] font-extrabold px-3 py-1.5 rounded-full flex items-center gap-2 shrink-0">
@@ -4812,8 +4839,9 @@ export default function Home() {
                               </label>
                             </div>
 
-                            <div className="col-span-2 text-center font-mono font-black text-sm text-slate-800">
+                            <div className="col-span-2 text-center font-mono font-black text-sm text-slate-800" title={(calendarOccasions[d.day] || []).join('، ')}>
                               {d.day}
+                              {calendarOccasions[d.day]?.length ? <span className="mx-auto mt-1 block h-1.5 w-1.5 rounded-full bg-indigo-500" /> : null}
                             </div>
 
                             <div className="col-span-3">
