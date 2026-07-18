@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getJalaliMonthDays, getJalaliWeekday } from '../../../lib/jalali';
+import { jalaaliMonthLength } from 'jalaali-js';
+import { iranWeekday } from '../../../lib/calendar/service';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest) {
   const cached = cache.get(key);
   if (cached && cached.expires > Date.now()) return NextResponse.json(cached.value);
 
-  const dayCount = getJalaliMonthDays(year, month);
+  const dayCount = jalaaliMonthLength(year, month);
   const results: CalendarDay[] = [];
   // حداکثر چهار اتصال هم‌زمان برای جلوگیری از پاسخ ناقص سرویس تقویم رسمی.
   for (let start = 1; start <= dayCount; start += 4) {
@@ -65,14 +66,14 @@ export async function GET(request: NextRequest) {
   const occasions: Record<number, string[]> = {};
   for (const item of results) {
     if (item.events.length) occasions[item.day] = item.events.map(e => e.title);
-    if (item.isHoliday && getJalaliWeekday(year, month, item.day) !== 6) {
+    if (item.isHoliday && iranWeekday(year, month, item.day) !== 6) {
       holidays[item.day] = item.events.filter(e => e.isHoliday).map(e => e.title).join('، ') || 'تعطیل رسمی';
     }
   }
 
   const value = {
     year, month, holidays, occasions,
-    firstDayOfWeek: getJalaliWeekday(year, month, 1),
+    firstDayOfWeek: iranWeekday(year, month, 1),
     source: 'holidayapi.ir', online: true,
     syncedAt: new Date().toISOString()
   };

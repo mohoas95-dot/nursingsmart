@@ -41,10 +41,6 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
             const radius = i % 5 === 0 ? 41 : 42;
             return <i key={i} className={`absolute rounded-full bg-slate-800 ${i % 5 === 0 ? 'h-1.5 w-0.5' : 'h-1 w-px opacity-60'}`} style={{ left: `calc(50% + ${Math.sin(angle) * radius}%)`, top: `calc(50% - ${Math.cos(angle) * radius}%)`, transform: `translate(-50%,-50%) rotate(${i * 6}deg)` }} />;
           })}
-          <b className="absolute left-1/2 top-[7%] -translate-x-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۱۲</b>
-          <b className="absolute right-[8%] top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۳</b>
-          <b className="absolute bottom-[5%] left-1/2 -translate-x-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۶</b>
-          <b className="absolute left-[8%] top-1/2 -translate-y-1/2 text-[9px] font-black text-slate-900 sm:text-[10px]">۹</b>
           <span className="absolute left-1/2 top-1/2 h-[25%] w-1.5 origin-bottom rounded-full bg-slate-950 shadow" style={{ transform: `translate(-50%, -100%) rotate(${hours * 30 + minutes / 2}deg)` }} />
           <span className="absolute left-1/2 top-1/2 h-[34%] w-1 origin-bottom rounded-full bg-slate-900 shadow" style={{ transform: `translate(-50%, -100%) rotate(${minutes * 6}deg)` }} />
           <span className="absolute left-1/2 top-1/2 h-[38%] w-0.5 origin-bottom bg-red-500" style={{ transform: `translate(-50%, -100%) rotate(${seconds * 6}deg)` }} />

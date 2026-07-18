@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import TehranDateTime from './components/TehranDateTime';
+import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
 import { AppDatabaseState } from '../lib/s3Storage';
 import { 
   getJalaliMonthDays, 
@@ -26,9 +27,8 @@ import {
 } from '../lib/types';
 import { 
   INITIAL_PERSONNEL, 
-  INITIAL_SETTINGS, 
-  INITIAL_REQUESTS, 
-  INITIAL_HOLIDAYS_1405_03 
+  INITIAL_SETTINGS,
+  INITIAL_REQUESTS
 } from '../lib/mockData';
 import { 
   solveNursingSchedule, 
@@ -179,64 +179,40 @@ export default function Home() {
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
   const [dbChecked, setDbChecked] = useState<boolean>(false);
 
-  const getCurrentJalaliDate = () => {
-    try {
-      const parts = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { 
-        year: 'numeric', 
-        month: 'numeric', 
-        day: 'numeric',
-        timeZone: 'Asia/Tehran' 
-      }).format(new Date()).split('/');
-      return {
-        year: parseInt(parts[0], 10),
-        month: parseInt(parts[1], 10),
-        day: parseInt(parts[2], 10)
-      };
-    } catch(e) {
-      return { year: 1405, month: 4, day: 1 };
-    }
-  };
-
-  // Year & Month (Dynamic based on current local time)
-  const [currentYear, setCurrentYear] = useState<number>(() => getCurrentJalaliDate().year);
-  const [currentMonth, setCurrentMonth] = useState<number>(() => getCurrentJalaliDate().month);
+  // تنها منبع سال، ماه، چیدمان هفته و تعطیلات رسمی در کل رابط کاربری
+  const officialCalendarState = useOfficialCalendar();
+  const currentYear = officialCalendarState.year;
+  const currentMonth = officialCalendarState.month;
+  const setCurrentYear = officialCalendarState.setYear;
+  const setCurrentMonth = officialCalendarState.setMonth;
 
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(() => typeof window === 'undefined');
 
-  const [customHolidays, setCustomHolidays] = useState<{ [day: number]: string }>(INITIAL_HOLIDAYS_1405_03);
-  const [firstDayOfWeekIndex, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
+  const [legacyHolidays, setCustomHolidays] = useState<{ [day: number]: string }>({});
+  const [legacyFirstDay, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
+  // Adapter نام‌های قدیمی: هنگام اتصال، خواندن فقط از Calendar SSOT انجام می‌شود.
+  const customHolidays = officialCalendarState.calendar?.holidays || legacyHolidays;
+  const firstDayOfWeekIndex = officialCalendarState.calendar?.firstDayOfWeek ?? legacyFirstDay;
   const [calendarOccasions, setCalendarOccasions] = useState<{ [day: number]: string[] }>({});
   const [calendarSyncedAt, setCalendarSyncedAt] = useState<string | null>(null);
   const [calendarOnline, setCalendarOnline] = useState(false);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<number | null>(null);
 
-  // دریافت خودکار تعطیلات و مناسبت‌های رسمی ایران؛ تمام محاسبات موجود از customHolidays استفاده می‌کنند.
+  // انتشار ماه رسمی در سازگارساز قدیمی solver؛ هیچ داده محلی اجازه بازنویسی تقویم رسمی را ندارد.
   useEffect(() => {
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    setCalendarOnline(false);
-    setCalendarOccasions({});
-
-    const syncOfficialCalendar = async (attempt = 0) => {
-      try {
-        const response = await fetch(`/api/calendar?year=${currentYear}&month=${currentMonth}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error('calendar sync failed');
-        const data = await response.json();
-        if (cancelled || data.year !== currentYear || data.month !== currentMonth || !data.online) return;
-        // در حالت آنلاین، مرجع تمام جدول‌ها فقط داده رسمی همان ماه است؛ داده ماه قبل ادغام نمی‌شود.
-        setCustomHolidays(data.holidays || {});
-        setCalendarOccasions(data.occasions || {});
-        setFirstDayOfWeekIndex(data.firstDayOfWeek);
-        setCalendarSyncedAt(data.syncedAt || new Date().toISOString());
-        setCalendarOnline(true);
-      } catch {
-        if (!cancelled && attempt < 3) retryTimer = setTimeout(() => syncOfficialCalendar(attempt + 1), 2500 * (attempt + 1));
-      }
-    };
-    syncOfficialCalendar();
-    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, [currentYear, currentMonth]);
+    const official = officialCalendarState.calendar;
+    if (!official) {
+      setCalendarOnline(false);
+      setCalendarOccasions({});
+      return;
+    }
+    setCustomHolidays(official.holidays);
+    setCalendarOccasions(official.occasions);
+    setFirstDayOfWeekIndex(official.firstDayOfWeek);
+    setCalendarSyncedAt(official.syncedAt);
+    setCalendarOnline(true);
+  }, [officialCalendarState.calendar]);
 
   // ساعت رسمی و قراردادی همیشه از تقویم فعال محاسبه می‌شود و امکان ورود دستی ندارد.
   useEffect(() => {
@@ -287,16 +263,8 @@ export default function Home() {
 
   // Load persisted selected month/year on mount to prevent defaulting to Khordad after resets
   useEffect(() => {
-    const savedYear = localStorage.getItem('hospital_current_year');
-    const savedMonth = localStorage.getItem('hospital_current_month');
     setTimeout(() => {
       setIsMounted(true);
-      if (savedYear) {
-        setCurrentYear(Number(savedYear));
-      }
-      if (savedMonth) {
-        setCurrentMonth(Number(savedMonth));
-      }
       setIsMonthLoaded(true);
     }, 0);
   }, []);
@@ -2200,7 +2168,7 @@ export default function Home() {
   };
 
   // Generate current calendar array
-  const calendarDays = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
+  const calendarDays = officialCalendarState.calendar?.days || [];
 
   // Render role badges
   const getRoleBadge = () => {
@@ -2916,6 +2884,11 @@ export default function Home() {
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
           <TehranDateTime lastSync={calendarSyncedAt} />
+          {officialCalendarState.status !== 'ready' && (
+            <div className={`rounded-2xl border p-4 text-xs font-black print:hidden ${officialCalendarState.status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`} role="status">
+              {officialCalendarState.status === 'error' ? 'اتصال به تقویم رسمی کشور برقرار نشد؛ لطفاً اتصال اینترنت را بررسی و صفحه را تازه‌سازی کنید.' : 'در حال همگام‌سازی کامل روزها، مناسبت‌ها و تعطیلات رسمی ماه انتخاب‌شده…'}
+            </div>
+          )}
           
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-2 text-xs">
