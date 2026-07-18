@@ -189,11 +189,11 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(() => typeof window === 'undefined');
 
-  const [legacyHolidays, setCustomHolidays] = useState<{ [day: number]: string }>({});
-  const [legacyFirstDay, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
-  // Adapter نام‌های قدیمی: هنگام اتصال، خواندن فقط از Calendar SSOT انجام می‌شود.
-  const customHolidays = officialCalendarState.calendar?.holidays || legacyHolidays;
-  const firstDayOfWeekIndex = officialCalendarState.calendar?.firstDayOfWeek ?? legacyFirstDay;
+  const [, setCustomHolidays] = useState<{ [day: number]: string }>({});
+  const [, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
+  // Adapter فقط خواندنی: دیتابیس و فرم‌های قدیمی هرگز منبع رسمی را بازنویسی نمی‌کنند.
+  const customHolidays = officialCalendarState.calendar?.holidays ?? {};
+  const firstDayOfWeekIndex = officialCalendarState.calendar?.firstDayOfWeek;
   const [calendarOccasions, setCalendarOccasions] = useState<{ [day: number]: string[] }>({});
   const [calendarSyncedAt, setCalendarSyncedAt] = useState<string | null>(null);
   const [calendarOnline, setCalendarOnline] = useState(false);
@@ -214,18 +214,20 @@ export default function Home() {
     setCalendarOnline(true);
   }, [officialCalendarState.calendar]);
 
-  // ساعت رسمی و قراردادی همیشه از تقویم فعال محاسبه می‌شود و امکان ورود دستی ندارد.
+  // ساعت موظفی فقط پس از دریافت کامل ماه رسمی محاسبه می‌شود؛ در زمان loading مقدار ماه قبل بازنویسی نمی‌شود.
   useEffect(() => {
-    const days = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
-    const workDays = days.filter(day => !day.isHoliday).length;
-    const workingThursdays = days.filter(day => day.dayOfWeek === 5 && !day.isHoliday).length;
+    const officialMonth = officialCalendarState.calendar;
+    if (!officialMonth) return;
+    const workDays = officialMonth.days.filter(day => !day.isHoliday).length;
+    const workingThursdays = officialMonth.days.filter(day => day.dayOfWeek === 5 && !day.isHoliday).length;
+    // فرمول موجود سیستم بدون تغییر: رسمی = (روز کاری × ۷) - (پنجشنبه کاری × ۲)، قراردادی = رسمی + ۱۴
     const official = (workDays * 7) - (workingThursdays * 2);
     const contract = official + 14;
     setSettings(previous => {
       if (previous.dutyHours.official === official && previous.dutyHours.contract === contract && previous.autoCalculateDutyHours) return previous;
       return { ...previous, autoCalculateDutyHours: true, dutyHours: { ...previous.dutyHours, official, contract } };
     });
-  }, [currentYear, currentMonth, customHolidays, firstDayOfWeekIndex]);
+  }, [officialCalendarState.calendar]);
 
   // State for monthly approved duty hours
   const [monthlyDutyHours, setMonthlyDutyHours] = useState<any>(null);

@@ -48,7 +48,8 @@ export function useOfficialCalendar() {
         setCalendar(result);
         setStatus('ready');
       } catch {
-        if (!controller.signal.aborted && attempt < 3) timer = setTimeout(() => load(attempt + 1), 2000 * (attempt + 1));
+        // یک تلاش مجدد کوتاه؛ رابط کاربری دیگر برای چند دقیقه در loading باقی نمی‌ماند.
+        if (!controller.signal.aborted && attempt < 1) timer = setTimeout(() => load(attempt + 1), 1500);
         else if (!controller.signal.aborted) setStatus('error');
       }
     };

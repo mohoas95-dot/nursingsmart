@@ -1,42 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { jalaaliMonthLength } from 'jalaali-js';
+import { jalaaliMonthLength, toGregorian } from 'jalaali-js';
 import { iranWeekday } from '../../../lib/calendar/service';
 
 export const dynamic = 'force-dynamic';
 
-interface HolidayApiEvent { description?: string; is_holiday?: boolean; additional_description?: string }
-interface HolidayApiResponse { is_holiday?: boolean; events?: HolidayApiEvent[] }
-interface CalendarDay { day: number; isHoliday: boolean; events: { title: string; isHoliday: boolean }[]; online: boolean }
-
+interface HolidayRules { holidays: { jalali: [number, number][]; hijri: [number, number][] } }
 const cache = new Map<string, { expires: number; value: unknown }>();
+const SOURCES = {
+  holidays: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/holidays-iran.json',
+  jalali: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/iran-jalali-data.txt',
+  hijri: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/iran-hijri-data.txt'
+};
 
-async function fetchDay(year: number, month: number, day: number): Promise<CalendarDay> {
-  // درخواست‌های محدود و نوبتی؛ ارسال هم‌زمان ۳۰ درخواست توسط سرویس رسمی rate-limit می‌شد.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const response = await fetch(`https://holidayapi.ir/jalali/${year}/${month}/${day}`, {
-        signal: AbortSignal.timeout(12000),
-        headers: { Accept: 'application/json', 'User-Agent': 'NursingSmart-Calendar/1.0' },
-        cache: 'no-store'
-      });
-      if (!response.ok) throw new Error(String(response.status));
-      const data = await response.json() as HolidayApiResponse;
-      const events = (data.events || []).map(event => ({
-        title: event.description || event.additional_description || 'مناسبت رسمی',
-        isHoliday: Boolean(event.is_holiday)
-      }));
-      return { day, isHoliday: Boolean(data.is_holiday) || events.some(e => e.isHoliday), events, online: true };
-    } catch {
-      if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
-    }
+function parseEvents(text: string): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  for (const line of text.split('\n')) {
+    const match = line.match(/^(\d{2})\/(\d{2})\t(.+)$/);
+    if (!match) continue;
+    result.set(`${Number(match[1])}/${Number(match[2])}`, match[3].split(' – ').map(value => value.trim()));
   }
-  return { day, isHoliday: false, events: [], online: false };
+  return result;
+}
+
+function islamicDate(gy: number, gm: number, gd: number) {
+  const parts = new Intl.DateTimeFormat('en-US-u-ca-islamic-nu-latn', {
+    timeZone: 'UTC', month: 'numeric', day: 'numeric'
+  }).formatToParts(new Date(Date.UTC(gy, gm - 1, gd)));
+  return {
+    month: Number(parts.find(part => part.type === 'month')?.value),
+    day: Number(parts.find(part => part.type === 'day')?.value)
+  };
+}
+
+async function fetchText(url: string, signal: AbortSignal) {
+  const response = await fetch(url, { signal, cache: 'no-store', headers: { Accept: 'application/json,text/plain' } });
+  if (!response.ok) throw new Error(`calendar source ${response.status}`);
+  return response.text();
 }
 
 export async function GET(request: NextRequest) {
-  const params = request.nextUrl.searchParams;
-  const year = Number(params.get('year'));
-  const month = Number(params.get('month'));
+  const year = Number(request.nextUrl.searchParams.get('year'));
+  const month = Number(request.nextUrl.searchParams.get('month'));
   if (!Number.isInteger(year) || year < 1300 || year > 1500 || !Number.isInteger(month) || month < 1 || month > 12) {
     return NextResponse.json({ error: 'سال یا ماه نامعتبر است.' }, { status: 400 });
   }
@@ -45,38 +49,48 @@ export async function GET(request: NextRequest) {
   const cached = cache.get(key);
   if (cached && cached.expires > Date.now()) return NextResponse.json(cached.value);
 
-  const dayCount = jalaaliMonthLength(year, month);
-  const results: CalendarDay[] = [];
-  // حداکثر چهار اتصال هم‌زمان برای جلوگیری از پاسخ ناقص سرویس تقویم رسمی.
-  for (let start = 1; start <= dayCount; start += 4) {
-    const batch = Array.from({ length: Math.min(4, dayCount - start + 1) }, (_, i) => fetchDay(year, month, start + i));
-    results.push(...await Promise.all(batch));
-  }
+  try {
+    // سه فایل سبک به‌جای ۲۹ تا ۳۱ درخواست روزانه؛ زمان پاسخ از حدود چند دقیقه به چند ثانیه کاهش می‌یابد.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const [rulesText, jalaliText, hijriText] = await Promise.all([
+      fetchText(SOURCES.holidays, controller.signal),
+      fetchText(SOURCES.jalali, controller.signal),
+      fetchText(SOURCES.hijri, controller.signal)
+    ]);
+    clearTimeout(timeout);
 
-  const successfulDays = results.filter(item => item.online).length;
-  if (successfulDays !== dayCount) {
-    return NextResponse.json({
-      error: 'دریافت کامل ماه از سرویس تقویم رسمی ممکن نشد.',
-      receivedDays: successfulDays,
-      expectedDays: dayCount
-    }, { status: 503, headers: { 'Retry-After': '20' } });
-  }
+    const rules = JSON.parse(rulesText) as HolidayRules;
+    const jalaliEvents = parseEvents(jalaliText);
+    const hijriEvents = parseEvents(hijriText);
+    const jalaliHolidaySet = new Set(rules.holidays.jalali.map(([m, d]) => `${m}/${d}`));
+    const hijriHolidaySet = new Set(rules.holidays.hijri.map(([m, d]) => `${m}/${d}`));
+    const holidays: Record<number, string> = {};
+    const occasions: Record<number, string[]> = {};
+    const dayCount = jalaaliMonthLength(year, month);
 
-  const holidays: Record<number, string> = {};
-  const occasions: Record<number, string[]> = {};
-  for (const item of results) {
-    if (item.events.length) occasions[item.day] = item.events.map(e => e.title);
-    if (item.isHoliday && iranWeekday(year, month, item.day) !== 6) {
-      holidays[item.day] = item.events.filter(e => e.isHoliday).map(e => e.title).join('، ') || 'تعطیل رسمی';
+    for (let day = 1; day <= dayCount; day++) {
+      const gregorian = toGregorian(year, month, day);
+      const hijri = islamicDate(gregorian.gy, gregorian.gm, gregorian.gd);
+      const jKey = `${month}/${day}`;
+      const hKey = `${hijri.month}/${hijri.day}`;
+      const events = [...(jalaliEvents.get(jKey) || []), ...(hijriEvents.get(hKey) || [])];
+      if (events.length) occasions[day] = [...new Set(events)];
+      if (jalaliHolidaySet.has(jKey) || hijriHolidaySet.has(hKey)) {
+        holidays[day] = events.join('، ') || 'تعطیل رسمی جمهوری اسلامی ایران';
+      }
     }
-  }
 
-  const value = {
-    year, month, holidays, occasions,
-    firstDayOfWeek: iranWeekday(year, month, 1),
-    source: 'holidayapi.ir', online: true,
-    syncedAt: new Date().toISOString()
-  };
-  cache.set(key, { expires: Date.now() + 12 * 60 * 60 * 1000, value });
-  return NextResponse.json(value, { headers: { 'Cache-Control': 'public, s-maxage=43200, stale-while-revalidate=86400' } });
+    const value = {
+      year, month, holidays, occasions,
+      firstDayOfWeek: iranWeekday(year, month, 1),
+      source: 'شورای مرکز تقویم مؤسسه ژئوفیزیک دانشگاه تهران / StarCalendar',
+      online: true,
+      syncedAt: new Date().toISOString()
+    };
+    cache.set(key, { expires: Date.now() + 12 * 60 * 60 * 1000, value });
+    return NextResponse.json(value, { headers: { 'Cache-Control': 'public, s-maxage=43200, stale-while-revalidate=86400' } });
+  } catch {
+    return NextResponse.json({ error: 'منبع رسمی تقویم در دسترس نیست.' }, { status: 503, headers: { 'Retry-After': '10' } });
+  }
 }
