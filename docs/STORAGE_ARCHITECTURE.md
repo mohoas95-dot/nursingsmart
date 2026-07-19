@@ -53,7 +53,11 @@ STORAGE_ENV=development npm run storage:test-conditional
 
 The test verifies create-only `If-None-Match` and stale `If-Match` both fail with HTTP 412. Do not deploy writes if the test fails. A HEAD-then-PUT implementation is not an acceptable fallback because it has a TOCTOU race.
 
-## One-time migration
+## ایجاد محیط جدید و مهاجرت
+
+برای نصب جدید، نیازی به Seed خودکار S3 نیست: ثبت‌نام صریح سرپرستار از `POST /api/onboarding/head-nurse` اولین Index و Objectهای خالی بخش را با Conditional Write ایجاد می‌کند. هر سرپرستار فقط مدیر بخش خودش است.
+
+برای مهاجرت داده قدیمی:
 
 1. Stop writes in the old application.
 2. Download and independently back up the legacy JSON.

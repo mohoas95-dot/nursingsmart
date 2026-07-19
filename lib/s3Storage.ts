@@ -94,6 +94,12 @@ function isPreconditionFailure(error: unknown): boolean {
     candidate?.code === 'PreconditionFailed';
 }
 
+function isNoSuchKey(error: unknown): boolean {
+  const candidate = error as { name?: string; Code?: string; code?: string; $metadata?: { httpStatusCode?: number } };
+  return candidate?.$metadata?.httpStatusCode === 404 || candidate?.name === 'NoSuchKey' ||
+    candidate?.Code === 'NoSuchKey' || candidate?.code === 'NoSuchKey' || candidate?.name === 'NotFound';
+}
+
 function storageEnvironment(): 'development' | 'staging' | 'production' {
   const parsed = process.env.STORAGE_ENV;
   if (parsed === 'development' || parsed === 'staging' || parsed === 'production') return parsed;
@@ -253,10 +259,73 @@ export interface DatabaseReadResult {
   source: 's3-granular';
 }
 
-export async function readDepartmentSummaries() {
+async function readDepartmentIndexOptional(): Promise<{ data: Array<{ id: string; name: string; username?: string; password?: string }>; etag: string } | null> {
+  beforeStorageCall();
   const resource = { type: 'departments' } as const;
-  const index = await readDocument(resource, DepartmentsSchema);
-  return index.data.map(department => ({ id: department.id, name: department.name }));
+  const { client, bucket } = getS3Client();
+  try {
+    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: resourceObjectKey(resource) }));
+    if (!response.Body || !response.ETag) throw new Error('S3 response is missing Body or ETag');
+    const parsed = DepartmentsSchema.safeParse(JSON.parse(await response.Body.transformToString()));
+    if (!parsed.success) throw new StorageValidationError(parsed.error.issues);
+    recordStorageSuccess();
+    return { data: parsed.data, etag: response.ETag };
+  } catch (error) {
+    if (isNoSuchKey(error)) return null;
+    recordStorageFailure();
+    throw new StorageUnavailableError('Failed to read the department index', { cause: error });
+  }
+}
+
+async function ensureCreateOnlyResource(resource: StorageResource, data: unknown) {
+  try {
+    await writeResource(resource, data, null);
+  } catch (error) {
+    if (!(error instanceof StorageConflictError)) throw error;
+    const existing = await readDocument(resource, schemaForResource(resource));
+    if (JSON.stringify(existing.data) !== JSON.stringify(data)) throw error;
+  }
+}
+
+export async function createDepartmentStorage(input: {
+  id: string;
+  name: string;
+  settings: unknown;
+}) {
+  const departmentId = input.id;
+  await ensureCreateOnlyResource({ type: 'personnel', departmentId }, []);
+  await ensureCreateOnlyResource({ type: 'requests', departmentId }, []);
+  await ensureCreateOnlyResource({ type: 'settings', departmentId }, input.settings);
+  await ensureCreateOnlyResource({ type: 'holidays', departmentId }, {});
+  await ensureCreateOnlyResource({ type: 'firstDayOfWeek', departmentId }, {});
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await readDepartmentIndexOptional();
+    const departments = current?.data || [];
+    const existing = departments.find(department => department.id === departmentId);
+    if (existing) {
+      if (existing.name !== input.name) throw new StorageConflictError('Department id is already in use');
+      return;
+    }
+    if (departments.some(department => department.name.trim() === input.name.trim())) {
+      throw new StorageConflictError('Department name is already in use');
+    }
+    try {
+      await writeResource(
+        { type: 'departments' },
+        [...departments, { id: departmentId, name: input.name.trim() }],
+        current?.etag || null,
+      );
+      return;
+    } catch (error) {
+      if (!(error instanceof StorageConflictError) || attempt === 4) throw error;
+    }
+  }
+}
+
+export async function readDepartmentSummaries() {
+  const index = await readDepartmentIndexOptional();
+  return (index?.data || []).map(department => ({ id: department.id, name: department.name }));
 }
 
 export async function readDatabaseState(options?: { departmentIds?: string[] }): Promise<DatabaseReadResult> {
