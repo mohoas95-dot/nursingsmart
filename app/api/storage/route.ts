@@ -1,72 +1,149 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readState, writeState, getS3Client } from '../../../lib/s3Storage';
+import { z } from 'zod';
+import {
+  getCircuitBreakerStatus,
+  getS3Client,
+  readDatabaseState,
+  resourceVersionId,
+  StorageConfigurationError,
+  StorageConflictError,
+  StorageUnavailableError,
+  StorageValidationError,
+  writeResource,
+} from '../../../lib/s3Storage';
+import { StorageResourceSchema } from '../../../lib/storageSchemas';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+const MAX_REQUEST_BYTES = 5 * 1024 * 1024;
+const WriteRequestSchema = z.object({
+  resource: StorageResourceSchema,
+  data: z.unknown(),
+}).strict();
+
+function noStoreJson(body: unknown, init?: ResponseInit) {
+  const response = NextResponse.json(body, init);
+  response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  response.headers.set('Pragma', 'no-cache');
+  return response;
+}
+
+function errorResponse(error: unknown) {
+  if (error instanceof StorageConflictError) {
+    return noStoreJson({ success: false, code: 'ETAG_CONFLICT', error: error.message }, { status: 409 });
+  }
+  if (error instanceof StorageValidationError) {
+    return noStoreJson({
+      success: false,
+      code: 'VALIDATION_FAILED',
+      error: error.message,
+      issues: error.issues,
+    }, { status: 422 });
+  }
+  if (error instanceof StorageUnavailableError || error instanceof StorageConfigurationError) {
+    const circuit = getCircuitBreakerStatus();
+    const response = noStoreJson({
+      success: false,
+      code: 'STORAGE_UNAVAILABLE',
+      error: error.message,
+      circuit: circuit.state,
+    }, { status: 503 });
+    if (circuit.retryAfterMs > 0) {
+      response.headers.set('Retry-After', String(Math.max(1, Math.ceil(circuit.retryAfterMs / 1000))));
+    }
+    return response;
+  }
+
+  console.error('Unexpected storage API error:', error);
+  return noStoreJson({
+    success: false,
+    code: 'INTERNAL_ERROR',
+    error: 'خطای داخلی سرور',
+  }, { status: 500 });
+}
 
 export async function GET() {
   try {
-    const { isConfigured, bucket } = getS3Client();
-    const { state, source } = await readState();
-    const endpoint = process.env.S3_ENDPOINT || '';
-    
-    return NextResponse.json({
+    const { bucket, environment } = getS3Client();
+    const result = await readDatabaseState();
+    return noStoreJson({
       success: true,
-      isConfigured,
+      isConfigured: true,
       bucket,
-      endpoint,
-      source,
-      state
+      environment,
+      source: result.source,
+      state: result.state,
+      versions: result.versions,
     });
-  } catch (err: any) {
-    console.error('API storage read error:', err);
-    return NextResponse.json({ success: false, error: 'خطای سرور در خواندن داده' }, { status: 500 });
+  } catch (error) {
+    return errorResponse(error);
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function PUT(req: NextRequest) {
   try {
-    const { isConfigured } = getS3Client();
-    const body = await req.json();
-    
-    // اگر دیتایی فرستاده نشده باشد
-    if (!body) {
-      return NextResponse.json({ success: false, error: 'درخواست معتبر نیست' }, { status: 400 });
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.toLowerCase().includes('application/json')) {
+      return noStoreJson({ success: false, code: 'UNSUPPORTED_MEDIA_TYPE' }, { status: 415 });
     }
 
-    // استخراج دیتای وضعیت (State) چه داخل شیء state باشد و چه مستقیم فرستاده شده باشد
-    let targetState = body.state ? body.state : body;
-
-    if (!targetState || !targetState.departments) {
-      return NextResponse.json({ success: false, error: 'ساختار داده نامعتبر است' }, { status: 400 });
+    const declaredLength = Number(req.headers.get('content-length') || 0);
+    if (declaredLength > MAX_REQUEST_BYTES) {
+      return noStoreJson({ success: false, code: 'PAYLOAD_TOO_LARGE' }, { status: 413 });
     }
 
-    // بررسی و حذف بخش‌های کاملاً هم‌نام یا اسپم‌شده از لیست نهایی قبل از ذخیره
-    if (Array.isArray(targetState.departments)) {
-      const seenNames = new Set<string>();
-      
-      targetState.departments = targetState.departments.filter((dept: any) => {
-        if (!dept || !dept.name) return false;
-        const normalizedName = dept.name.trim();
-        
-        if (seenNames.has(normalizedName)) {
-          return false; // حذف تکراری‌ها
-        }
-        seenNames.add(normalizedName);
-        return true;
-      });
+    const rawBody = await req.text();
+    if (new TextEncoder().encode(rawBody).byteLength > MAX_REQUEST_BYTES) {
+      return noStoreJson({ success: false, code: 'PAYLOAD_TOO_LARGE' }, { status: 413 });
+    }
+    let jsonBody: unknown;
+    try {
+      jsonBody = JSON.parse(rawBody);
+    } catch {
+      return noStoreJson({ success: false, code: 'MALFORMED_JSON' }, { status: 400 });
     }
 
-    // ذخیره‌سازی نهایی دیتای واکسینه شده روی S3 ابر آروان
-    const success = await writeState(targetState);
+    const requestBody = WriteRequestSchema.safeParse(jsonBody);
+    if (!requestBody.success) {
+      return noStoreJson({
+        success: false,
+        code: 'INVALID_REQUEST',
+        issues: requestBody.error.issues,
+      }, { status: 400 });
+    }
 
-    // ارسال پاسخ دقیقاً با ساختار استانداردی که فرانت‌اِند شما طلب می‌کند
-    return NextResponse.json({
-      success,
-      isConfigured,
-      state: targetState,
-      message: 'تغییرات با موفقیت ثبت و همگام‌سازی شد.'
-    });
+    const ifMatch = req.headers.get('if-match');
+    const ifNoneMatch = req.headers.get('if-none-match');
+    if ((!ifMatch && ifNoneMatch !== '*') || (ifMatch && ifNoneMatch)) {
+      return noStoreJson({
+        success: false,
+        code: 'PRECONDITION_REQUIRED',
+        error: 'Send If-Match for updates or If-None-Match: * for creates',
+      }, { status: 428 });
+    }
 
-  } catch (err: any) {
-    console.error('API storage write error:', err);
-    return NextResponse.json({ success: false, error: 'خطای سرور در ذخیره‌سازی' }, { status: 500 });
+    const { resource, data } = requestBody.data;
+    const result = await writeResource(resource, data, ifMatch || null);
+    const response = noStoreJson({
+      success: true,
+      resource: resourceVersionId(resource),
+      etag: result.etag,
+      versionId: result.versionId,
+    }, { status: ifNoneMatch === '*' ? 201 : 200 });
+    response.headers.set('ETag', result.etag);
+    return response;
+  } catch (error) {
+    return errorResponse(error);
   }
+}
+
+// The old endpoint accepted an entire database snapshot and silently overwrote it.
+// It is intentionally fail-closed so old clients cannot damage granular storage.
+export async function POST() {
+  return noStoreJson({
+    success: false,
+    code: 'WHOLE_STATE_WRITES_REMOVED',
+    error: 'Use resource-scoped PUT with an ETag precondition',
+  }, { status: 410 });
 }

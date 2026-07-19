@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import TehranDateTime from './components/TehranDateTime';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
-import { AppDatabaseState } from '../lib/s3Storage';
+import type { AppDatabaseState, StorageResource } from '../lib/storageSchemas';
 import { 
   getJalaliMonthDays, 
   generateJalaliMonthCalendar, 
@@ -158,7 +158,16 @@ export default function Home() {
   const [fullDbState, setFullDbState] = useState<AppDatabaseState | null>(null);
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [storageInfo, setStorageInfo] = useState<{ isConfigured: boolean; bucket: string; endpoint: string; source: string } | null>(null);
+  const [storageInfo, setStorageInfo] = useState<{ isConfigured: boolean; bucket: string; environment: string; source: string } | null>(null);
+
+  // ETags are deliberately kept outside render state. Writes are serialized and a
+  // failed/conflicting queue is blocked until a successful reload refreshes all ETags.
+  const storageVersionsRef = React.useRef<Record<string, string>>({});
+  const optimisticDbRef = React.useRef<AppDatabaseState | null>(null);
+  const saveQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  const storageWriteBlockedRef = React.useRef(false);
+  const storageLoadCountRef = React.useRef(0);
+  const storageLoadGenerationRef = React.useRef(0);
 
   // Profile forms and inputs
   const [profileUsernameInput, setProfileUsernameInput] = useState<string>('');
@@ -318,7 +327,88 @@ export default function Home() {
   const isBlockingDbSave = blockingDbSaveCount > 0;
 
   const getFreshDbCopy = (): AppDatabaseState => {
-    return fullDbState ? JSON.parse(JSON.stringify(fullDbState)) : { departments: [], deptData: {} };
+    const current = optimisticDbRef.current || fullDbState;
+    if (!current || storageWriteBlockedRef.current) {
+      throw new Error('دیتابیس هنوز آماده نیست یا پس از خطای هم‌زمانی قفل شده است؛ صفحه را تازه‌سازی کنید.');
+    }
+    return JSON.parse(JSON.stringify(current));
+  };
+
+  const versionIdForResource = (resource: StorageResource): string => {
+    switch (resource.type) {
+      case 'departments': return 'departments';
+      case 'personnel': return `department:${resource.departmentId}:personnel`;
+      case 'requests': return `department:${resource.departmentId}:requests`;
+      case 'settings': return `department:${resource.departmentId}:settings`;
+      case 'holidays': return `department:${resource.departmentId}:holidays`;
+      case 'firstDayOfWeek': return `department:${resource.departmentId}:firstDayOfWeek`;
+      case 'schedule': return `department:${resource.departmentId}:schedule:${resource.monthKey}`;
+    }
+  };
+
+  type StorageMutation = { resource: StorageResource; data: unknown; existed: boolean };
+  const sameDocument = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+  const buildStorageMutations = (
+    previous: AppDatabaseState,
+    next: AppDatabaseState
+  ): StorageMutation[] => {
+    const mutations: StorageMutation[] = [];
+
+    for (const department of next.departments) {
+      const departmentId = department.id;
+      const before = previous.deptData[departmentId];
+      const after = next.deptData[departmentId];
+      if (!after) throw new Error(`داده بخش ${departmentId} وجود ندارد.`);
+
+      const resources: Array<{ resource: StorageResource; before: unknown; after: unknown }> = [
+        { resource: { type: 'personnel', departmentId }, before: before?.personnel, after: after.personnel },
+        { resource: { type: 'requests', departmentId }, before: before?.requests, after: after.requests },
+        {
+          resource: { type: 'settings', departmentId },
+          before: before ? {
+            activeYear: before.activeYear,
+            settings_system: before.settings_system,
+            settings_credentials: before.settings_credentials,
+          } : undefined,
+          after: {
+            activeYear: after.activeYear,
+            settings_system: after.settings_system,
+            settings_credentials: after.settings_credentials,
+          },
+        },
+        { resource: { type: 'holidays', departmentId }, before: before?.holidays, after: after.holidays },
+        { resource: { type: 'firstDayOfWeek', departmentId }, before: before?.firstDayOfWeek, after: after.firstDayOfWeek },
+      ];
+
+      for (const item of resources) {
+        if (!sameDocument(item.before, item.after)) {
+          mutations.push({ resource: item.resource, data: item.after, existed: item.before !== undefined });
+        }
+      }
+
+      for (const [monthKey, nextSchedule] of Object.entries(after.schedules || {})) {
+        const previousSchedule = before?.schedules?.[monthKey];
+        if (!sameDocument(previousSchedule, nextSchedule)) {
+          mutations.push({
+            resource: { type: 'schedule', departmentId, monthKey },
+            data: nextSchedule,
+            existed: previousSchedule !== undefined,
+          });
+        }
+      }
+    }
+
+    // Publish index changes last: a newly-created department never becomes visible
+    // before all of its required documents have been written successfully.
+    if (!sameDocument(previous.departments, next.departments)) {
+      mutations.push({
+        resource: { type: 'departments' },
+        data: next.departments,
+        existed: true,
+      });
+    }
+    return mutations;
   };
 
   const saveDbState = async (
@@ -326,6 +416,13 @@ export default function Home() {
     options: { showBusyOverlay?: boolean } = {}
   ) => {
     const { showBusyOverlay = true } = options;
+    const baseDb = optimisticDbRef.current;
+    if (!baseDb || storageWriteBlockedRef.current || storageLoadCountRef.current > 0) {
+      throw new Error('ذخیره‌سازی هنگام بارگذاری یا پس از خطای هم‌زمانی متوقف است؛ صفحه را تازه‌سازی کنید.');
+    }
+
+    const mutations = buildStorageMutations(baseDb, updatedDb);
+    optimisticDbRef.current = updatedDb;
     setFullDbState(updatedDb);
     
     const deptId = selectedDepartmentId || 'sepehr';
@@ -384,12 +481,12 @@ export default function Home() {
     } else {
       try {
         const solved = solveNursingSchedule(
-          currentYear, 
-          currentMonth, 
-          deptInfo.personnel || [], 
-          deptInfo.requests || [], 
-          deptInfo.settings_system || INITIAL_SETTINGS, 
-          holidaysInfo.days || {}, 
+          currentYear,
+          currentMonth,
+          deptInfo.personnel || [],
+          deptInfo.requests || [],
+          deptInfo.settings_system || INITIAL_SETTINGS,
+          holidaysInfo.days || {},
           fdIdx === -1 ? undefined : fdIdx,
           holidaysInfo.monthlyDutyHours || null
         );
@@ -402,33 +499,54 @@ export default function Home() {
         });
         setDismissedWarnings([]);
         setLockedRows([]);
-      } catch (e) {
-        console.error(e);
+      } catch (error) {
+        console.error(error);
       }
     }
 
-    try {
+    const execute = async () => {
       setPendingDbSaveCount(count => count + 1);
-      if (showBusyOverlay) {
-        setBlockingDbSaveCount(count => count + 1);
+      if (showBusyOverlay) setBlockingDbSaveCount(count => count + 1);
+      try {
+        for (const mutation of mutations) {
+          const versionId = versionIdForResource(mutation.resource);
+          const expectedETag = storageVersionsRef.current[versionId];
+          if (mutation.existed && !expectedETag) {
+            throw new Error(`ETag منبع ${versionId} موجود نیست؛ ذخیره متوقف شد.`);
+          }
+
+          const response = await fetch('/api/storage', {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(mutation.existed
+                ? { 'If-Match': expectedETag }
+                : { 'If-None-Match': '*' }),
+            },
+            body: JSON.stringify({ resource: mutation.resource, data: mutation.data }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success || !result.etag) {
+            throw new Error(result.code === 'ETAG_CONFLICT'
+              ? 'اطلاعات توسط کاربر دیگری تغییر کرده است؛ برای جلوگیری از بازنویسی، صفحه را تازه‌سازی کنید.'
+              : result.error || `خطای ذخیره منبع ${versionId}`);
+          }
+          storageVersionsRef.current[versionId] = result.etag;
+        }
+      } catch (error) {
+        // A batch can span multiple objects and S3 has no multi-object transaction.
+        // Fail closed after any partial failure; a reload is required before more writes.
+        storageWriteBlockedRef.current = true;
+        throw error;
+      } finally {
+        setPendingDbSaveCount(count => Math.max(0, count - 1));
+        if (showBusyOverlay) setBlockingDbSaveCount(count => Math.max(0, count - 1));
       }
-      const res = await fetch('/api/storage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: updatedDb })
-      });
-      const data = await res.json();
-      if (!data.success) {
-        console.error("S3 Object Storage save failed: ", data.error);
-      }
-    } catch (err) {
-      console.error("Network error saving to S3 Object Storage:", err);
-    } finally {
-      setPendingDbSaveCount(count => Math.max(0, count - 1));
-      if (showBusyOverlay) {
-        setBlockingDbSaveCount(count => Math.max(0, count - 1));
-      }
-    }
+    };
+
+    const queuedSave = saveQueueRef.current.then(execute);
+    saveQueueRef.current = queuedSave.catch(() => undefined);
+    return queuedSave;
   };
 
   // Load whole state from S3 on mount or department/month change
@@ -436,40 +554,49 @@ export default function Home() {
     if (typeof window === 'undefined') return;
 
     const loadDatabase = async () => {
+      const generation = ++storageLoadGenerationRef.current;
+      storageLoadCountRef.current += 1;
       try {
         setIsLoadingDb(true);
         setIsPersonnelLoaded(false);
         setIsRequestsLoaded(false);
-        
-        const res = await fetch('/api/storage');
+        // Reads and writes never overlap in this tab. This also prevents a late GET
+        // from replacing newly written ETags with an older snapshot.
+        await saveQueueRef.current;
+        const res = await fetch('/api/storage', { cache: 'no-store' });
         const data = await res.json();
-        
-        if (data.success && data.state) {
-          setFullDbState(data.state);
-          setStorageInfo({
-            isConfigured: data.isConfigured,
-            bucket: data.bucket,
-            endpoint: data.endpoint,
-            source: data.source
-          });
-          
-          const updatedDb = data.state as AppDatabaseState;
-          setDepartments(updatedDb.departments || []);
-          
-          const deptId = selectedDepartmentId || 'sepehr';
-          if (!updatedDb.deptData[deptId]) {
-            updatedDb.deptData[deptId] = {
-              personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-              requests: INITIAL_REQUESTS,
-              settings_system: INITIAL_SETTINGS,
-              settings_credentials: { username: 'headnurse', password: '123456' },
-              holidays: {},
-              firstDayOfWeek: {},
-              schedules: {},
-            };
-          }
-          
-          const deptInfo = updatedDb.deptData[deptId];
+        if (!res.ok || !data.success || !data.state || !data.versions) {
+          throw new Error(data.error || 'خواندن امن دیتابیس ناموفق بود.');
+        }
+        if (generation !== storageLoadGenerationRef.current) return;
+
+        const updatedDb = data.state as AppDatabaseState;
+        if (!updatedDb.departments.length) {
+          throw new Error('فهرست بخش‌ها خالی است؛ مقداردهی خودکار برای حفاظت از داده غیرفعال است.');
+        }
+
+        storageVersionsRef.current = data.versions;
+        optimisticDbRef.current = updatedDb;
+        storageWriteBlockedRef.current = false;
+        setFullDbState(updatedDb);
+        setStorageInfo({
+          isConfigured: data.isConfigured,
+          bucket: data.bucket,
+          environment: data.environment,
+          source: data.source
+        });
+        setDepartments(updatedDb.departments);
+
+        const requestedDeptId = selectedDepartmentId || 'sepehr';
+        const deptId = updatedDb.deptData[requestedDeptId]
+          ? requestedDeptId
+          : updatedDb.departments[0].id;
+        if (deptId !== requestedDeptId) {
+          setSelectedDepartmentId(deptId);
+          localStorage.setItem('hospital_selected_dept_id', deptId);
+        }
+        const deptInfo = updatedDb.deptData[deptId];
+        if (!deptInfo) throw new Error(`داده بخش ${deptId} وجود ندارد.`);
           setPersonnel(deptInfo.personnel || []);
           setRequests(deptInfo.requests || []);
           setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
@@ -536,15 +663,20 @@ export default function Home() {
               console.error(e);
             }
           }
-        }
       } catch (err) {
-        console.error("Error loading database from Iranian Object Storage S3:", err);
+        if (generation === storageLoadGenerationRef.current) {
+          storageWriteBlockedRef.current = true;
+          console.error("Error loading database from Iranian Object Storage S3:", err);
+        }
       } finally {
-        setIsLoadingDb(false);
-        setIsPersonnelLoaded(true);
-        setIsRequestsLoaded(true);
-        setIsMonthLoaded(true);
-        setDbChecked(true);
+        storageLoadCountRef.current = Math.max(0, storageLoadCountRef.current - 1);
+        if (generation === storageLoadGenerationRef.current) {
+          setIsLoadingDb(false);
+          setIsPersonnelLoaded(true);
+          setIsRequestsLoaded(true);
+          setIsMonthLoaded(true);
+          setDbChecked(true);
+        }
       }
     };
     
@@ -1046,7 +1178,7 @@ export default function Home() {
           requests
         );
         
-        const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+        const nextDb = getFreshDbCopy();
         if (!nextDb.deptData) nextDb.deptData = {};
         
         const deptId = selectedDepartmentId || 'sepehr';
@@ -1096,7 +1228,7 @@ export default function Home() {
       const isLocked = isNurse ? finalizedNursesMonths.includes(key) : finalizedAssistantsMonths.includes(key);
       const groupTitle = isNurse ? 'پرستاران' : 'کمک‌بهیاران';
       
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
       
       const deptId = selectedDepartmentId || 'sepehr';
@@ -1145,7 +1277,7 @@ export default function Home() {
       const key = `${currentYear}_${currentMonth}`;
       const isLocked = requestsLockedMonths.includes(key);
       
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
       
       const deptId = selectedDepartmentId || 'sepehr';
@@ -1189,7 +1321,7 @@ export default function Home() {
       const updated = [...dismissedWarnings, warnText];
       const key = `${currentYear}_${currentMonth}`;
       
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
       
       const deptId = selectedDepartmentId || 'sepehr';
@@ -1278,7 +1410,7 @@ export default function Home() {
               password: pInput
             };
             
-            const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+            const nextDb = getFreshDbCopy();
             if (!nextDb.deptData) nextDb.deptData = {};
             
             nextDb.departments = (nextDb.departments || []).map(d => d.id === selectedDepartmentId ? updatedDept : d);
@@ -1381,7 +1513,7 @@ export default function Home() {
       const uVal = newUsernameValue.trim();
       const pVal = newPasswordValue.trim();
       
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
       
       const deptId = selectedDepartmentId || 'sepehr';
@@ -1725,7 +1857,7 @@ export default function Home() {
 
       const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
 
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
       
       const deptId = selectedDepartmentId || 'sepehr';
@@ -1793,7 +1925,7 @@ export default function Home() {
     }
 
     try {
-      const nextDb = fullDbState ? { ...fullDbState } : { departments: [], deptData: {} };
+      const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
       
       const deptId = selectedDepartmentId || 'sepehr';
