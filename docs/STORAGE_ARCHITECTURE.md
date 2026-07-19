@@ -89,4 +89,4 @@ Migration is create-only and writes `departments/index.json` last. It never read
 
 ## Security boundary
 
-The storage refactor does not make the existing client-side role/password checks a secure authorization system. Before production, protect `PUT /api/storage` with a server-verified session and resource-level authorization. Never log document bodies because they contain personnel data. Credentials currently embedded in department documents should be migrated to a password-hash/identity store rather than retained as plaintext JSON.
+`GET` and `PUT /api/storage` now require a server-verified Prisma session, completed first-login password change, and department/role authorization. Non-admin reads are restricted to the authenticated user's department. Never log document bodies because they contain personnel data. Legacy credential fields still present in old department JSON must be removed after migration; active authentication uses only bcrypt password hashes in PostgreSQL.

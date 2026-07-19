@@ -11,7 +11,13 @@ import {
   StorageValidationError,
   writeResource,
 } from '../../../lib/s3Storage';
-import { StorageResourceSchema } from '../../../lib/storageSchemas';
+import { StorageResourceSchema, type StorageResource } from '../../../lib/storageSchemas';
+import {
+  AuthenticationError,
+  requireCurrentUser,
+} from '../../../lib/auth/session';
+import type { AuthenticatedUser } from '../../../lib/auth/types';
+import { assertSameOrigin } from '../../../lib/auth/http';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -30,6 +36,9 @@ function noStoreJson(body: unknown, init?: ResponseInit) {
 }
 
 function errorResponse(error: unknown) {
+  if (error instanceof AuthenticationError) {
+    return noStoreJson({ success: false, code: 'AUTHORIZATION_FAILED', error: error.message }, { status: error.status });
+  }
   if (error instanceof StorageConflictError) {
     return noStoreJson({ success: false, code: 'ETAG_CONFLICT', error: error.message }, { status: 409 });
   }
@@ -63,10 +72,29 @@ function errorResponse(error: unknown) {
   }, { status: 500 });
 }
 
+function authorizeResourceWrite(user: AuthenticatedUser, resource: StorageResource) {
+  if (user.role === 'ADMIN') return;
+  if (resource.type === 'departments') {
+    throw new AuthenticationError(403, 'فقط مدیر سامانه اجازه تغییر فهرست بخش‌ها را دارد.');
+  }
+  if (!user.departmentId || user.departmentId !== resource.departmentId) {
+    throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
+  }
+  if (user.role === 'PERSONNEL' && resource.type !== 'requests' && resource.type !== 'schedule') {
+    throw new AuthenticationError(403, 'پرسنل فقط اجازه ثبت درخواست‌های شیفت خود را دارند.');
+  }
+}
+
 export async function GET() {
   try {
+    const actor = await requireCurrentUser();
+    if (actor.role !== 'ADMIN' && !actor.departmentId) {
+      throw new AuthenticationError(403, 'برای حساب کاربری بخش مشخص نشده است.');
+    }
     const { bucket, environment } = getS3Client();
-    const result = await readDatabaseState();
+    const result = await readDatabaseState(actor.role === 'ADMIN'
+      ? undefined
+      : { departmentIds: [actor.departmentId!] });
     return noStoreJson({
       success: true,
       isConfigured: true,
@@ -83,6 +111,8 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   try {
+    assertSameOrigin(req);
+    const actor = await requireCurrentUser();
     const contentType = req.headers.get('content-type') || '';
     if (!contentType.toLowerCase().includes('application/json')) {
       return noStoreJson({ success: false, code: 'UNSUPPORTED_MEDIA_TYPE' }, { status: 415 });
@@ -124,6 +154,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const { resource, data } = requestBody.data;
+    authorizeResourceWrite(actor, resource);
     const result = await writeResource(resource, data, ifMatch || null);
     const response = noStoreJson({
       success: true,

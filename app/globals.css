@@ -1,7 +1,9 @@
 @import "tailwindcss";
+@config "../tailwind.config.js";
 
 @theme {
-  --font-sans: var(--font-vazirmatn), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Vazirmatn", "IRANSans", Tahoma, Arial, sans-serif;
+  --font-mono: "Vazirmatn", "IRANSans", ui-monospace, monospace;
 }
 
 @media print {

@@ -1,78 +1,81 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import TehranDateTime from './components/TehranDateTime';
+import { ResetRequestList } from './components/auth/ResetRequestList';
+import type { AuthenticatedUser } from '../lib/auth/types';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
 import type { AppDatabaseState, StorageResource } from '../lib/storageSchemas';
-import { 
-  getJalaliMonthDays, 
-  generateJalaliMonthCalendar, 
+import {
+  getJalaliMonthDays,
+  generateJalaliMonthCalendar,
   getJalaliWeekday,
-  WEEKDAYS, 
-  JALALI_MONTH_NAMES, 
-  formatJalaliDateString 
+  WEEKDAYS,
+  JALALI_MONTH_NAMES,
+  formatJalaliDateString
 } from '../lib/jalali';
-import { 
+import {
   JobGroup,
-  Personnel, 
-  SystemSettings, 
-  ShiftRequest, 
-  MonthlySchedule, 
-  ShiftType, 
-  JalaliDateInfo, 
+  Personnel,
+  SystemSettings,
+  ShiftRequest,
+  MonthlySchedule,
+  ShiftType,
+  JalaliDateInfo,
   PersonnelReportResult,
   AggregatedAlert,
   SmartSuggestion,
   OptimizationResult
 } from '../lib/types';
-import { 
-  INITIAL_PERSONNEL, 
+import {
+  INITIAL_PERSONNEL,
   INITIAL_SETTINGS,
   INITIAL_REQUESTS
 } from '../lib/mockData';
-import { 
-  solveNursingSchedule, 
-  generatePersonnelReports, 
+import {
+  solveNursingSchedule,
+  generatePersonnelReports,
   verifyCoverageAndLeaders,
-  SHIFT_HOURS, 
+  SHIFT_HOURS,
   getLeaveHours,
   getSeniorityHours,
   calculateAutoDutyHours,
   solveWithPriority
 } from '../lib/solver';
 import { aggregateWarnings, filterActiveWarnings } from '../lib/alertAggregator';
-import { 
+import {
   applyDefaultOffRule,
   findBestSubstitute,
   checkAndApplyAutoSubstitution
 } from '../lib/balanceChecker';
 import { generateSmartSuggestions } from '../lib/smartSuggestion';
-import { 
-  Calendar as CalendarIcon, 
-  Users, 
-  Settings, 
-  AlertTriangle, 
-  CheckCircle, 
-  Download, 
-  Plus, 
-  Trash2, 
-  Edit, 
-  Lock, 
-  Unlock, 
-  Clock, 
-  UserCheck, 
-  FileSpreadsheet, 
-  Printer, 
-  RefreshCw, 
-  Sliders, 
-  LogOut, 
-  HelpCircle, 
-  ShieldAlert, 
-  Check, 
-  BookOpen, 
-  Award, 
-  Sparkles, 
-  ChevronRight, 
+import {
+  Calendar as CalendarIcon,
+  Users,
+  Settings,
+  AlertTriangle,
+  CheckCircle,
+  Download,
+  Plus,
+  Trash2,
+  Edit,
+  Lock,
+  Unlock,
+  Clock,
+  UserCheck,
+  FileSpreadsheet,
+  Printer,
+  RefreshCw,
+  Sliders,
+  LogOut,
+  HelpCircle,
+  ShieldAlert,
+  Check,
+  BookOpen,
+  Award,
+  Sparkles,
+  ChevronRight,
   ChevronLeft,
   ChevronUp,
   ChevronDown,
@@ -132,18 +135,11 @@ function BusyOverlay({ subtitle }: { subtitle: string }) {
   );
 }
 
-function toEnglishDigits(str: string): string {
-  if (!str) return '';
-  const farsiDigits = [/۰/g, /۱/g, /۲/g, /۳/g, /۴/g, /۵/g, /۶/g, /۷/g, /۸/g, /۹/g];
-  const arabicDigits = [/٠/g, /١/g, /٢/g, /٣/g, /٤/g, /٥/g, /٦/g, /٧/g, /٨/g, /٩/g];
-  let res = str;
-  for (let i = 0; i < 10; i++) {
-    res = res.replace(farsiDigits[i], String(i)).replace(arabicDigits[i], String(i));
-  }
-  return res;
-}
-
 export default function Home() {
+  const router = useRouter();
+  const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
   // --- Dynamic Department routing helper ---
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(() => {
     if (typeof window !== 'undefined') {
@@ -168,11 +164,6 @@ export default function Home() {
   const storageWriteBlockedRef = React.useRef(false);
   const storageLoadCountRef = React.useRef(0);
   const storageLoadGenerationRef = React.useRef(0);
-
-  // Profile forms and inputs
-  const [profileUsernameInput, setProfileUsernameInput] = useState<string>('');
-  const [profilePasswordInput, setProfilePasswordInput] = useState<string>('');
-  const [profileDeptNameInput, setProfileDeptNameInput] = useState<string>('');
 
   // New Department form states
   const [showAddDeptModal, setShowAddDeptModal] = useState<boolean>(false);
@@ -250,7 +241,7 @@ export default function Home() {
   const [schedule, setSchedule] = useState<MonthlySchedule | null>(null);
 
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
-  
+
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean}>({general: true, personnel: true});
@@ -293,18 +284,43 @@ export default function Home() {
   // User Authentication & Roles
   // roles: 'admin' | 'headnurse' | 'personnel' | 'guest'
   const [role, setRole] = useState<'admin' | 'headnurse' | 'personnel' | 'guest'>('guest');
-  const [selectedPersonnelUser, setSelectedPersonnelUser] = useState<Personnel | null>(null);
+  const selectedPersonnelUser = React.useMemo(() => {
+    if (authenticatedUser?.role !== 'PERSONNEL' || !authenticatedUser.personnelId) return null;
+    return personnel.find(person => person.id === authenticatedUser.personnelId) || null;
+  }, [authenticatedUser, personnel]);
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>('');
-  
-  const [personnelFirstNameInput, setPersonnelFirstNameInput] = useState<string>('');
-  const [personnelLastNameInput, setPersonnelLastNameInput] = useState<string>('');
-  const [personnelPasswordInput, setPersonnelPasswordInput] = useState<string>('');
-  
-  const [headnurseUsernameInput, setHeadnurseUsernameInput] = useState<string>('');
-  const [headnursePasswordInput, setHeadnursePasswordInput] = useState<string>('');
-  
-  const [headnurseUsername, setHeadnurseUsername] = useState<string>('headnurse');
-  const [headnursePassword, setHeadnursePassword] = useState<string>('123456');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSession = async () => {
+      try {
+        const response = await fetch('/api/auth/me', { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok || !result.user) {
+          router.replace('/login');
+          return;
+        }
+        const user = result.user as AuthenticatedUser;
+        if (user.mustChangePassword) {
+          router.replace('/change-password');
+          return;
+        }
+        if (cancelled) return;
+        setAuthenticatedUser(user);
+        setRole(user.role === 'ADMIN' ? 'admin' : user.role === 'HEAD_NURSE' ? 'headnurse' : 'personnel');
+        if (user.departmentId) {
+          setSelectedDepartmentId(user.departmentId);
+          localStorage.setItem('hospital_selected_dept_id', user.departmentId);
+        }
+      } catch {
+        router.replace('/login');
+      } finally {
+        if (!cancelled) setIsAuthLoading(false);
+      }
+    };
+    void loadSession();
+    return () => { cancelled = true; };
+  }, [router]);
 
   // States for finalized months (locked schedules that won't auto-resolve)
   const [finalizedNursesMonths, setFinalizedNursesMonths] = useState<string[]>([]);
@@ -315,7 +331,7 @@ export default function Home() {
   const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
 
   // ====== STATE‌های جدید برای درخواست‌ها ======
-  
+
   // برای قفل ردیف‌ها (درخواست ۶)
   const [lockedRows, setLockedRows] = useState<string[]>([]);
 
@@ -424,7 +440,7 @@ export default function Home() {
     const mutations = buildStorageMutations(baseDb, updatedDb);
     optimisticDbRef.current = updatedDb;
     setFullDbState(updatedDb);
-    
+
     const deptId = selectedDepartmentId || 'sepehr';
     const deptInfo = updatedDb.deptData[deptId] || {
       personnel: [],
@@ -435,22 +451,20 @@ export default function Home() {
       firstDayOfWeek: {},
       schedules: {},
     };
-    
+
     setDepartments(updatedDb.departments || []);
     setPersonnel(deptInfo.personnel || []);
     setRequests(deptInfo.requests || []);
     setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
-    setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
-    setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
-    
+
     const hKey = `${currentYear}_${currentMonth}`;
     const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
     setCustomHolidays(holidaysInfo.days || {});
     setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
-    
+
     const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
     setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
-    
+
     const sched = deptInfo.schedules?.[hKey] || null;
     setSchedule(sched);
     if (sched) {
@@ -459,7 +473,7 @@ export default function Home() {
       const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
       const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
       const isReqLocked = !!sched.requestsLocked;
-      
+
       setFinalizedNursesMonths(prev => {
         const key = `${currentYear}_${currentMonth}`;
         if (isFinNurses && !prev.includes(key)) return [...prev, key];
@@ -551,7 +565,7 @@ export default function Home() {
 
   // Load whole state from S3 on mount or department/month change
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || isAuthLoading || !authenticatedUser) return;
 
     const loadDatabase = async () => {
       const generation = ++storageLoadGenerationRef.current;
@@ -600,17 +614,15 @@ export default function Home() {
           setPersonnel(deptInfo.personnel || []);
           setRequests(deptInfo.requests || []);
           setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
-          setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
-          setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
-          
+
           const hKey = `${currentYear}_${currentMonth}`;
           const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
           setCustomHolidays(holidaysInfo.days || {});
           setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
-          
+
           const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
           setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
-          
+
           const sched = deptInfo.schedules?.[hKey] || null;
           setSchedule(sched);
           if (sched) {
@@ -619,7 +631,7 @@ export default function Home() {
             const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
             const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
             const isReqLocked = !!sched.requestsLocked;
-            
+
             setFinalizedNursesMonths(prev => {
               const key = `${currentYear}_${currentMonth}`;
               if (isFinNurses && !prev.includes(key)) return [...prev, key];
@@ -641,12 +653,12 @@ export default function Home() {
           } else {
             try {
               const solved = solveNursingSchedule(
-                currentYear, 
-                currentMonth, 
-                deptInfo.personnel || [], 
-                deptInfo.requests || [], 
-                deptInfo.settings_system || INITIAL_SETTINGS, 
-                holidaysInfo.days || {}, 
+                currentYear,
+                currentMonth,
+                deptInfo.personnel || [],
+                deptInfo.requests || [],
+                deptInfo.settings_system || INITIAL_SETTINGS,
+                holidaysInfo.days || {},
                 fdIdx === -1 ? undefined : fdIdx,
                 holidaysInfo.monthlyDutyHours || null
               );
@@ -679,9 +691,9 @@ export default function Home() {
         }
       }
     };
-    
+
     loadDatabase();
-  }, [selectedDepartmentId, currentYear, currentMonth]);
+  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading]);
 
   const extractWarningDay = (warningText: string) => {
     const dayMatch = warningText.match(/روز (\d+)/);
@@ -806,11 +818,6 @@ export default function Home() {
     );
   }, [schedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
 
-  const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
-  const [newUsernameValue, setNewUsernameValue] = useState<string>('');
-  const [newPasswordValue, setNewPasswordValue] = useState<string>('');
-  const [authError, setAuthError] = useState<string>('');
-
   // UI Tabs & Active View
   const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'profile'>('schedule');
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'personnel' | 'request'; label: string } | null>(null);
@@ -819,7 +826,7 @@ export default function Home() {
   // CRUD & Modals State
   const [showAddPersonnelModal, setShowAddPersonnelModal] = useState<boolean>(false);
   const [editingPersonnel, setEditingPersonnel] = useState<Personnel | null>(null);
-  
+
   // Forms states for Personnel
   const [formFirstName, setFormFirstName] = useState<string>('');
   const [formLastName, setFormLastName] = useState<string>('');
@@ -920,9 +927,9 @@ export default function Home() {
   };
 
   const saveState = async (
-    updatedP: Personnel[], 
-    updatedR: ShiftRequest[], 
-    updatedS: SystemSettings, 
+    updatedP: Personnel[],
+    updatedR: ShiftRequest[],
+    updatedS: SystemSettings,
     updatedH: { [day: number]: string },
     fdIndex?: number | ScheduleUpdateStrategy,
     strategy?: ScheduleUpdateStrategy
@@ -930,7 +937,7 @@ export default function Home() {
     try {
       let activeFd: number;
       let finalStrategy: ScheduleUpdateStrategy = { mode: 'preserve_current' };
-      
+
       if (typeof fdIndex === 'number') {
         activeFd = fdIndex;
         finalStrategy = strategy || { mode: 'preserve_current' };
@@ -938,13 +945,13 @@ export default function Home() {
         activeFd = firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1;
         finalStrategy = (fdIndex as ScheduleUpdateStrategy) || { mode: 'preserve_current' };
       }
-      
+
       let calculatedMonthlyDutyHours = monthlyDutyHours;
       if (updatedS.autoCalculateDutyHours) {
         const autoHours = calculateAutoDutyHours(
-          currentYear, 
-          currentMonth, 
-          updatedH, 
+          currentYear,
+          currentMonth,
+          updatedH,
           activeFd === -1 ? undefined : activeFd
         );
         calculatedMonthlyDutyHours = {
@@ -1037,7 +1044,7 @@ export default function Home() {
         };
       } else {
         const freshSolved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
-        
+
         if (currentMonthSchedule) {
           const nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
           for (const p of updatedP) {
@@ -1146,16 +1153,16 @@ export default function Home() {
     setTimeout(async () => {
       try {
         const optimized = solveWithPriority(
-          currentYear, 
-          currentMonth, 
-          personnel, 
-          requests, 
-          settings, 
-          customHolidays, 
-          firstDayOfWeekIndex, 
+          currentYear,
+          currentMonth,
+          personnel,
+          requests,
+          settings,
+          customHolidays,
+          firstDayOfWeekIndex,
           monthlyDutyHours
         );
-        
+
         const baseAssignments = normalizeScheduleAssignments(schedule?.assignments, personnel);
         const mergedAssignments = schedule
           ? { ...baseAssignments }
@@ -1177,10 +1184,10 @@ export default function Home() {
           firstDayOfWeekIndex,
           requests
         );
-        
+
         const nextDb = getFreshDbCopy();
         if (!nextDb.deptData) nextDb.deptData = {};
-        
+
         const deptId = selectedDepartmentId || 'sepehr';
         const oldDept = nextDb.deptData[deptId] || {
           personnel: [],
@@ -1227,10 +1234,10 @@ export default function Home() {
       const isNurse = jobGroup === 'nurse';
       const isLocked = isNurse ? finalizedNursesMonths.includes(key) : finalizedAssistantsMonths.includes(key);
       const groupTitle = isNurse ? 'پرستاران' : 'کمک‌بهیاران';
-      
+
       const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
-      
+
       const deptId = selectedDepartmentId || 'sepehr';
       const oldDept = nextDb.deptData[deptId] || {
         personnel: [],
@@ -1276,10 +1283,10 @@ export default function Home() {
     try {
       const key = `${currentYear}_${currentMonth}`;
       const isLocked = requestsLockedMonths.includes(key);
-      
+
       const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
-      
+
       const deptId = selectedDepartmentId || 'sepehr';
       const oldDept = nextDb.deptData[deptId] || {
         personnel: [],
@@ -1292,7 +1299,7 @@ export default function Home() {
       };
 
       const existingSched = oldDept.schedules?.[key];
-      
+
       const updatedLogs = existingSched ? [...(existingSched.changeLogs || []), `تغییر وضعیت مهلت درخواست‌ها: ${!isLocked ? 'بسته شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`] : [`تغییر وضعیت مهلت درخواست‌ها: ${!isLocked ? 'بسته شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`];
 
       const updatedDept = {
@@ -1320,10 +1327,10 @@ export default function Home() {
     try {
       const updated = [...dismissedWarnings, warnText];
       const key = `${currentYear}_${currentMonth}`;
-      
+
       const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
-      
+
       const deptId = selectedDepartmentId || 'sepehr';
       const oldDept = nextDb.deptData[deptId] || {
         personnel: [],
@@ -1365,198 +1372,15 @@ export default function Home() {
     }
   };
 
-  // --- Authentication Handlers ---
-  const handleLogin = async (roleType: 'admin' | 'headnurse' | 'personnel') => {
-    setAuthError('');
-    if (roleType === 'admin') {
-      const uInput = toEnglishDigits(headnurseUsernameInput.trim());
-      const pInput = toEnglishDigits(headnursePasswordInput.trim());
-      if (uInput === 'admin' && pInput === 'admin') {
-        setRole('admin');
-        setSelectedPersonnelUser(null);
-        setActiveTab('schedule');
-        setHeadnurseUsernameInput('');
-        setHeadnursePasswordInput('');
-      } else {
-        setAuthError('اطلاعات ورود مدیر سیستم نادرست است.');
-      }
-    } else if (roleType === 'headnurse') {
-      const uInput = toEnglishDigits(headnurseUsernameInput.trim());
-      const pInput = toEnglishDigits(headnursePasswordInput.trim());
-      if (uInput === 'admin' && pInput === 'admin') {
-        setRole('admin');
-        setSelectedPersonnelUser(null);
-        setActiveTab('schedule');
-        setHeadnurseUsernameInput('');
-        setHeadnursePasswordInput('');
-        return;
-      }
-
-      const matchedDept = departments.find(d => d.id === selectedDepartmentId);
-      if (matchedDept) {
-        const dbUser = toEnglishDigits(matchedDept.username || 'headnurse');
-        const dbPass = toEnglishDigits(matchedDept.password || '123456');
-        
-        if (dbUser === 'headnurse' && dbPass === '123456') {
-          if (!uInput || pInput.length < 4) {
-            setAuthError('برای اولین ورود سرپرستار، نام کاربری دلخواه و رمز عبور (حداقل ۴ کاراکتر) خود را در کادرها تایپ کنید تا ثبت گردد.');
-            return;
-          }
-
-          try {
-            const updatedDept = {
-              ...matchedDept,
-              username: uInput,
-              password: pInput
-            };
-            
-            const nextDb = getFreshDbCopy();
-            if (!nextDb.deptData) nextDb.deptData = {};
-            
-            nextDb.departments = (nextDb.departments || []).map(d => d.id === selectedDepartmentId ? updatedDept : d);
-            
-            const deptId = selectedDepartmentId || 'sepehr';
-            if (!nextDb.deptData[deptId]) {
-              nextDb.deptData[deptId] = {
-                personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-                requests: INITIAL_REQUESTS,
-                settings_system: INITIAL_SETTINGS,
-                settings_credentials: { username: uInput, password: pInput },
-                holidays: {},
-                firstDayOfWeek: {},
-                schedules: {},
-              };
-            } else {
-              nextDb.deptData[deptId].settings_credentials = { username: uInput, password: pInput };
-            }
-            
-            await saveDbState(nextDb);
-
-            setHeadnurseUsername(uInput);
-            setHeadnursePassword(pInput);
-            setRole('headnurse');
-            setSelectedPersonnelUser(null);
-            setActiveTab('schedule');
-            
-            setProfileUsernameInput(uInput);
-            setProfilePasswordInput(pInput);
-            setProfileDeptNameInput(matchedDept.name);
-
-            setHeadnurseUsernameInput('');
-            setHeadnursePasswordInput('');
-            alert(`نام کاربری و کلمه عبور سرپرستار این بخش در اولین ورود با موفقیت تنظیم و ذخیره شد!`);
-          } catch (e) {
-            console.error(e);
-            setAuthError('خطا در ثبت نهایی کلمات عبور سرپرستار.');
-          }
-        } else {
-          if (uInput === dbUser && pInput === dbPass) {
-            setRole('headnurse');
-            setSelectedPersonnelUser(null);
-            setActiveTab('schedule');
-            
-            setProfileUsernameInput(dbUser);
-            setProfilePasswordInput(dbPass);
-            setProfileDeptNameInput(matchedDept.name);
-
-            setHeadnurseUsernameInput('');
-            setHeadnursePasswordInput('');
-          } else {
-            setAuthError('نام کاربری یا رمز عبور سرپرستار این بخش نادرست است.');
-          }
-        }
-      } else {
-        setAuthError('بخش انتخابی یافت نشد.');
-      }
-    } else if (roleType === 'personnel') {
-      const fInput = personnelFirstNameInput.trim();
-      const lInput = personnelLastNameInput.trim();
-      const pInput = toEnglishDigits(personnelPasswordInput.trim());
-
-      if (!fInput || !lInput) {
-        setAuthError('لطفاً نام و نام خانوادگی خود را به عنوان کادر درمان وارد کنید.');
-        return;
-      }
-
-      const checkPass = pInput || '1234';
-
-      const pMatch = personnel.find(p => {
-        if (!p.active) return false;
-        
-        const matchFirst = p.firstName.trim() === fInput;
-        const matchLast = p.lastName.trim() === lInput;
-        
-        const expectedPass = toEnglishDigits(p.password ? p.password.trim() : '1234');
-        return matchFirst && matchLast && expectedPass === checkPass;
-      });
-
-      if (!pMatch) {
-        setAuthError('پرسنلی با این مشخصات یافت نشد. دقت کنید نام، نام خانوادگی به فارسی و رمز اولیه پیش‌فرض ۱۲۳۴ است.');
-        return;
-      }
-
-      setSelectedPersonnelUser(pMatch);
-      setRole('personnel');
-      setActiveTab('schedule');
-      
-      setProfileUsernameInput(pMatch.lastName);
-      setProfilePasswordInput(pMatch.password || '1234');
-      
-      setPersonnelFirstNameInput('');
-      setPersonnelLastNameInput('');
-      setPersonnelPasswordInput('');
-    }
-  };
-
-  const handleChangeCredentials = async () => {
-    if (newPasswordValue.trim().length >= 4 && newUsernameValue.trim().length > 0) {
-      const uVal = newUsernameValue.trim();
-      const pVal = newPasswordValue.trim();
-      
-      const nextDb = getFreshDbCopy();
-      if (!nextDb.deptData) nextDb.deptData = {};
-      
-      const deptId = selectedDepartmentId || 'sepehr';
-      if (!nextDb.deptData[deptId]) {
-        nextDb.deptData[deptId] = {
-          personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-          requests: INITIAL_REQUESTS,
-          settings_system: INITIAL_SETTINGS,
-          settings_credentials: { username: uVal, password: pVal },
-          holidays: {},
-          firstDayOfWeek: {},
-          schedules: {},
-        };
-      } else {
-        nextDb.deptData[deptId].settings_credentials = { username: uVal, password: pVal };
-      }
-
-      nextDb.departments = (nextDb.departments || []).map(d => {
-        if (d.id === selectedDepartmentId) {
-          return { ...d, username: uVal, password: pVal };
-        }
-        return d;
-      });
-
-      await saveDbState(nextDb);
-
-      setHeadnurseUsername(uVal);
-      setHeadnursePassword(pVal);
-      setIsChangingPassword(false);
-      setNewUsernameValue('');
-      setNewPasswordValue('');
-      alert('اطلاعات کاربری سرپرستار با موفقیت تغییر کرد.');
-    } else {
-      alert('نام کاربری نمی‌تواند خالی باشد و رمز عبور باید حداقل ۴ کاراکتر باشد.');
-    }
-  };
-
-  const handleLogout = () => {
-    setRole('guest');
-    setSelectedPersonnelUser(null);
-    if (typeof window !== 'undefined') {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      setAuthenticatedUser(null);
+      setRole('guest');
       localStorage.removeItem('hospital_saved_role');
       localStorage.removeItem('hospital_saved_personnel_id');
+      router.replace('/login');
     }
   };
 
@@ -1625,8 +1449,6 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
-          username: formLastName.trim(),
-          password: '1234',
           orderIndex: personnel.length
         };
         updatedList = [...personnel, pData];
@@ -1722,7 +1544,7 @@ export default function Home() {
         }
       );
       setShowAddRequestModal(false);
-      
+
       setDraftRequests([]);
       setEditingRequest(null);
       setReqPatternInput('EN OFF OFF');
@@ -1756,17 +1578,17 @@ export default function Home() {
 
   const handleAddRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
       alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
       return;
     }
-    
+
     if (editingRequest) {
       try {
         const pid = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : reqPersonnelId;
         const steps = reqType === 'pattern' ? reqPatternInput.split(' ').map(s => s.trim().toUpperCase()) : undefined;
-        
+
         const reqData: ShiftRequest = {
           id: editingRequest.id,
           personnelId: pid,
@@ -1849,7 +1671,7 @@ export default function Home() {
 
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
     if (!schedule) return;
-    
+
     try {
       const updatedAssignments = { ...schedule.assignments };
       if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
@@ -1859,7 +1681,7 @@ export default function Home() {
 
       const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
-      
+
       const deptId = selectedDepartmentId || 'sepehr';
       const oldDept = nextDb.deptData[deptId] || {
         personnel: [],
@@ -1909,86 +1731,6 @@ export default function Home() {
     }
   };
 
-  // --- Profile Modifications handler ---
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (role === 'headnurse') {
-      if (!profileUsernameInput.trim() || !profilePasswordInput.trim() || !profileDeptNameInput.trim()) {
-        alert('لطفاً تمامی فیلدها را پر کنید.');
-        return;
-      }
-    } else if (role === 'personnel') {
-      if (!profilePasswordInput.trim()) {
-        alert('لطفاً کلمه عبور را پر کنید.');
-        return;
-      }
-    }
-
-    try {
-      const nextDb = getFreshDbCopy();
-      if (!nextDb.deptData) nextDb.deptData = {};
-      
-      const deptId = selectedDepartmentId || 'sepehr';
-      if (role === 'headnurse') {
-        const uVal = profileUsernameInput.trim();
-        const pVal = profilePasswordInput.trim();
-        const dName = profileDeptNameInput.trim();
-
-        nextDb.departments = (nextDb.departments || []).map(d => {
-          if (d.id === selectedDepartmentId) {
-            return { ...d, username: uVal, password: pVal, name: dName };
-          }
-          return d;
-        });
-
-        if (!nextDb.deptData[deptId]) {
-          nextDb.deptData[deptId] = {
-            personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-            requests: INITIAL_REQUESTS,
-            settings_system: INITIAL_SETTINGS,
-            settings_credentials: { username: uVal, password: pVal },
-            holidays: {},
-            firstDayOfWeek: {},
-            schedules: {},
-          };
-        } else {
-          nextDb.deptData[deptId].settings_credentials = { username: uVal, password: pVal };
-        }
-
-        await saveDbState(nextDb);
-        alert('پروفایل سرپرستار بخش با موفقیت ارتقا یافت و ذخیره شد.');
-      } else if (role === 'personnel' && selectedPersonnelUser) {
-        const pData = {
-          ...selectedPersonnelUser,
-          password: profilePasswordInput.trim()
-        };
-
-        const updatedP = personnel.map(p => p.id === selectedPersonnelUser.id ? pData : p);
-        
-        if (!nextDb.deptData[deptId]) {
-          nextDb.deptData[deptId] = {
-            personnel: updatedP,
-            requests: requests,
-            settings_system: settings,
-            settings_credentials: { username: headnurseUsername, password: headnursePassword },
-            holidays: {},
-            firstDayOfWeek: {},
-            schedules: {},
-          };
-        } else {
-          nextDb.deptData[deptId].personnel = updatedP;
-        }
-
-        await saveDbState(nextDb);
-        setSelectedPersonnelUser(pData);
-        alert('اطلاعات امنیتی پرسنل با موفقیت به‌روزرسانی شد.');
-      }
-    } catch (err) {
-      console.error("Error saving profile:", err);
-      alert("خطا در به‌روزرسانی اطلاعات پروفایل");
-    }
-  };
-
   // --- Holiday Management ---
   const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2029,9 +1771,9 @@ export default function Home() {
   const exportToExcel = async () => {
     if (!schedule) return;
     const ExcelJS = (await import('exceljs')).default;
-    
-    const startDayIndex = firstDayOfWeekIndex !== undefined 
-      ? firstDayOfWeekIndex 
+
+    const startDayIndex = firstDayOfWeekIndex !== undefined
+      ? firstDayOfWeekIndex
       : getJalaliWeekday(currentYear, currentMonth, 1);
     const calendarDays = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, startDayIndex);
 
@@ -2060,7 +1802,7 @@ export default function Home() {
     const totalCols = 3 + calendarDays.length + 6;
     const lastColLetter = getExcelColumnLetter(totalCols);
     worksheet.mergeCells(`A1:${lastColLetter}1`);
-    
+
     const titleCell = worksheet.getCell('A1');
     titleCell.value = `جدول هوشمند و برنامه شیفت‌بندی پرستاری - ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} سال ${currentYear}`;
     titleCell.font = titleFont;
@@ -2142,7 +1884,7 @@ export default function Home() {
         if (s.startsWith('L')) {
           cleanS = s.substring(1) as ShiftType;
         }
-        
+
         if (cleanS === 'OFF') {
           rowData.push('آف');
         } else {
@@ -2188,14 +1930,14 @@ export default function Home() {
           const d = calendarDays[colNumber - 4];
           const val = cell.value;
           const isHolidayCol = d.isHoliday || d.dayOfWeek === 6;
-          
+
           if (isHolidayCol) {
             cell.fill = {
               type: 'pattern',
               pattern: 'solid',
               fgColor: { argb: 'FFFFC7CE' }
             };
-            
+
             if (val === 'آف') {
               cell.font = { name: 'B Nazanin', size: 11, bold: true, color: { argb: 'FF9C0006' } };
             } else if (val === 'M') {
@@ -2336,413 +2078,13 @@ export default function Home() {
     );
   }
 
-  if (role === 'guest') {
-    const activeDept = departments.find(d => d.id === selectedDepartmentId);
-    const isNewDeptWithDefaults = activeDept?.username === 'headnurse' && activeDept?.password === '123456';
-
+  if (isAuthLoading || role === 'guest' || !authenticatedUser) {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
-        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
-        <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] opacity-70"></div>
-        <div className="max-w-4xl w-full bg-white border border-slate-200/85 shadow-2xl rounded-3xl p-6 sm:p-10 text-center relative z-10 overflow-hidden">
-          <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
-          
-          <div className="mb-6 flex flex-col items-center">
-            <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
-              <img 
-                src="/logo.png" 
-                alt="بیمارستان بعثت نهاجا" 
-                className="w-full h-full object-contain"
-                onError={(e) => {
-                  const imgEl = e.currentTarget;
-                  if (imgEl.src.endsWith('/logo.png')) {
-                    imgEl.src = '/logo.svg';
-                  } else if (imgEl.src.endsWith('/logo.svg')) {
-                    imgEl.src = '/logo.jpg';
-                  } else if (imgEl.src.endsWith('/logo.jpg')) {
-                    imgEl.src = '/logo.jpeg';
-                  } else {
-                    imgEl.style.display = 'none';
-                    const fallbackEl = document.getElementById('hospital-icon-fallback');
-                    if (fallbackEl) {
-                      fallbackEl.style.display = 'flex';
-                    }
-                  }
-                }}
-              />
-              <div 
-                id="hospital-icon-fallback" 
-                className="hidden w-20 h-20 bg-emerald-50 rounded-2xl border border-emerald-200 shadow-inner flex items-center justify-center text-4xl"
-              >
-                🏥
-              </div>
-            </picture>
-            <span className="text-[10px] text-amber-600 font-extrabold tracking-widest mt-2 uppercase">بیمارستان بعثت نهاجا</span>
-          </div>
-
-          <h2 className="text-2xl font-black text-slate-900 mb-2 font-sans text-center">سامانه هوشمند برنامه‌ریزی شیفت های پرستاری - بیمارستان بعثت نهاجا</h2>
-          <p className="text-slate-500 text-xs max-w-xl mx-auto mb-8 font-bold leading-relaxed">
-            سیستم توزیع عادلانه شیفت ها مبتنی بر هوش مصنوعی و الگوریتم‌های رصد قوانین بیمارستان. لطفا برای ورود، بخش مورد نظر و نوع کاربری خود را تایید نمایید.
-          </p>
-
-          <div className="max-w-xl mx-auto mb-8 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-right space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex-1">
-                <label className="block text-[11px] font-black text-slate-500 mb-1.5"> بخش پرستاری فعال (مبنای ثبت اطلاعات)</label>
-                <select 
-                  value={selectedDepartmentId}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSelectedDepartmentId(val);
-                    if (typeof window !== 'undefined') {
-                      localStorage.setItem('hospital_selected_dept_id', val);
-                    }
-                  }}
-                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800"
-                >
-                  {departments.map(d => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} {d.id === 'sepehr' ? '(بخش پیش‌فرض)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              <div className="sm:pt-5">
-                <button
-                  type="button"
-                  onClick={() => setShowAddDeptModal(true)}
-                  className="w-full sm:w-auto bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-extrabold text-xs px-3.5 py-2.5 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <Plus className="w-4 h-4" />
-                  تعریف بخش جدید...
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-slate-100">
-              <div className="text-[10px] text-slate-400 font-bold">
-                بخش فعلی: <span className="text-emerald-700 font-black">{activeDept?.name || 'بارگذاری نشده...'}</span>
-              </div>
-              {selectedDepartmentId !== 'sepehr' && (
-                <button
-                  type="button"
-                  onClick={() => setShowDeptDeleteAuth(true)}
-                  className="text-[10px] text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1 rounded-lg transition-colors font-extrabold cursor-pointer flex items-center gap-1 shrink-0"
-                >
-                  حذف بخش فوق 🗑️
-                </button>
-              )}
-            </div>
-          </div>
-
-          {authError && (
-            <div className="mb-6 p-4 bg-red-50 text-red-700 border border-red-200 text-xs rounded-xl font-bold flex items-center justify-center gap-2 max-w-2xl mx-auto animate-pulse">
-              <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
-              {authError}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-2xl mx-auto">
-            
-            <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-personnel">
-              <div>
-                <div className="flex justify-center mb-3">
-                  <span className="bg-emerald-100/80 text-emerald-600 p-3 rounded-xl"><Users className="w-6 h-6"/></span>
-                </div>
-                <h3 className="font-extrabold text-slate-800 text-base mb-1">ورود کادر درمان کشیک</h3>
-                <p className="text-[11px] text-slate-500 leading-relaxed mb-4">جهت ورود و ثبت درخواست‌ها، نام، نام خانوادگی و کلمه عبور خود را وارد نمایید.</p>
-              </div>
-              <div className="space-y-2 text-right pt-4">
-                <input 
-                  type="text" 
-                  placeholder="نام (به فارسی)" 
-                  value={personnelFirstNameInput}
-                  onChange={(e) => setPersonnelFirstNameInput(e.target.value)}
-                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-sans placeholder-slate-400"
-                  id="login-personnel-firstname"
-                />
-                <input 
-                  type="text" 
-                  placeholder="نام خانوادگی (به فارسی)" 
-                  value={personnelLastNameInput}
-                  onChange={(e) => setPersonnelLastNameInput(e.target.value)}
-                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-sans placeholder-slate-400"
-                  id="login-personnel-lastname"
-                />
-                <input 
-                  type="password" 
-                  placeholder="کلمه عبور (پیش‌فرض ۱۲۳۴)" 
-                  value={personnelPasswordInput}
-                  onChange={(e) => setPersonnelPasswordInput(e.target.value)}
-                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-mono placeholder-slate-400"
-                  id="login-personnel-pass"
-                />
-                
-                <button 
-                  onClick={() => handleLogin('personnel')}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2"
-                  id="btn-login-personnel"
-                >
-                  ورود به پرتال شخصی کادر درمان
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-headnurse">
-              <div>
-                <div className="flex justify-center mb-3">
-                  <span className="bg-sky-100/80 text-sky-600 p-3 rounded-xl"><UserCheck className="w-6 h-6"/></span>
-                </div>
-                <h3 className="font-extrabold text-slate-800 text-base mb-1">پنل سرپرستار بخش</h3>
-                <p className="text-[11px] text-slate-500 leading-relaxed mb-4">مدیریت مستقیم تعهدات ماهیانه، تعریف الگوهای پوشش فعال و بهینه‌ساز خودکار توزیع متعادل شیفت.</p>
-              </div>
-              <div className="space-y-2">
-                <input 
-                  type="text" 
-                  placeholder="نام کاربری سرپرستار" 
-                  value={headnurseUsernameInput}
-                  onChange={(e) => setHeadnurseUsernameInput(e.target.value)}
-                  className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-sans placeholder-slate-400 font-black"
-                  id="input-username"
-                />
-                <input 
-                  type="password" 
-                  placeholder="کلمه عبور" 
-                  value={headnursePasswordInput}
-                  onChange={(e) => setHeadnursePasswordInput(e.target.value)}
-                  className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-mono placeholder-slate-400 font-black"
-                  id="input-password"
-                />
-
-                {isNewDeptWithDefaults && (
-                  <p className="text-[9px] text-amber-600 font-extrabold leading-normal bg-amber-50 p-2 border border-amber-100 rounded-lg text-center mt-1 animate-fade-in">
-                    ⚠️ اولین ورود سرپرستار این بخش است. جهت تنظیم اولیه کلمات عبور این بخش، نام کاربری و رمز عبور دلخواه خود را تایپ کرده و کلید ورود را بفشارید.
-                  </p>
-                )}
-
-                <button 
-                  onClick={() => handleLogin('headnurse')}
-                  className="w-full bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2"
-                  id="btn-login-headnurse"
-                >
-                  {isNewDeptWithDefaults ? 'ثبت و ورود اولین‌بار سرپرستار' : 'ورود سرپرستار بخش'}
-                </button>
-              </div>
-            </div>
-
-          </div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-100" dir="rtl">
+        <div className="text-center">
+          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent" />
+          <p className="mt-4 text-sm font-black text-slate-600">در حال بررسی ورود امن...</p>
         </div>
-
-        {showAddDeptModal && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in" id="add-dept-modal">
-            <div className="bg-white border rounded-3xl max-w-sm w-full p-6 shadow-2xl relative text-right space-y-4">
-              <button 
-                onClick={() => {
-                  setShowAddDeptModal(false);
-                  setNewDeptName('');
-                  setNewDeptHeadnurseUsername('');
-                  setNewDeptHeadnursePassword('');
-                }}
-                className="absolute top-4 left-4 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg p-1.5 cursor-pointer"
-              >
-                ✕
-              </button>
-              
-              <h3 className="text-sm font-black text-slate-800 border-b pb-3 border-slate-100">
-                تعریف بخش پرستاری جدید
-              </h3>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">نام بخش (فارسی)</label>
-                  <input 
-                    type="text" 
-                    placeholder="مثال: بخش مهر، بخش اورژانس" 
-                    value={newDeptName}
-                    onChange={(e) => setNewDeptName(e.target.value)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">نام کاربری سرپرستار</label>
-                  <input 
-                    type="text" 
-                    placeholder="نام کاربری مستقل بخش جدید" 
-                    value={newDeptHeadnurseUsername}
-                    onChange={(e) => setNewDeptHeadnurseUsername(e.target.value)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none text-left font-sans"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">کلمه عبور اولین ورود (حداقل ۴ کاراکتر)</label>
-                  <input 
-                    type="password" 
-                    placeholder="کلمه عبور مستقل بخش جدید" 
-                    value={newDeptHeadnursePassword}
-                    onChange={(e) => setNewDeptHeadnursePassword(e.target.value)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none text-left font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddDeptModal(false);
-                    setNewDeptName('');
-                    setNewDeptHeadnurseUsername('');
-                    setNewDeptHeadnursePassword('');
-                  }}
-                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs py-2 rounded-xl transition-all"
-                >
-                  انصراف
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || newDeptHeadnursePassword.trim().length < 4) {
-                      alert('لطفا تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
-                      return;
-                    }
-
-                    const newId = `dept_${Date.now()}`;
-                    const customDeptData: Department = {
-                      id: newId,
-                      name: newDeptName.trim(),
-                      username: newDeptHeadnurseUsername.trim(),
-                      password: newDeptHeadnursePassword.trim()
-                    };
-
-                    try {
-                      const nextDb = getFreshDbCopy();
-                      if (!nextDb.departments) nextDb.departments = [];
-                      if (!nextDb.deptData) nextDb.deptData = {};
-
-                      nextDb.departments = [...nextDb.departments, customDeptData];
-                      nextDb.deptData[newId] = {
-                        personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-                        requests: INITIAL_REQUESTS,
-                        settings_system: INITIAL_SETTINGS,
-                        settings_credentials: {
-                          username: newDeptHeadnurseUsername.trim(),
-                          password: newDeptHeadnursePassword.trim()
-                        },
-                        holidays: {},
-                        firstDayOfWeek: {},
-                        schedules: {},
-                      };
-
-                      await saveDbState(nextDb);
-
-                      setSelectedDepartmentId(newId);
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('hospital_selected_dept_id', newId);
-                      }
-
-                      setShowAddDeptModal(false);
-                      setNewDeptName('');
-                      setNewDeptHeadnurseUsername('');
-                      setNewDeptHeadnursePassword('');
-                      alert(`بخش جدید «${customDeptData.name}» با موفقیت در دیتابیس بعثت نهاجا تشکیل شد!`);
-                    } catch (err) {
-                      console.error(err);
-                      alert('خطا در تعریف مستقل بخش جدید.');
-                    }
-                  }}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2 rounded-xl transition-all shadow-md"
-                >
-                  تایید و پیکربندی مستقل
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-      {showDeptDeleteAuth && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in" id="dept-delete-auth-modal" dir="rtl">
-          <div className="bg-white rounded-[24px] shadow-2xl p-6 md:p-8 w-full max-w-[420px] animate-scale-in border border-slate-100 relative">
-            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2 mb-3">
-              <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
-            </h3>
-            <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
-              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
-            </p>
-            
-            <div className="space-y-4 text-right">
-              <div>
-                <label className="block text-[10px] font-black text-slate-600 mb-1">نام کاربری سرپرستار بخش</label>
-                <input 
-                  type="text" 
-                  value={deleteDeptAuthUser}
-                  onChange={(e) => setDeleteDeptAuthUser(e.target.value)}
-                  className="w-full text-xs font-bold bg-slate-50 border border-slate-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl px-3 py-2.5 text-slate-800 font-sans"
-                  placeholder="نام کاربری"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-slate-600 mb-1">رمز عبور سرپرستار بخش</label>
-                <input 
-                  type="password" 
-                  value={deleteDeptAuthPass}
-                  onChange={(e) => setDeleteDeptAuthPass(e.target.value)}
-                  className="w-full text-xs font-bold bg-slate-50 border border-slate-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl px-3 py-2.5 text-slate-800 font-mono"
-                  placeholder="رمز عبور"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2 mt-8">
-              <button 
-                onClick={async () => {
-                  const matchedDept = departments.find(d => d.id === selectedDepartmentId);
-                  if (matchedDept && matchedDept.username === deleteDeptAuthUser && matchedDept.password === deleteDeptAuthPass) {
-                    try {
-                      const nextDb = getFreshDbCopy();
-                      if (!nextDb.departments) nextDb.departments = [];
-                      if (!nextDb.deptData) nextDb.deptData = {};
-
-                      nextDb.departments = nextDb.departments.filter(d => d.id !== selectedDepartmentId);
-                      delete nextDb.deptData[selectedDepartmentId];
-
-                      await saveDbState(nextDb);
-
-                      alert(`بخش با موفقیت حذف شد.`);
-                      setSelectedDepartmentId('sepehr');
-                      setShowDeptDeleteAuth(false);
-                      setDeleteDeptAuthUser('');
-                      setDeleteDeptAuthPass('');
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('hospital_selected_dept_id', 'sepehr');
-                      }
-                    } catch (err) {
-                      console.error("Error deleting department:", err);
-                      alert("خطا در حذف بخش.");
-                    }
-                  } else {
-                    alert('نام کاربری یا رمز عبور سرپرستار بخش نادرست است. عملیات لغو شد.');
-                  }
-                }}
-                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all font-sans cursor-pointer shadow-sm border border-rose-700"
-              >
-                تایید و حذف قطعی بخش
-              </button>
-              <button 
-                onClick={() => {
-                  setShowDeptDeleteAuth(false);
-                  setDeleteDeptAuthUser('');
-                  setDeleteDeptAuthPass('');
-                }}
-                className="flex-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-bold text-xs py-2.5 rounded-xl transition-all cursor-pointer font-sans"
-              >
-                انصراف
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       </div>
     );
   }
@@ -2750,14 +2092,14 @@ export default function Home() {
   return (
     <div className="flex flex-col min-h-screen h-screen w-full overflow-hidden bg-slate-50 font-sans" dir="rtl">
       {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
-      
+
       {isNavOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex justify-start print:hidden animate-fade-in"
           onClick={() => setIsNavOpen(false)}
           id="drawer-overlay"
         >
-          <div 
+          <div
             className="w-72 bg-[#1e293b] text-white h-full flex flex-col shadow-2xl relative animate-slide-left"
             onClick={(e) => e.stopPropagation()}
             id="drawer-container"
@@ -2767,7 +2109,7 @@ export default function Home() {
                 <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-white shadow-md shadow-blue-500/20">H</div>
                 <span className="text-lg font-black tracking-tight text-white">سامانه پرستاری</span>
               </div>
-              <button 
+              <button
                 onClick={() => setIsNavOpen(false)}
                 className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
                 id="btn-close-drawer"
@@ -2778,7 +2120,7 @@ export default function Home() {
             </div>
 
             <nav className="flex-1 py-4 text-sm font-semibold space-y-1 overflow-y-auto">
-              
+
               <button
                 onClick={() => {
                   setActiveTab('schedule');
@@ -2899,7 +2241,7 @@ export default function Home() {
             </nav>
 
             <div className="p-4 border-t border-slate-700/80 space-y-4">
-              
+
               <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50">
                 <div className="text-[10px] text-slate-400 mb-1 font-bold">سطح دسترسی فعال:</div>
                 <div className="flex items-center justify-between">
@@ -2937,7 +2279,7 @@ export default function Home() {
       )}
 
       <main className="flex-1 flex flex-col h-full overflow-hidden">
-        
+
         <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0 print:hidden transition-all duration-300">
           <div className="flex items-center gap-4">
             <button
@@ -2952,27 +2294,39 @@ export default function Home() {
             <h1 className="text-base sm:text-lg font-black text-slate-800 underline decoration-emerald-500 underline-offset-8">
               برنامه‌ریزی شیفت {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}
             </h1>
-            <div className="hidden md:flex text-xs font-black text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100">
-              {departments.find(d => d.id === selectedDepartmentId)?.name || 'بخش سپهر'}
-            </div>
+            {role === 'admin' ? (
+              <select
+                value={selectedDepartmentId}
+                onChange={event => {
+                  setSelectedDepartmentId(event.target.value);
+                  localStorage.setItem('hospital_selected_dept_id', event.target.value);
+                }}
+                className="hidden max-w-44 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-700 outline-none md:block"
+                aria-label="انتخاب بخش"
+              >
+                {departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
+              </select>
+            ) : (
+              <div className="hidden rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-700 md:flex">
+                {departments.find(d => d.id === selectedDepartmentId)?.name || 'بخش سپهر'}
+              </div>
+            )}
             <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-black text-blue-700 bg-blue-50 px-2.5 py-1.5 rounded-full border border-blue-100">
               <span className={`w-2 h-2 rounded-full ${isSavingDb ? 'bg-orange-500 animate-pulse' : (isLoadingDb ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500')}`} />
               <span>پشتیبان‌گیری ابری:</span>
               <span className="font-mono text-[9px] text-blue-600 bg-blue-100/60 px-1.5 py-0.5 rounded-md">Arvan S3</span>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4 text-xs">
             <div className="text-right hidden sm:block">
-              <p className="font-black text-slate-800">
-                {role === 'admin' ? 'دکتر مریم علوی' : role === 'headnurse' ? (departments.find(d => d.id === selectedDepartmentId)?.name || 'بخش سپهر') : `${selectedPersonnelUser?.firstName} ${selectedPersonnelUser?.lastName}`}
-              </p>
+              <p className="font-black text-slate-800">{authenticatedUser.firstName} {authenticatedUser.lastName}</p>
               <p className="text-slate-500 text-[10px] text-right font-medium mt-0.5">
-                {role === 'admin' ? 'سوپروایزر ارشد بیمارستان' : role === 'headnurse' ? 'مدیریت برنامه‌ریزی' : 'کارشناس پرستاری'}
+                {role === 'admin' ? 'مدیر سامانه' : role === 'headnurse' ? 'مدیریت برنامه‌ریزی بخش' : 'کارشناس پرستاری'}
               </p>
             </div>
             <div className="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center font-bold text-white shadow-md text-sm cursor-pointer select-none">
-              {role === 'admin' ? 'AD' : role === 'headnurse' ? 'HN' : selectedPersonnelUser ? selectedPersonnelUser.firstName[0] : 'G'}
+              {authenticatedUser.firstName[0]}{authenticatedUser.lastName[0]}
             </div>
           </div>
         </header>
@@ -3005,8 +2359,8 @@ export default function Home() {
                 type="button"
                 onClick={() => handleSelectMonth(mNum)}
                 className={`px-4 py-1.5 rounded-full text-[11px] font-black shrink-0 transition-all cursor-pointer ${
-                  isActive 
-                    ? 'bg-emerald-600 text-white shadow-xs scale-102 font-black' 
+                  isActive
+                    ? 'bg-emerald-600 text-white shadow-xs scale-102 font-black'
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200/60'
                 }`}
               >
@@ -3018,12 +2372,13 @@ export default function Home() {
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
           <TehranDateTime lastSync={calendarSyncedAt} />
+          {(role === 'headnurse' || role === 'admin') && <ResetRequestList />}
           {officialCalendarState.status !== 'ready' && (
             <div className={`rounded-2xl border p-4 text-xs font-black print:hidden ${officialCalendarState.status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`} role="status">
               {officialCalendarState.status === 'error' ? 'اتصال به تقویم رسمی کشور برقرار نشد؛ لطفاً اتصال اینترنت را بررسی و صفحه را تازه‌سازی کنید.' : 'در حال همگام‌سازی کامل روزها، مناسبت‌ها و تعطیلات رسمی ماه انتخاب‌شده…'}
             </div>
           )}
-          
+
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-2 text-xs">
               <span className="bg-indigo-50 text-indigo-700 p-1.5 rounded-xl border border-indigo-100"><Sparkles className="w-4 h-4"/></span>
@@ -3079,7 +2434,7 @@ export default function Home() {
                     هشدارها فقط در داشبورد پنل سرپرستار نمایش داده می‌شوند و با یک کلیک در پنجره جداگانه باز خواهند شد.
                   </p>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowAlertCenter(true)}
@@ -3131,12 +2486,12 @@ export default function Home() {
                               const updatedAssignments = { ...schedule.assignments };
                               if (!updatedAssignments[change.personnelId]) updatedAssignments[change.personnelId] = {};
                               updatedAssignments[change.personnelId][change.day] = change.toShift;
-                              
+
                               const verification = verifyCoverageAndLeaders(
-                                currentYear, currentMonth, personnel, updatedAssignments, 
+                                currentYear, currentMonth, personnel, updatedAssignments,
                                 settings, customHolidays, firstDayOfWeekIndex, requests
                               );
-                              
+
                               const nextDb = getFreshDbCopy();
                               const deptId = selectedDepartmentId || 'sepehr';
                               const oldDept = nextDb.deptData[deptId];
@@ -3317,18 +2672,18 @@ export default function Home() {
 
           {activeTab === 'schedule' && (
             <div className="space-y-6">
-              
+
               <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4 print:hidden">
                 <div className="flex items-center gap-3">
                   <h3 className="font-extrabold text-slate-800 text-sm">لیست شیفت‌های ماهانه</h3>
                   <p className="text-slate-400 text-xs font-semibold">تعداد روزها: {calendarDays.length} روز / {calendarDays.filter(c => c.isHoliday).length} روز تعطیلات</p>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                   {role !== 'personnel' && (
                     <>
                       {finalizedNursesMonths.includes(`${currentYear}_${currentMonth}`) ? (
-                        <button 
+                        <button
                           onClick={() => handleToggleLock('nurse')}
                           className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-black px-3.5 py-2 rounded-xl border border-emerald-200 transition-all cursor-pointer shadow-xs"
                           title="قفل پرستاران این ماه فعال است. برای باز کردن کلیک کنید"
@@ -3337,7 +2692,7 @@ export default function Home() {
                           <span>قفل پرستاران (باز کردن)</span>
                         </button>
                       ) : (
-                        <button 
+                        <button
                           onClick={() => handleToggleLock('nurse')}
                           className="flex items-center gap-1.5 bg-slate-50 hover:bg-emerald-600 hover:text-white text-slate-700 text-xs font-black px-3.5 py-2 rounded-xl border border-slate-200 hover:border-emerald-600 transition-all cursor-pointer shadow-xs"
                           title="ثبت نهایی و قفل برنامه پرستاران"
@@ -3346,9 +2701,9 @@ export default function Home() {
                           <span>قفل پرستاران</span>
                         </button>
                       )}
-                      
+
                       {finalizedAssistantsMonths.includes(`${currentYear}_${currentMonth}`) ? (
-                        <button 
+                        <button
                           onClick={() => handleToggleLock('assistant')}
                           className="flex items-center gap-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-black px-3.5 py-2 rounded-xl border border-sky-200 transition-all cursor-pointer shadow-xs"
                           title="قفل کمک‌بهیاران این ماه فعال است. برای باز کردن کلیک کنید"
@@ -3357,7 +2712,7 @@ export default function Home() {
                           <span>قفل کمک‌بهیاران (باز کردن)</span>
                         </button>
                       ) : (
-                        <button 
+                        <button
                           onClick={() => handleToggleLock('assistant')}
                           className="flex items-center gap-1.5 bg-slate-50 hover:bg-sky-600 hover:text-white text-slate-700 text-xs font-black px-3.5 py-2 rounded-xl border border-slate-200 hover:border-sky-600 transition-all cursor-pointer shadow-xs"
                           title="ثبت نهایی و قفل برنامه کمک‌بهیاران"
@@ -3368,7 +2723,7 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  <button 
+                  <button
                     onClick={() => { exportToExcel(); handlePrint(); }}
                     className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
                     id="btn-export-excel-pdf"
@@ -3381,13 +2736,13 @@ export default function Home() {
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="schedule-grid-container">
                 <div className="overflow-x-auto overflow-y-auto max-h-[75vh]">
                   <table className="w-full text-right border-collapse min-w-[1200px]">
-                    
+
                     <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-20 shadow-sm">
                       <tr>
                         <th className="sticky right-0 top-0 bg-slate-50 z-30 px-4 py-3 text-xs font-extrabold text-slate-600 border-l border-b border-slate-200 w-44 text-center">پرسنل / روزهای ماه</th>
                         {calendarDays.map(d => (
-                          <th 
-                            key={d.day} 
+                          <th
+                            key={d.day}
                             className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b border-slate-200 min-w-[34px] ${d.isHoliday ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800' : 'bg-slate-50 text-slate-600'}`}
                             title={d.holidayTitle || 'روز عادی'}
                           >
@@ -3399,7 +2754,7 @@ export default function Home() {
                     </thead>
 
                     <tbody className="divide-y divide-slate-200">
-                      
+
                       {personnel
                         .filter(p => p.active)
                         .filter(p => {
@@ -3411,10 +2766,10 @@ export default function Home() {
                         .map(p => {
                           const pAssignments = schedule?.assignments[p.id] || {};
                           const report = reports.find(r => r.personnelId === p.id);
-                          
+
                           return (
                             <tr key={p.id} className="hover:bg-indigo-50/20 transition-colors">
-                              
+
                               <td className="sticky right-0 bg-white z-10 px-4 py-2 border-l border-slate-200 shadow-[2px_0_5px_rgba(0,0,0,0.03)] text-right">
                                 <div className="flex items-center justify-between">
                                   <div>
@@ -3424,16 +2779,16 @@ export default function Home() {
                                       <span className="font-bold text-slate-500">{report?.positionText}</span>
                                     </div>
                                   </div>
-                                  
+
                                   {(role === 'admin' || role === 'headnurse') && (
                                     <button
                                       onClick={async () => {
                                         const isLocked = lockedRows.includes(p.id);
-                                        const newLocked = isLocked 
+                                        const newLocked = isLocked
                                           ? lockedRows.filter(id => id !== p.id)
                                           : [...lockedRows, p.id];
                                         setLockedRows(newLocked);
-                                        
+
                                         const nextDb = getFreshDbCopy();
                                         const deptId = selectedDepartmentId || 'sepehr';
                                         const oldDept = nextDb.deptData[deptId];
@@ -3457,8 +2812,8 @@ export default function Home() {
                                         }
                                       }}
                                       className={`p-1.5 rounded-lg transition-all cursor-pointer ${
-                                        lockedRows.includes(p.id) 
-                                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' 
+                                        lockedRows.includes(p.id)
+                                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                                           : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
                                       }`}
                                       title={lockedRows.includes(p.id) ? 'باز کردن قفل این ردیف' : 'قفل کردن این ردیف'}
@@ -3476,12 +2831,12 @@ export default function Home() {
                               {calendarDays.map(d => {
                                 const currentShift = pAssignments[d.day] || 'OFF';
                                 const cellId = `cell-${p.id}-${d.day}`;
-                                
+
                                 const isShiftLeaderM = schedule?.shiftLeaders?.[d.day]?.morning === p.id;
                                 const isShiftLeaderE = schedule?.shiftLeaders?.[d.day]?.afternoon === p.id;
                                 const isShiftLeaderN = schedule?.shiftLeaders?.[d.day]?.night === p.id;
 
-                                const isShiftLeaderCell = 
+                                const isShiftLeaderCell =
                                   (currentShift === 'M' && isShiftLeaderM) ||
                                   (currentShift === 'E' && isShiftLeaderE) ||
                                   (currentShift === 'N' && isShiftLeaderN) ||
@@ -3525,12 +2880,12 @@ export default function Home() {
                                 const isEditingThis = editingCell?.pId === p.id && editingCell?.day === d.day;
 
                                 return (
-                                  <td 
-                                    key={d.day} 
+                                  <td
+                                    key={d.day}
                                     className={`px-0.5 py-1 text-center border-l border-slate-100 relative ${d.isHoliday ? 'bg-rose-50/10' : ''}`}
                                   >
                                     {isEditingThis ? (
-                                      <select 
+                                      <select
                                         autoFocus
                                         value={currentShift}
                                         onChange={(e) => handleManualShiftChange(p.id, d.day, e.target.value as ShiftType)}
@@ -3553,7 +2908,7 @@ export default function Home() {
                                         <option value="L5">مرخصی روز ۵</option>
                                       </select>
                                     ) : (
-                                      <button 
+                                      <button
                                         onClick={() => handleCellClick(p.id, d.day)}
                                         disabled={role === 'personnel' || lockedRows.includes(p.id)}
                                         className={`w-full max-w-[32px] h-8 rounded-lg flex items-center justify-center transition-all ${badgeClass} ${highlightedCellId === cellId ? 'ring-4 ring-red-500 ring-offset-2 ring-offset-white animate-[pulse_0.7s_ease-in-out_5]' : ''} ${(role !== 'personnel' && !lockedRows.includes(p.id)) ? 'hover:scale-105 hover:shadow cursor-pointer' : ''}`}
@@ -3715,7 +3070,7 @@ export default function Home() {
 
           {activeTab === 'requests' && (
             <div className="space-y-6 animate-fadeIn">
-              
+
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
@@ -3723,13 +3078,13 @@ export default function Home() {
                   </h3>
                   <p className="text-slate-400 text-xs font-bold mt-0.5">ثبت ترجیحات زمانی و مرخصی جهت اعمال دقیق در الگوریتم هوشمند بهینه‌سازی شیفت کادر</p>
                 </div>
-                
+
                 <div className="flex flex-wrap items-center gap-3">
                   {(role === 'admin' || role === 'headnurse') && (
                     <>
                       <label className="flex items-center gap-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-3.5 py-2 rounded-xl text-xs font-black text-rose-800 cursor-pointer transition-colors shadow-xs">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
                           onChange={handleToggleRequestsLock}
                           className="rounded border-rose-300 text-rose-600 focus:ring-rose-500"
@@ -3737,8 +3092,8 @@ export default function Home() {
                         اتمام مهلت ثبت درخواست‌ها
                       </label>
                       <label className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-2 rounded-xl text-xs font-black text-slate-700 cursor-pointer transition-colors">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={showSplitRequests}
                           onChange={(e) => setShowSplitRequests(e.target.checked)}
                           className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
@@ -3751,7 +3106,7 @@ export default function Home() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                
+
                 <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm flex flex-col justify-between hover:border-indigo-200 hover:shadow-md transition-all">
                   <div className="space-y-4">
                     <div className="flex items-center gap-3">
@@ -3804,7 +3159,7 @@ export default function Home() {
                   <div className="absolute top-0 left-0 bg-purple-500 text-white text-[9px] font-black px-3 py-1 rounded-br-2xl animate-pulse tracking-wider">
                     Powered by Gemini AI (Beta)
                   </div>
-                  
+
                   <div className="space-y-4 pt-2">
                     <div className="flex items-center gap-3">
                       <div className="bg-purple-50 p-2.5 rounded-2xl">
@@ -3820,8 +3175,8 @@ export default function Home() {
                       {role !== 'personnel' ? (
                         <div>
                           <label className="block text-[11px] font-bold text-slate-500 mb-1">پرستار متقاضی:</label>
-                          <select 
-                            value={aiSelectedPersonnelId} 
+                          <select
+                            value={aiSelectedPersonnelId}
                             onChange={(e) => setAiSelectedPersonnelId(e.target.value)}
                             className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3 py-2 focus:border-purple-500 focus:outline-none"
                           >
@@ -3836,7 +3191,7 @@ export default function Home() {
                           متقاضی: {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
                         </div>
                       )}
-                      
+
                       <div>
                         <label className="block text-[11px] font-bold text-slate-500 mb-1">درخواست خود را بنویسید:</label>
                         <textarea
@@ -4154,8 +3509,8 @@ export default function Home() {
                                         });
                                       }}
                                       className={`px-3 py-1.5 rounded-full text-[10px] font-black transition-all border cursor-pointer ${
-                                        r.isEssential 
-                                          ? 'bg-red-500 text-white border-red-500 hover:bg-red-650 shadow-xs' 
+                                        r.isEssential
+                                          ? 'bg-red-500 text-white border-red-500 hover:bg-red-650 shadow-xs'
                                           : 'bg-slate-50 text-slate-500 border-slate-205 hover:bg-slate-100'
                                       }`}
                                     >
@@ -4197,10 +3552,10 @@ export default function Home() {
                                     <Settings2 className="w-4 h-4" />
                                   </button>
                                   <button
-                                    onClick={() => setDeleteTarget({ 
-                                      id: r.id, 
-                                      type: 'request', 
-                                      label: `درخواست پرسنل ${p.firstName} ${p.lastName}` 
+                                    onClick={() => setDeleteTarget({
+                                      id: r.id,
+                                      type: 'request',
+                                      label: `درخواست پرسنل ${p.firstName} ${p.lastName}`
                                     })}
                                     className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
                                     title="حذف درخواست"
@@ -4229,7 +3584,7 @@ export default function Home() {
                   <h3 className="text-base font-black text-slate-800">کارنامه خلاصه کارکرد و فیش ساعت‌کاری کل پرسنل</h3>
                   <p className="text-xs text-slate-400 mt-1 font-semibold">محاسبات عادلانه بر پایه ساعت موظفی ماهانه، با فاکتورگیری سنوات، بهره‌وری و کسر شیفت</p>
                 </div>
-                
+
                 <div className="flex gap-2">
                   <button onClick={() => { exportToExcel(); handlePrint(); }} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
                     <FileSpreadsheet className="w-4 h-4"/> دریافت همزمان اکسل و چاپ کارنامه‌ها
@@ -4238,7 +3593,7 @@ export default function Home() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                
+
                 <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 text-white shadow-lg p-5 rounded-2xl border border-indigo-200">
                   <div className="flex justify-between items-start">
                     <span className="text-indigo-100 font-bold text-xs">مجموع ساعت ارائه خدمات</span>
@@ -4361,16 +3716,16 @@ export default function Home() {
 
           {activeTab === 'settings' && role === 'admin' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              
+
               <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
                 <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100">ساعات موظفی پایه و پیکربندی بر اساس قوانین</h3>
-                
+
                 <form onSubmit={handleSaveSettings} className="space-y-6">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">موظفی کادر رسمی (ساعت)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         value={settings.dutyHours.official}
                         onChange={(e) => setSettings({
                           ...settings,
@@ -4381,8 +3736,8 @@ export default function Home() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">موظفی قراردادی (ساعت)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         value={settings.dutyHours.contract}
                         onChange={(e) => setSettings({
                           ...settings,
@@ -4393,8 +3748,8 @@ export default function Home() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">موظفی طرح و وظیفه (ساعت)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         value={settings.dutyHours.conscript}
                         onChange={(e) => setSettings({
                           ...settings,
@@ -4405,8 +3760,8 @@ export default function Home() {
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">حداکثر سقف اضافه‌کار (ساعت)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         value={settings.dutyHours.overtime}
                         onChange={(e) => setSettings({
                           ...settings,
@@ -4424,8 +3779,8 @@ export default function Home() {
                       <div className="grid grid-cols-3 gap-2">
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">صبح (M)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.weekday.morningNurse}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4439,8 +3794,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">عصر (E)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.weekday.afternoonNurse}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4454,8 +3809,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">شب (N)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.weekday.nightNurse}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4475,8 +3830,8 @@ export default function Home() {
                       <div className="grid grid-cols-3 gap-2">
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">صبح (M)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.weekday.morningAssistant}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4490,8 +3845,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">عصر (E)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.weekday.afternoonAssistant}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4505,8 +3860,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">شب (N)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.weekday.nightAssistant}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4529,8 +3884,8 @@ export default function Home() {
                       <div className="grid grid-cols-3 gap-2">
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">صبح (M)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.holiday.morningNurse}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4544,8 +3899,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">عصر (E)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.holiday.afternoonNurse}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4559,8 +3914,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">شب (N)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.holiday.nightNurse}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4580,8 +3935,8 @@ export default function Home() {
                       <div className="grid grid-cols-3 gap-2">
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">صبح (M)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.holiday.morningAssistant}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4595,8 +3950,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">عصر (E)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.holiday.afternoonAssistant}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4610,8 +3965,8 @@ export default function Home() {
                         </div>
                         <div>
                           <label className="block text-[9px] font-extrabold text-slate-500 mb-1">شب (N)</label>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={settings.demand.holiday.nightAssistant}
                             onChange={(e) => setSettings({
                               ...settings,
@@ -4646,9 +4001,9 @@ export default function Home() {
                 <form onSubmit={handleAddHoliday} className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">روز چندم ماه؟</label>
-                    <input 
-                      type="number" 
-                      min="1" 
+                    <input
+                      type="number"
+                      min="1"
                       max="31"
                       value={holidayDayInput}
                       onChange={(e) => setHolidayDayInput(Number(e.target.value))}
@@ -4657,8 +4012,8 @@ export default function Home() {
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">عنوان مناسبت تعطیل</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       placeholder="مثلاً: عاشورای حسینی"
                       value={holidayTitleInput}
                       onChange={(e) => setHolidayTitleInput(e.target.value)}
@@ -4687,7 +4042,7 @@ export default function Home() {
                         return (
                           <div key={dayNum} className="p-3 bg-slate-50/50 flex justify-between items-center hover:bg-slate-100/50 transition-colors">
                             <span className="font-bold text-slate-800 font-mono">روز {dayNum} {JALALI_MONTH_NAMES[currentMonth - 1]}: <span className="text-rose-600 mr-2">{customHolidays[dayNum]}</span></span>
-                            <button 
+                            <button
                               onClick={() => handleRemoveHoliday(dayNum)}
                               className="text-red-500 hover:text-red-700 bg-white p-1 rounded-lg shadow-sm border border-slate-200 cursor-pointer"
                               id={`btn-remove-holiday-${dayNum}`}
@@ -4709,8 +4064,8 @@ export default function Home() {
                   <div className="grid grid-cols-4 gap-1.5 text-center font-bold">
                     {WEEKDAYS.map((w, idx) => {
                       const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
-                      const isSelected = firstDayOfWeekIndex !== undefined 
-                        ? firstDayOfWeekIndex === idx 
+                      const isSelected = firstDayOfWeekIndex !== undefined
+                        ? firstDayOfWeekIndex === idx
                         : mathDefault === idx;
 
                       return (
@@ -4726,8 +4081,8 @@ export default function Home() {
                             saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
                           }}
                           className={`px-2 py-1.5 rounded-xl border text-[10px] font-extrabold cursor-pointer transition-all ${
-                            isSelected 
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
+                            isSelected
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
                               : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                           }`}
                         >
@@ -4744,12 +4099,12 @@ export default function Home() {
                     <h4 className="text-xs font-black text-slate-800 font-sans">تقویم تعاملی {JALALI_MONTH_NAMES[currentMonth - 1]} (کلیک جهت تعیین تعطیلی):</h4>
                     <p className="text-[10px] text-slate-400 mt-1">بر روی هر یک از خانه‌های تقویم زیر کلیک کنید تا وضعیت آن روز بین «کاری» و «تعطیل» سوئیچ شود.</p>
                   </div>
-                  
+
                   <div className="grid grid-cols-7 gap-1 text-center font-extrabold text-[9px]">
                     {WEEKDAYS.map(w => (
                       <div key={w} className="py-1 text-slate-400 font-extrabold text-[9px]">{w[0]}</div>
                     ))}
-                    
+
                     {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, i) => (
                       <div key={`pad-${i}`} className="p-2 bg-slate-100/20 rounded-lg text-transparent text-[10px]">-</div>
                     ))}
@@ -4758,7 +4113,7 @@ export default function Home() {
                       const isCustomHoliday = !!customHolidays[d.day];
                       const isFriday = d.dayOfWeek === 6;
                       const isRed = isFriday || isCustomHoliday;
-                      
+
                       return (
                         <button
                           type="button"
@@ -4774,8 +4129,8 @@ export default function Home() {
                             saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
                           }}
                           className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[38px] cursor-pointer ${
-                            isRed 
-                              ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100/50 hover:border-rose-300' 
+                            isRed
+                              ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100/50 hover:border-rose-300'
                               : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
                           }`}
                         >
@@ -4800,7 +4155,7 @@ export default function Home() {
                             const daysInMonth = currentMonth <= 6 ? 31 : (currentMonth === 12 && !isLeapYearVal ? 29 : 30);
                             const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
                             const activeFirstDayIndex = activeFd !== -1 ? activeFd : mathDefault;
-                            
+
                             let liveCalendarDays = [];
                             for (let d = 1; d <= daysInMonth; d++) {
                               const calculatedDayOfWeek = (activeFirstDayIndex + ((d - 1) % 7)) % 7;
@@ -4820,7 +4175,7 @@ export default function Home() {
 
                           const nextDb = getFreshDbCopy();
                           if (!nextDb.deptData) nextDb.deptData = {};
-                          
+
                           const deptId = selectedDepartmentId || 'sepehr';
                           const oldDept = nextDb.deptData[deptId] || {
                             personnel: [],
@@ -4870,7 +4225,7 @@ export default function Home() {
 
           {activeTab === 'calendar' && (
             <div className="space-y-6 animate-fade-in print:hidden">
-              
+
               <div className="bg-white border border-slate-200 p-6 rounded-3xl shadow-sm">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-150 pb-4 mb-4">
                   <div>
@@ -4883,7 +4238,7 @@ export default function Home() {
                       {calendarOnline ? 'متصل به تقویم رسمی ایران • همگام‌سازی خودکار فعال' : 'در حال اتصال؛ محاسبات داخلی تقویم فعال است'}
                     </div>
                   </div>
-                  
+
                   <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-[11px] font-extrabold px-3 py-1.5 rounded-full flex items-center gap-2 shrink-0">
                     <span>ماه فعال کنونی:</span>
                     <span className="bg-emerald-600 text-white px-2 py-0.5 rounded font-black font-mono">{JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}</span>
@@ -4908,12 +4263,12 @@ export default function Home() {
                       با انتخاب روز هفته برای روز ۱ام، مابقی روزها به لحاظ موقعیت در یک لایه محاسباتی بازچیده می‌شوند:
                     </p>
                   </div>
-                  
+
                   <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
                     {WEEKDAYS.map((w, idx) => {
                       const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
-                      const isSelected = firstDayOfWeekIndex !== undefined 
-                        ? firstDayOfWeekIndex === idx 
+                      const isSelected = firstDayOfWeekIndex !== undefined
+                        ? firstDayOfWeekIndex === idx
                         : mathDefault === idx;
 
                       return (
@@ -4930,8 +4285,8 @@ export default function Home() {
                             saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
                           }}
                           className={`px-3 py-2 rounded-xl border text-xs font-black transition-all flex flex-col items-center justify-center gap-1 ${
-                            isSelected 
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.02]' 
+                            isSelected
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.02]'
                               : 'bg-white text-slate-600 border-slate-200'
                           } ${role !== 'personnel' ? 'hover:bg-slate-50 cursor-pointer' : 'opacity-70 cursor-not-allowed'}`}
                         >
@@ -4958,7 +4313,7 @@ export default function Home() {
 
                   <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                     <div className="max-h-[500px] overflow-y-auto divide-y divide-slate-100 scrollbar-thin">
-                      
+
                       <div className="grid grid-cols-12 bg-slate-50 p-3 text-[10px] font-black text-slate-500 sticky top-0 border-b border-slate-250 z-10">
                         <div className="col-span-3 text-center">وضعیت تعطیلی مذهبی/ملی</div>
                         <div className="col-span-2 text-center">تاریخ روز</div>
@@ -4972,17 +4327,17 @@ export default function Home() {
                         const isChecked = isFriday || isCustomHoliday;
 
                         return (
-                          <div 
+                          <div
                             key={`tab-cal-day-${d.day}`}
                             className={`grid grid-cols-12 p-3 items-center text-xs font-bold transition-colors ${
-                              isChecked 
-                                ? 'bg-rose-50/30 text-rose-800' 
+                              isChecked
+                                ? 'bg-rose-50/30 text-rose-800'
                                 : 'hover:bg-slate-50/30 text-slate-700'
                             }`}
                           >
                             <div className="col-span-3 flex items-center justify-center gap-2">
                               <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                                <input 
+                                <input
                                   type="checkbox"
                                   checked={isChecked}
                                   disabled={isFriday || role === 'personnel'}
@@ -5012,8 +4367,8 @@ export default function Home() {
 
                             <div className="col-span-3">
                               <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${
-                                isFriday 
-                                  ? 'bg-rose-100 text-rose-700 border border-rose-200' 
+                                isFriday
+                                  ? 'bg-rose-100 text-rose-700 border border-rose-200'
                                   : 'bg-slate-100 text-slate-650 border border-slate-150'
                               }`}>
                                 {WEEKDAYS[d.dayOfWeek]}
@@ -5024,7 +4379,7 @@ export default function Home() {
                               {isFriday ? (
                                 <span className="text-slate-400 text-[10px] font-normal italic">روز جمعه (تعطیل مستقل سیستم)</span>
                               ) : (
-                                <input 
+                                <input
                                   type="text"
                                   placeholder="مثلاً: مناسبت تعطیلی مذهبی..."
                                   disabled={!isCustomHoliday || role === 'personnel'}
@@ -5040,7 +4395,7 @@ export default function Home() {
                                   }}
                                   className={`w-full text-[10px] px-2.5 py-1 rounded-lg border focus:outline-none transition-all ${
                                     isCustomHoliday && role !== 'personnel'
-                                      ? 'bg-white border-rose-300 text-rose-800 font-black focus:border-rose-500' 
+                                      ? 'bg-white border-rose-300 text-rose-800 font-black focus:border-rose-500'
                                       : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-75'
                                   }`}
                                 />
@@ -5092,7 +4447,7 @@ export default function Home() {
 
                       <div className="bg-slate-50 p-3.5 border border-slate-200 rounded-2xl">
                         <label className="block text-[10px] font-black text-slate-500 mb-1.5">کادر طرح / وظیفه (ساعت)</label>
-                        <input 
+                        <input
                           type="number"
                           value={settings.dutyHours.conscript}
                           onChange={(e) => {
@@ -5114,130 +4469,35 @@ export default function Home() {
                   </div>
                 );
               })()}
-              
+
             </div>
           )}
 
           {activeTab === 'profile' && (
-            <div className="max-w-4xl mx-auto space-y-6 animate-fade-in print:hidden text-right">
-              <div className="bg-white border border-slate-200 p-6 sm:p-10 rounded-3xl shadow-sm text-right space-y-6">
-                
-                <div className="flex items-center gap-3 border-b border-slate-100 pb-5">
-                  <span className="bg-emerald-50 text-emerald-600 p-3 rounded-2xl">
-                    <User className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-950">مدیریت پروفایل و امنیت کاربری</h3>
-                    <p className="text-[11px] text-slate-400 font-bold mt-1">
-                      ویرایش مستقل حساب کاربری فعال، گذرواژه امن سرپرستار بخش و کاربران کادر درمان کشیک
-                    </p>
+            <div className="mx-auto w-full max-w-3xl animate-fade-in print:hidden" dir="rtl">
+              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-9">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-4">
+                    <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                      <User className="h-7 w-7" />
+                    </span>
+                    <div>
+                      <h3 className="text-lg font-black text-slate-900">{authenticatedUser.firstName} {authenticatedUser.lastName}</h3>
+                      <p className="mt-1 text-xs font-bold text-slate-500">کد ملی: <span className="font-mono" dir="ltr">{authenticatedUser.nationalId}</span></p>
+                      <p className="mt-1 text-[11px] font-bold text-slate-400">سطح دسترسی: {authenticatedUser.role === 'ADMIN' ? 'مدیر سامانه' : authenticatedUser.role === 'HEAD_NURSE' ? 'سرپرستار بخش' : 'پرسنل'}</p>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => router.push('/change-password')}
+                    className="rounded-xl bg-indigo-600 px-5 py-3 text-xs font-black text-white shadow-md transition hover:bg-indigo-700"
+                  >
+                    تغییر امن رمز عبور
+                  </button>
                 </div>
-
-                {role === 'headnurse' && (
-                  <form onSubmit={handleSaveProfile} className="space-y-6">
-                    <div className="bg-slate-50/50 border border-slate-200/80 p-4 rounded-2xl text-[11px] font-bold text-slate-500 leading-relaxed">
-                      💡 به عنوان <span className="text-indigo-600 font-black">سرپرستار بخش فعال</span>، اطلاعات تغییر یافته در این پنل مستقیماً نام بخش و شناسه امن حضور شما را برای این دپارتمان تغییر می‌دهد.
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-xs font-black text-slate-700 mb-2">نام فارسی بخش</label>
-                        <input 
-                          type="text" 
-                          value={profileDeptNameInput}
-                          onChange={(e) => setProfileDeptNameInput(e.target.value)}
-                          className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3.5 py-3 focus:ring-2 focus:ring-emerald-500 focus:outline-none text-slate-800"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-black text-slate-700 mb-2">نام کاربری سرپرستار (جهت ورود مجدد)</label>
-                        <input 
-                          type="text" 
-                          value={profileUsernameInput}
-                          onChange={(e) => setProfileUsernameInput(e.target.value)}
-                          className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3.5 py-3 focus:ring-2 focus:ring-emerald-500 focus:outline-none text-slate-800 text-left font-sans"
-                        />
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-black text-slate-700 mb-2">کلمه عبور امن سرپرستار بخش</label>
-                        <input 
-                          type="text" 
-                          value={profilePasswordInput}
-                          onChange={(e) => setProfilePasswordInput(e.target.value)}
-                          className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3.5 py-3 focus:ring-2 focus:ring-emerald-500 focus:outline-none text-slate-800 text-left font-mono"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-4 border-t border-slate-100 flex justify-end">
-                      <button
-                        type="submit"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-8 py-3 rounded-xl transition-all shadow-md cursor-pointer hover:scale-[1.01]"
-                      >
-                        ذخیره تنظیمات امنیتی بخش و سرپرستار
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                {role === 'personnel' && selectedPersonnelUser && (
-                  <form onSubmit={handleSaveProfile} className="space-y-6">
-                    <div className="bg-slate-50 border border-slate-200/80 p-5 rounded-2xl grid grid-cols-2 md:grid-cols-4 gap-4 text-xs font-bold text-slate-600">
-                      <div>
-                        <span className="text-[10px] text-slate-400 block mb-1">نام کادر درمان:</span>
-                        <span className="text-slate-800 font-extrabold">{selectedPersonnelUser.firstName}</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 block mb-1">نام خانوادگی:</span>
-                        <span className="text-slate-800 font-extrabold">{selectedPersonnelUser.lastName}</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 block mb-1">کد پرسنلی بعثت:</span>
-                        <span className="text-slate-800 font-mono font-extrabold">{selectedPersonnelUser.personalCode}</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 block mb-1">رده یا گروه شغلی:</span>
-                        <span className={`px-2.5 py-0.5 rounded text-[10px] ${selectedPersonnelUser.jobGroup === 'nurse' ? 'bg-indigo-50 text-indigo-700' : 'bg-amber-50 text-amber-700'}`}>
-                          {selectedPersonnelUser.jobGroup === 'nurse' ? 'پرستار' : 'کمک بهیار'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="bg-amber-50 border border-amber-200/60 p-4 rounded-xl text-[10px] font-bold text-amber-800 leading-normal">
-                      ⚠️ همکار گرامی، پیش‌فرض رمز عبور شما «۱۲۳۴» تنظیم شده است. برای حفاظت از امنیت اطلاعات خود و جلوگیری از ویرایش درخواست‌ها توسط سایرین، رمز عبور شخصی خود را بازنشانی کنید. نام کاربری شما تغییر نمی‌کند و برای ورود باید اطلاعات هویتی و رمزتان را وارد کنید.
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-6">
-                      <div>
-                        <label className="block text-xs font-black text-slate-700 mb-2">کلمه عبور شخصی جدید</label>
-                        <input 
-                          type="text" 
-                          value={profilePasswordInput}
-                          onChange={(e) => setProfilePasswordInput(e.target.value)}
-                          className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3.5 py-3 focus:ring-2 focus:ring-emerald-500 focus:outline-none text-slate-800 text-center font-mono placeholder-slate-400"
-                          placeholder="کلمه عبور امن منحصر به خودتان"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-4 border-t border-slate-100 flex justify-end">
-                      <button
-                        type="submit"
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-8 py-3 rounded-xl transition-all shadow-md cursor-pointer hover:scale-[1.01]"
-                      >
-                        ذخیره اطلاعات عبور شخصی من
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                {role === 'admin' && (
-                  <div className="text-center py-12 text-slate-400 text-xs font-bold space-y-2">
-                    <p>🔧 حساب کاربری مدیریت کل (مدیر سامانه) به صورت سراسری مدیریت می‌شود و قابل تعویق نیست.</p>
-                  </div>
-                )}
-
+                <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold leading-7 text-amber-800">
+                  رمز عبور در پایگاه داده امن و به‌صورت Hash نگهداری می‌شود و در هیچ بخش از رابط کاربری نمایش داده نخواهد شد.
+                </div>
               </div>
             </div>
           )}
@@ -5247,7 +4507,7 @@ export default function Home() {
               <h1 className="text-2xl font-black">جدول زمان‌بندی و توزیع شیفت پرسنل پرستاری بیمارستان</h1>
               <p className="text-sm mt-1 font-mono">{JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}</p>
             </div>
-            
+
             <div className="overflow-x-auto w-full">
               <table className="w-full text-xs text-right border-collapse border border-slate-300 min-w-[1240px]">
                 <thead>
@@ -5282,7 +4542,7 @@ export default function Home() {
                           const isLeaderE = schedule?.shiftLeaders?.[d.day]?.afternoon === p.id;
                           const isLeaderN = schedule?.shiftLeaders?.[d.day]?.night === p.id;
 
-                          const isLeaderCell = 
+                          const isLeaderCell =
                             (shift === 'M' && isLeaderM) ||
                             (shift === 'E' && isLeaderE) ||
                             (shift === 'N' && isLeaderN) ||
@@ -5358,13 +4618,13 @@ export default function Home() {
       {showAddPersonnelModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="personnel-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative scrollbar-thin">
-            <button 
+            <button
               onClick={() => setShowAddPersonnelModal(false)}
               className="absolute top-4 left-4 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg p-1.5 cursor-pointer"
             >
               ✕
             </button>
-            
+
             <h3 className="text-base font-black text-slate-800 mb-6 border-b pb-3 border-slate-100">
               {editingPersonnel ? 'ویرایش اطلاعات پرسنلی' : 'تعریف پرسنل جدید'}
             </h3>
@@ -5373,8 +4633,8 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">نام</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={formFirstName}
                     onChange={(e) => setFormFirstName(e.target.value)}
                     className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
@@ -5383,8 +4643,8 @@ export default function Home() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">نام خانوادگی</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={formLastName}
                     onChange={(e) => setFormLastName(e.target.value)}
                     className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
@@ -5395,8 +4655,8 @@ export default function Home() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1">کد پرسنلی (یکتا)</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={formPersonalCode}
                   onChange={(e) => setFormPersonalCode(e.target.value)}
                   className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono"
@@ -5407,7 +4667,7 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">گروه شغلی</label>
-                  <select 
+                  <select
                     value={formJobGroup}
                     onChange={(e) => {
                       const mode = e.target.value as 'nurse' | 'assistant';
@@ -5430,7 +4690,7 @@ export default function Home() {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">سمت پرستاری</label>
-                  <select 
+                  <select
                     value={formPosition}
                     disabled={formJobGroup === 'assistant'}
                     onChange={(e) => setFormPosition(e.target.value as any)}
@@ -5448,7 +4708,7 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">نوع استخدام</label>
-                  <select 
+                  <select
                     value={formEmploymentType}
                     onChange={(e) => setFormEmploymentType(e.target.value as any)}
                     className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
@@ -5463,8 +4723,8 @@ export default function Home() {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">سابقه کار (سال)</label>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     value={formExperienceYears}
                     onChange={(e) => setFormExperienceYears(Number(e.target.value))}
                     className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
@@ -5475,9 +4735,9 @@ export default function Home() {
 
               <div className="pt-3 flex flex-col gap-2 border-t border-slate-100">
                 <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700">
-                  <input 
-                    type="checkbox" 
-                    checked={formActive} 
+                  <input
+                    type="checkbox"
+                    checked={formActive}
                     onChange={(e) => setFormActive(e.target.checked)}
                     className="rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
                   />
@@ -5486,9 +4746,9 @@ export default function Home() {
 
                 {formJobGroup !== 'assistant' && (
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
-                    <input 
-                      type="checkbox" 
-                      checked={formCanBeShiftLeader} 
+                    <input
+                      type="checkbox"
+                      checked={formCanBeShiftLeader}
                       disabled={formPosition === 'supervisor'}
                       onChange={(e) => setFormCanBeShiftLeader(e.target.checked)}
                       className="rounded border-slate-300 accent-indigo-600 text-indigo-600"
@@ -5759,7 +5019,7 @@ export default function Home() {
       {showAddRequestModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="request-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative animate-scale-up scrollbar-thin">
-            <button 
+            <button
               onClick={() => {
                 setShowAddRequestModal(false);
                 setEditingRequest(null);
@@ -5768,18 +5028,18 @@ export default function Home() {
             >
               ✕
             </button>
-            
+
             <h3 className="text-base font-black text-slate-800 mb-6 border-b pb-3 border-slate-100">
               ثبت درخواست هوشمند و مرخصی پرستاری
             </h3>
 
             <form onSubmit={handleAddRequest} className="space-y-4">
-              
+
               {role !== 'personnel' ? (
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">پرستار یا بهیار متقاضی:</label>
-                  <select 
-                    value={reqPersonnelId} 
+                  <select
+                    value={reqPersonnelId}
                     onChange={(e) => setReqPersonnelId(e.target.value)}
                     className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
                     id="select-req-p"
@@ -5799,8 +5059,8 @@ export default function Home() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1">نوع درخواست</label>
-                  <select 
-                    value={reqType} 
+                  <select
+                    value={reqType}
                     onChange={(e) => {
                       const val = e.target.value as any;
                       setReqType(val);
@@ -5822,8 +5082,8 @@ export default function Home() {
                   {reqType === 'shift' && (
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">شیفت درخواستی</label>
-                      <select 
-                        value={reqPreferredShift} 
+                      <select
+                        value={reqPreferredShift}
                         onChange={(e) => setReqPreferredShift(e.target.value as any)}
                         className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
                         id="select-req-prefshift"
@@ -5842,8 +5102,8 @@ export default function Home() {
                   {reqType === 'avoid_shift' && (
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">شیفت ممنوعه</label>
-                      <select 
-                        value={reqPreferredShift} 
+                      <select
+                        value={reqPreferredShift}
                         onChange={(e) => setReqPreferredShift(e.target.value as any)}
                         className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
                         id="select-req-avoidshift"
@@ -5861,7 +5121,7 @@ export default function Home() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1">دامنه زمانی تکرار درخواست:</label>
-                <select 
+                <select
                   value={reqScope}
                   onChange={(e) => setReqScope(e.target.value as any)}
                   className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
@@ -5944,9 +5204,9 @@ export default function Home() {
               {(role === 'admin' || role === 'headnurse') && (
                 <div>
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-extrabold text-slate-700 pt-1">
-                    <input 
-                      type="checkbox" 
-                      checked={reqIsEssential} 
+                    <input
+                      type="checkbox"
+                      checked={reqIsEssential}
                       onChange={(e) => setReqIsEssential(e.target.checked)}
                       className="rounded border-slate-300 accent-indigo-600 focus:ring-indigo-500 text-indigo-600"
                     />

@@ -253,13 +253,20 @@ export interface DatabaseReadResult {
   source: 's3-granular';
 }
 
-export async function readDatabaseState(): Promise<DatabaseReadResult> {
+export async function readDatabaseState(options?: { departmentIds?: string[] }): Promise<DatabaseReadResult> {
   const versions: Record<string, string> = {};
   const indexResource = { type: 'departments' } as const;
   const index = await readDocument(indexResource, DepartmentsSchema);
   versions[resourceVersionId(indexResource)] = index.etag;
+  const allowedIds = options?.departmentIds ? new Set(options.departmentIds) : null;
+  const visibleDepartments = allowedIds
+    ? index.data.filter(department => allowedIds.has(department.id))
+    : index.data;
+  if (allowedIds && visibleDepartments.length !== allowedIds.size) {
+    throw new StorageUnavailableError('The authenticated user department does not exist in storage');
+  }
 
-  const departmentEntries = await Promise.all(index.data.map(async (department) => {
+  const departmentEntries = await Promise.all(visibleDepartments.map(async (department) => {
     const departmentId = department.id;
     const personnelResource = { type: 'personnel', departmentId } as const;
     const requestsResource = { type: 'requests', departmentId } as const;
@@ -304,7 +311,7 @@ export async function readDatabaseState(): Promise<DatabaseReadResult> {
     }] as const;
   }));
 
-  const candidate = { departments: index.data, deptData: Object.fromEntries(departmentEntries) };
+  const candidate = { departments: visibleDepartments, deptData: Object.fromEntries(departmentEntries) };
   const state = AppDatabaseStateSchema.safeParse(candidate);
   if (!state.success) {
     throw new StorageUnavailableError('Assembled database failed schema validation', {
