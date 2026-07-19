@@ -253,6 +253,12 @@ export interface DatabaseReadResult {
   source: 's3-granular';
 }
 
+export async function readDepartmentSummaries() {
+  const resource = { type: 'departments' } as const;
+  const index = await readDocument(resource, DepartmentsSchema);
+  return index.data.map(department => ({ id: department.id, name: department.name }));
+}
+
 export async function readDatabaseState(options?: { departmentIds?: string[] }): Promise<DatabaseReadResult> {
   const versions: Record<string, string> = {};
   const indexResource = { type: 'departments' } as const;

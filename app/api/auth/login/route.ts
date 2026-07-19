@@ -38,6 +38,15 @@ export async function POST(request: NextRequest) {
         error: 'به‌دلیل تلاش‌های ناموفق، ورود موقتاً مسدود شده است. کمی بعد دوباره تلاش کنید.',
       }, { status: 429 });
     }
+    if (credentials.departmentId && user.role !== 'ADMIN' && user.departmentId !== credentials.departmentId) {
+      return authJson({ success: false, error: 'این حساب به بخش انتخاب‌شده تعلق ندارد.' }, { status: 403 });
+    }
+    if (credentials.portal === 'staff' && user.role !== 'PERSONNEL') {
+      return authJson({ success: false, error: 'این حساب متعلق به کادر درمان نیست.' }, { status: 403 });
+    }
+    if (credentials.portal === 'head-nurse' && user.role !== 'HEAD_NURSE' && user.role !== 'ADMIN') {
+      return authJson({ success: false, error: 'این حساب دسترسی سرپرستار ندارد.' }, { status: 403 });
+    }
 
     await prisma.user.update({
       where: { id: user.id },

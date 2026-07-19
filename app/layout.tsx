@@ -1,5 +1,12 @@
 import type { Metadata, Viewport } from 'next';
+import { Vazirmatn } from 'next/font/google';
 import './globals.css';
+
+const vazirmatn = Vazirmatn({
+  subsets: ['arabic', 'latin'],
+  variable: '--font-vazirmatn',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'سامانه هوشمند برنامه‌ریزی شیفت پرستاری بیمارستان',
@@ -18,7 +25,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fa" dir="rtl" className="scroll-smooth">
+    <html lang="fa" dir="rtl" className={`${vazirmatn.variable} scroll-smooth`}>
       <head>
         <link rel="icon" type="image/png" sizes="192x192" href="/icon-192x192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icon-512x512.png" />

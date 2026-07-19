@@ -4,7 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import TehranDateTime from './components/TehranDateTime';
 import { ResetRequestList } from './components/auth/ResetRequestList';
-import type { AuthenticatedUser } from '../lib/auth/types';
+import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
+import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
 import type { AppDatabaseState, StorageResource } from '../lib/storageSchemas';
 import {
@@ -139,6 +140,15 @@ export default function Home() {
   const router = useRouter();
   const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [staffNationalIdInput, setStaffNationalIdInput] = useState('');
+  const [staffPasswordInput, setStaffPasswordInput] = useState('');
+  const [headnurseUsernameInput, setHeadnurseUsernameInput] = useState('');
+  const [headnursePasswordInput, setHeadnursePasswordInput] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [staffAuthNotice, setStaffAuthNotice] = useState('');
+  const [pendingLogin, setPendingLogin] = useState<LoginResult | null>(null);
+  const [isPortalSubmitting, setIsPortalSubmitting] = useState(false);
+  const [isResetRequestSubmitting, setIsResetRequestSubmitting] = useState(false);
 
   // --- Dynamic Department routing helper ---
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(() => {
@@ -297,7 +307,10 @@ export default function Home() {
         const response = await fetch('/api/auth/me', { cache: 'no-store' });
         const result = await response.json();
         if (!response.ok || !result.user) {
-          router.replace('/login');
+          if (!cancelled) {
+            setAuthenticatedUser(null);
+            setRole('guest');
+          }
           return;
         }
         const user = result.user as AuthenticatedUser;
@@ -313,7 +326,10 @@ export default function Home() {
           localStorage.setItem('hospital_selected_dept_id', user.departmentId);
         }
       } catch {
-        router.replace('/login');
+        if (!cancelled) {
+          setAuthenticatedUser(null);
+          setRole('guest');
+        }
       } finally {
         if (!cancelled) setIsAuthLoading(false);
       }
@@ -321,6 +337,91 @@ export default function Home() {
     void loadSession();
     return () => { cancelled = true; };
   }, [router]);
+
+  useEffect(() => {
+    if (isAuthLoading || authenticatedUser) return;
+    let cancelled = false;
+    const loadDepartmentOptions = async () => {
+      try {
+        const response = await fetch('/api/public/departments');
+        const result = await response.json();
+        if (!response.ok || !result.success || cancelled) return;
+        const publicDepartments = result.departments as Department[];
+        setDepartments(publicDepartments);
+        if (publicDepartments.length > 0 && !publicDepartments.some(item => item.id === selectedDepartmentId)) {
+          setSelectedDepartmentId(publicDepartments[0].id);
+          localStorage.setItem('hospital_selected_dept_id', publicDepartments[0].id);
+        }
+      } catch {
+        // The existing login layout remains usable and shows the global auth error on submit.
+      }
+    };
+    void loadDepartmentOptions();
+    return () => { cancelled = true; };
+  }, [authenticatedUser, isAuthLoading, selectedDepartmentId]);
+
+  const handlePortalLogin = async (portal: 'staff' | 'head-nurse') => {
+    setAuthError('');
+    setStaffAuthNotice('');
+    setIsPortalSubmitting(true);
+    try {
+      const nationalId = portal === 'staff' ? staffNationalIdInput : headnurseUsernameInput;
+      const password = portal === 'staff' ? staffPasswordInput : headnursePasswordInput;
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nationalId, password, departmentId: selectedDepartmentId, portal }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'ورود انجام نشد.');
+      setPendingLogin({ user: result.user, redirectTo: result.redirectTo });
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'خطا در برقراری ارتباط با سرور.');
+    } finally {
+      setIsPortalSubmitting(false);
+    }
+  };
+
+  const handleStaffForgotPassword = async () => {
+    setAuthError('');
+    setStaffAuthNotice('');
+    if (!staffNationalIdInput.trim()) {
+      setAuthError('ابتدا کد ملی خود را وارد کنید.');
+      return;
+    }
+    setIsResetRequestSubmitting(true);
+    try {
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nationalId: staffNationalIdInput }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'ثبت درخواست انجام نشد.');
+      setStaffAuthNotice('رمز عبور جدید به زودی برات ارسال میشه!');
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'خطا در ثبت درخواست بازیابی.');
+    } finally {
+      setIsResetRequestSubmitting(false);
+    }
+  };
+
+  const finishWelcome = React.useCallback(() => {
+    if (!pendingLogin) return;
+    if (pendingLogin.user.mustChangePassword) {
+      router.replace('/change-password');
+      return;
+    }
+    const user = pendingLogin.user;
+    setAuthenticatedUser(user);
+    setRole(user.role === 'ADMIN' ? 'admin' : user.role === 'HEAD_NURSE' ? 'headnurse' : 'personnel');
+    if (user.departmentId) {
+      setSelectedDepartmentId(user.departmentId);
+      localStorage.setItem('hospital_selected_dept_id', user.departmentId);
+    }
+    setPendingLogin(null);
+    router.replace('/');
+  }, [pendingLogin, router]);
 
   // States for finalized months (locked schedules that won't auto-resolve)
   const [finalizedNursesMonths, setFinalizedNursesMonths] = useState<string[]>([]);
@@ -1380,7 +1481,7 @@ export default function Home() {
       setRole('guest');
       localStorage.removeItem('hospital_saved_role');
       localStorage.removeItem('hospital_saved_personnel_id');
-      router.replace('/login');
+      router.replace('/');
     }
   };
 
@@ -2078,7 +2179,7 @@ export default function Home() {
     );
   }
 
-  if (isAuthLoading || role === 'guest' || !authenticatedUser) {
+  if (isAuthLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100" dir="rtl">
         <div className="text-center">
@@ -2087,6 +2188,439 @@ export default function Home() {
         </div>
       </div>
     );
+  }
+
+  if (role === 'guest') {
+    const activeDept = departments.find(d => d.id === selectedDepartmentId);
+    const isNewDeptWithDefaults = activeDept?.username === 'headnurse' && activeDept?.password === '123456';
+
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
+        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
+        {pendingLogin && (
+          <WelcomeOverlay
+            firstName={pendingLogin.user.firstName}
+            lastName={pendingLogin.user.lastName}
+            onComplete={finishWelcome}
+          />
+        )}
+        <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] opacity-70"></div>
+        <div className="max-w-4xl w-full bg-white border border-slate-200/85 shadow-2xl rounded-3xl p-6 sm:p-10 text-center relative z-10 overflow-hidden">
+          <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
+
+          <div className="mb-6 flex flex-col items-center">
+            <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
+              <img
+                src="/logo.png"
+                alt="بیمارستان بعثت نهاجا"
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  const imgEl = e.currentTarget;
+                  if (imgEl.src.endsWith('/logo.png')) {
+                    imgEl.src = '/logo.svg';
+                  } else if (imgEl.src.endsWith('/logo.svg')) {
+                    imgEl.src = '/logo.jpg';
+                  } else if (imgEl.src.endsWith('/logo.jpg')) {
+                    imgEl.src = '/logo.jpeg';
+                  } else {
+                    imgEl.style.display = 'none';
+                    const fallbackEl = document.getElementById('hospital-icon-fallback');
+                    if (fallbackEl) {
+                      fallbackEl.style.display = 'flex';
+                    }
+                  }
+                }}
+              />
+              <div
+                id="hospital-icon-fallback"
+                className="hidden w-20 h-20 bg-emerald-50 rounded-2xl border border-emerald-200 shadow-inner flex items-center justify-center text-4xl"
+              >
+                🏥
+              </div>
+            </picture>
+            <span className="text-[10px] text-amber-600 font-extrabold tracking-widest mt-2 uppercase">بیمارستان بعثت نهاجا</span>
+          </div>
+
+          <h2 className="text-2xl font-black text-slate-900 mb-2 font-sans text-center">سامانه هوشمند برنامه‌ریزی شیفت های پرستاری - بیمارستان بعثت نهاجا</h2>
+          <p className="text-slate-500 text-xs max-w-xl mx-auto mb-8 font-bold leading-relaxed">
+            سیستم توزیع عادلانه شیفت ها مبتنی بر هوش مصنوعی و الگوریتم‌های رصد قوانین بیمارستان. لطفا برای ورود، بخش مورد نظر و نوع کاربری خود را تایید نمایید.
+          </p>
+
+          <div className="max-w-xl mx-auto mb-8 bg-slate-50 border border-slate-200 rounded-2xl p-4 text-right space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex-1">
+                <label className="block text-[11px] font-black text-slate-500 mb-1.5"> بخش پرستاری فعال (مبنای ثبت اطلاعات)</label>
+                <select
+                  value={selectedDepartmentId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedDepartmentId(val);
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('hospital_selected_dept_id', val);
+                    }
+                  }}
+                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800"
+                >
+                  {departments.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} {d.id === 'sepehr' ? '(بخش پیش‌فرض)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="sm:pt-5">
+                <button
+                  type="button"
+                  onClick={() => setShowAddDeptModal(true)}
+                  className="w-full sm:w-auto bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-extrabold text-xs px-3.5 py-2.5 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  تعریف بخش جدید...
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mt-1 pt-1.5 border-t border-slate-100">
+              <div className="text-[10px] text-slate-400 font-bold">
+                بخش فعلی: <span className="text-emerald-700 font-black">{activeDept?.name || 'بارگذاری نشده...'}</span>
+              </div>
+              {selectedDepartmentId !== 'sepehr' && (
+                <button
+                  type="button"
+                  onClick={() => setShowDeptDeleteAuth(true)}
+                  className="text-[10px] text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1 rounded-lg transition-colors font-extrabold cursor-pointer flex items-center gap-1 shrink-0"
+                >
+                  حذف بخش فوق 🗑️
+                </button>
+              )}
+            </div>
+          </div>
+
+          {authError && (
+            <div className="mb-6 p-4 bg-red-50 text-red-700 border border-red-200 text-xs rounded-xl font-bold flex items-center justify-center gap-2 max-w-2xl mx-auto animate-pulse">
+              <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+              {authError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-2xl mx-auto">
+
+            <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-personnel">
+              <div>
+                <div className="flex justify-center mb-3">
+                  <span className="bg-emerald-100/80 text-emerald-600 p-3 rounded-xl"><Users className="w-6 h-6"/></span>
+                </div>
+                <h3 className="font-extrabold text-slate-800 text-base mb-1">ورود کادر درمان کشیک</h3>
+                <p className="text-[11px] text-slate-500 leading-relaxed mb-4">جهت ورود و ثبت درخواست‌ها، کد ملی و کلمه عبور خود را وارد نمایید.</p>
+              </div>
+              <div className="space-y-2 text-right pt-4">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="username"
+                  maxLength={10}
+                  placeholder="کد ملی"
+                  value={staffNationalIdInput}
+                  onChange={(e) => setStaffNationalIdInput(e.target.value)}
+                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-sans placeholder-slate-400"
+                  id="login-personnel-national-id"
+                />
+                <input
+                  type="password"
+                  placeholder="کلمه عبور (پیش‌فرض ۱۲۳۴)"
+                  value={staffPasswordInput}
+                  onChange={(e) => setStaffPasswordInput(e.target.value)}
+                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-mono placeholder-slate-400"
+                  id="login-personnel-pass"
+                />
+
+                <button
+                  onClick={() => void handlePortalLogin('staff')}
+                  disabled={isPortalSubmitting}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2"
+                  id="btn-login-personnel"
+                >
+                  ورود به پرتال شخصی کادر درمان
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleStaffForgotPassword()}
+                  disabled={isPortalSubmitting || isResetRequestSubmitting}
+                  className="w-full text-xs font-black text-indigo-700 hover:text-indigo-800 hover:bg-indigo-50 px-4 py-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-60"
+                >
+                  {isResetRequestSubmitting ? 'در حال ثبت درخواست...' : 'فراموشی رمز عبور'}
+                </button>
+                {staffAuthNotice && (
+                  <div className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl p-3 font-black text-center" role="status">
+                    {staffAuthNotice}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-headnurse">
+              <div>
+                <div className="flex justify-center mb-3">
+                  <span className="bg-sky-100/80 text-sky-600 p-3 rounded-xl"><UserCheck className="w-6 h-6"/></span>
+                </div>
+                <h3 className="font-extrabold text-slate-800 text-base mb-1">پنل سرپرستار بخش</h3>
+                <p className="text-[11px] text-slate-500 leading-relaxed mb-4">مدیریت مستقیم تعهدات ماهیانه، تعریف الگوهای پوشش فعال و بهینه‌ساز خودکار توزیع متعادل شیفت.</p>
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  placeholder="نام کاربری سرپرستار"
+                  value={headnurseUsernameInput}
+                  onChange={(e) => setHeadnurseUsernameInput(e.target.value)}
+                  className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-sans placeholder-slate-400 font-black"
+                  id="input-username"
+                />
+                <input
+                  type="password"
+                  placeholder="کلمه عبور"
+                  value={headnursePasswordInput}
+                  onChange={(e) => setHeadnursePasswordInput(e.target.value)}
+                  className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 text-center font-mono placeholder-slate-400 font-black"
+                  id="input-password"
+                />
+
+                {isNewDeptWithDefaults && (
+                  <p className="text-[9px] text-amber-600 font-extrabold leading-normal bg-amber-50 p-2 border border-amber-100 rounded-lg text-center mt-1 animate-fade-in">
+                    ⚠️ اولین ورود سرپرستار این بخش است. جهت تنظیم اولیه کلمات عبور این بخش، نام کاربری و رمز عبور دلخواه خود را تایپ کرده و کلید ورود را بفشارید.
+                  </p>
+                )}
+
+                <button
+                  onClick={() => void handlePortalLogin('head-nurse')}
+                  disabled={isPortalSubmitting}
+                  className="w-full bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2"
+                  id="btn-login-headnurse"
+                >
+                  {isNewDeptWithDefaults ? 'ثبت و ورود اولین‌بار سرپرستار' : 'ورود سرپرستار بخش'}
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {showAddDeptModal && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in" id="add-dept-modal">
+            <div className="bg-white border rounded-3xl max-w-sm w-full p-6 shadow-2xl relative text-right space-y-4">
+              <button
+                onClick={() => {
+                  setShowAddDeptModal(false);
+                  setNewDeptName('');
+                  setNewDeptHeadnurseUsername('');
+                  setNewDeptHeadnursePassword('');
+                }}
+                className="absolute top-4 left-4 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg p-1.5 cursor-pointer"
+              >
+                ✕
+              </button>
+
+              <h3 className="text-sm font-black text-slate-800 border-b pb-3 border-slate-100">
+                تعریف بخش پرستاری جدید
+              </h3>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">نام بخش (فارسی)</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: بخش مهر، بخش اورژانس"
+                    value={newDeptName}
+                    onChange={(e) => setNewDeptName(e.target.value)}
+                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">نام کاربری سرپرستار</label>
+                  <input
+                    type="text"
+                    placeholder="نام کاربری مستقل بخش جدید"
+                    value={newDeptHeadnurseUsername}
+                    onChange={(e) => setNewDeptHeadnurseUsername(e.target.value)}
+                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none text-left font-sans"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1">کلمه عبور اولین ورود (حداقل ۴ کاراکتر)</label>
+                  <input
+                    type="password"
+                    placeholder="کلمه عبور مستقل بخش جدید"
+                    value={newDeptHeadnursePassword}
+                    onChange={(e) => setNewDeptHeadnursePassword(e.target.value)}
+                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none text-left font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddDeptModal(false);
+                    setNewDeptName('');
+                    setNewDeptHeadnurseUsername('');
+                    setNewDeptHeadnursePassword('');
+                  }}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs py-2 rounded-xl transition-all"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!newDeptName.trim() || !newDeptHeadnurseUsername.trim() || newDeptHeadnursePassword.trim().length < 4) {
+                      alert('لطفا تمامی اطلاعات بخش جدید را با شرایط صحیح وارد کنید.');
+                      return;
+                    }
+
+                    const newId = `dept_${Date.now()}`;
+                    const customDeptData: Department = {
+                      id: newId,
+                      name: newDeptName.trim(),
+                      username: newDeptHeadnurseUsername.trim(),
+                      password: newDeptHeadnursePassword.trim()
+                    };
+
+                    try {
+                      const nextDb = getFreshDbCopy();
+                      if (!nextDb.departments) nextDb.departments = [];
+                      if (!nextDb.deptData) nextDb.deptData = {};
+
+                      nextDb.departments = [...nextDb.departments, customDeptData];
+                      nextDb.deptData[newId] = {
+                        personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+                        requests: INITIAL_REQUESTS,
+                        settings_system: INITIAL_SETTINGS,
+                        settings_credentials: {
+                          username: newDeptHeadnurseUsername.trim(),
+                          password: newDeptHeadnursePassword.trim()
+                        },
+                        holidays: {},
+                        firstDayOfWeek: {},
+                        schedules: {},
+                      };
+
+                      await saveDbState(nextDb);
+
+                      setSelectedDepartmentId(newId);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('hospital_selected_dept_id', newId);
+                      }
+
+                      setShowAddDeptModal(false);
+                      setNewDeptName('');
+                      setNewDeptHeadnurseUsername('');
+                      setNewDeptHeadnursePassword('');
+                      alert(`بخش جدید «${customDeptData.name}» با موفقیت در دیتابیس بعثت نهاجا تشکیل شد!`);
+                    } catch (err) {
+                      console.error(err);
+                      alert('خطا در تعریف مستقل بخش جدید.');
+                    }
+                  }}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2 rounded-xl transition-all shadow-md"
+                >
+                  تایید و پیکربندی مستقل
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      {showDeptDeleteAuth && (
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in" id="dept-delete-auth-modal" dir="rtl">
+          <div className="bg-white rounded-[24px] shadow-2xl p-6 md:p-8 w-full max-w-[420px] animate-scale-in border border-slate-100 relative">
+            <h3 className="text-lg font-black text-slate-900 flex items-center gap-2 mb-3">
+              <span className="text-xl">🗑️</span> تایید هویت برای حذف بخش
+            </h3>
+            <p className="text-xs text-rose-500 font-bold mb-6 bg-rose-50 p-3 rounded-xl border border-rose-100 leading-relaxed">
+              هشدار: شما در حال حذف کامل بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || selectedDepartmentId}» هستید. این عملیات قابل بازگشت نیست. برای تایید، لطفاً نام کاربری و رمز عبور سرپرستار این بخش را وارد کنید.
+            </p>
+
+            <div className="space-y-4 text-right">
+              <div>
+                <label className="block text-[10px] font-black text-slate-600 mb-1">نام کاربری سرپرستار بخش</label>
+                <input
+                  type="text"
+                  value={deleteDeptAuthUser}
+                  onChange={(e) => setDeleteDeptAuthUser(e.target.value)}
+                  className="w-full text-xs font-bold bg-slate-50 border border-slate-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl px-3 py-2.5 text-slate-800 font-sans"
+                  placeholder="نام کاربری"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-600 mb-1">رمز عبور سرپرستار بخش</label>
+                <input
+                  type="password"
+                  value={deleteDeptAuthPass}
+                  onChange={(e) => setDeleteDeptAuthPass(e.target.value)}
+                  className="w-full text-xs font-bold bg-slate-50 border border-slate-200 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 rounded-xl px-3 py-2.5 text-slate-800 font-mono"
+                  placeholder="رمز عبور"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-8">
+              <button
+                onClick={async () => {
+                  const matchedDept = departments.find(d => d.id === selectedDepartmentId);
+                  if (matchedDept && matchedDept.username === deleteDeptAuthUser && matchedDept.password === deleteDeptAuthPass) {
+                    try {
+                      const nextDb = getFreshDbCopy();
+                      if (!nextDb.departments) nextDb.departments = [];
+                      if (!nextDb.deptData) nextDb.deptData = {};
+
+                      nextDb.departments = nextDb.departments.filter(d => d.id !== selectedDepartmentId);
+                      delete nextDb.deptData[selectedDepartmentId];
+
+                      await saveDbState(nextDb);
+
+                      alert(`بخش با موفقیت حذف شد.`);
+                      setSelectedDepartmentId('sepehr');
+                      setShowDeptDeleteAuth(false);
+                      setDeleteDeptAuthUser('');
+                      setDeleteDeptAuthPass('');
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('hospital_selected_dept_id', 'sepehr');
+                      }
+                    } catch (err) {
+                      console.error("Error deleting department:", err);
+                      alert("خطا در حذف بخش.");
+                    }
+                  } else {
+                    alert('نام کاربری یا رمز عبور سرپرستار بخش نادرست است. عملیات لغو شد.');
+                  }
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all font-sans cursor-pointer shadow-sm border border-rose-700"
+              >
+                تایید و حذف قطعی بخش
+              </button>
+              <button
+                onClick={() => {
+                  setShowDeptDeleteAuth(false);
+                  setDeleteDeptAuthUser('');
+                  setDeleteDeptAuthPass('');
+                }}
+                className="flex-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-bold text-xs py-2.5 rounded-xl transition-all cursor-pointer font-sans"
+              >
+                انصراف
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      </div>
+    );
+  }
+
+
+  if (!authenticatedUser) {
+    return null;
   }
 
   return (

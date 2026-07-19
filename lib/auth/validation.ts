@@ -31,6 +31,8 @@ export const PasswordInputSchema = z.string()
 export const LoginSchema = z.object({
   nationalId: NationalIdSchema,
   password: PasswordInputSchema,
+  departmentId: z.string().min(1).max(128).optional(),
+  portal: z.enum(['staff', 'head-nurse']).optional(),
 }).strict();
 
 export const ForgotPasswordSchema = z.object({ nationalId: NationalIdSchema }).strict();
