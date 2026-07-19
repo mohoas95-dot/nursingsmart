@@ -1,0 +1,51 @@
+      {showNoRequestDialog && (
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-[70] p-4 animate-fade-in" id="no-request-dialog" dir="rtl">
+          <div className="bg-white rounded-[2rem] shadow-2xl p-6 md:p-8 w-full max-w-[500px] border border-slate-100 relative">
+            <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mb-6 mx-auto shadow-sm">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            
+            <h3 className="text-xl font-black text-slate-900 text-center mb-2">عدم ثبت درخواست توسط پرسنل</h3>
+            <p className="text-sm text-slate-500 font-bold text-center leading-relaxed mb-6">
+                پرسنل زیر هیچ درخواستی برای ماه جاری ثبت نکرده‌اند. نحوه چیدمان شیفت برای این افراد چگونه باشد؟
+            </p>
+
+            <div className="max-h-32 overflow-y-auto mb-6 p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 scrollbar-thin">
+                {showNoRequestDialog.personnel.map(p => (
+                    <div key={p.id} className="text-xs font-black text-slate-700 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
+                        {p.firstName} {p.lastName} ({p.personalCode})
+                    </div>
+                ))}
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  const jobGroup = showNoRequestDialog.jobGroup;
+                  setShowNoRequestDialog(null);
+                  executeOptimizer(jobGroup);
+                }}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs py-3.5 rounded-2xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Check className="w-4 h-4" /> چیدمان روتین و متعادل (توصیه شده)
+              </button>
+              <button
+                onClick={() => {
+                   alert('قابلیت خالی ماندن لیست در حال حاضر با ثبت درخواست آف جمعی توسط سرپرستار امکان‌پذیر است. لطفاً برای این افراد آف ثبت کنید.');
+                   setShowNoRequestDialog(null);
+                }}
+                className="w-full bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-black text-xs py-3.5 rounded-2xl transition-all cursor-pointer"
+              >
+                لیست شیفت‌های این افراد فعلاً خالی بماند
+              </button>
+              <button
+                onClick={() => setShowNoRequestDialog(null)}
+                className="w-full text-slate-400 hover:text-slate-600 font-bold text-[11px] py-1 transition-all cursor-pointer"
+              >
+                انصراف و بازگشت
+              </button>
+            </div>
+          </div>
+        </div>
+      )}

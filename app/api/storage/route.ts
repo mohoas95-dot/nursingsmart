@@ -38,19 +38,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'ساختار داده نامعتبر است' }, { status: 400 });
     }
 
-    // بررسی و حذف بخش‌های کاملاً هم‌نام یا اسپم‌شده از لیست نهایی قبل از ذخیره
+    // لغو موقت پاکسازی خودکار برای بازیابی دیتا
     if (Array.isArray(targetState.departments)) {
-      const seenNames = new Set<string>();
-      
+      // فقط بخش‌هایی که واقعا دیتای معتبر دارند را نگه می‌داریم
       targetState.departments = targetState.departments.filter((dept: any) => {
-        if (!dept || !dept.name) return false;
-        const normalizedName = dept.name.trim();
-        
-        if (seenNames.has(normalizedName)) {
-          return false; // حذف تکراری‌ها
-        }
-        seenNames.add(normalizedName);
-        return true;
+        return dept && dept.id && targetState.deptData?.[dept.id];
       });
     }
 

@@ -23,7 +23,9 @@ import {
   PersonnelReportResult,
   AggregatedAlert,
   SmartSuggestion,
-  OptimizationResult
+  OptimizationResult,
+  ScenarioResult,
+  ScheduleSummary
 } from '../lib/types';
 import { 
   INITIAL_PERSONNEL, 
@@ -94,7 +96,7 @@ interface Department {
   password?: string;
 }
 
-function BusyOverlay({ subtitle }: { subtitle: string }) {
+function BusyOverlay({ subtitle, progress }: { subtitle: string, progress?: { current: number, total: number, bestScore: number, lowestWarnings: number } | null }) {
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/35 backdrop-blur-md p-4 cursor-progress">
       <div className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-white/50 bg-white/80 shadow-2xl shadow-slate-900/25">
@@ -120,6 +122,21 @@ function BusyOverlay({ subtitle }: { subtitle: string }) {
           <div className="space-y-2">
             <h3 className="text-2xl font-black text-slate-900">لطفا شکیبا باشید</h3>
             <p className="text-sm font-bold leading-7 text-slate-600">{subtitle}</p>
+            
+            {progress && (
+              <div className="mt-4 space-y-2">
+                <div className="text-[10px] font-black text-slate-400 flex justify-between px-1">
+                   <span>سناریوی {progress.current} از {progress.total}</span>
+                   <span>کمترین هشدار: {progress.lowestWarnings}</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                   <div 
+                    className="bg-indigo-600 h-full transition-all duration-300" 
+                    style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                   />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-4 py-2 text-[11px] font-extrabold text-slate-500 shadow-sm">
@@ -230,7 +247,7 @@ export default function Home() {
   }, [officialCalendarState.calendar]);
 
   // State for monthly approved duty hours
-  const [monthlyDutyHours, setMonthlyDutyHours] = useState<any>(null);
+  const [monthlyDutyHours, setMonthlyDutyHours] = useState<SystemSettings['dutyHours'] | null>(null);
   const effectiveDutyHours = {
     ...(monthlyDutyHours || settings.dutyHours),
     official: settings.dutyHours.official,
@@ -239,6 +256,10 @@ export default function Home() {
 
   // Schedule matrix
   const [schedule, setSchedule] = useState<MonthlySchedule | null>(null);
+  const [arenaScenarios, setArenaScenarios] = useState<any[]>([]);
+  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
+  const [humanApprovedChanges, setHumanApprovedChanges] = useState<{ [personnelId: string]: { [day: number]: ShiftType } }>({});
+  const [previousMonthFinalDays, setPreviousMonthFinalDays] = useState<{ [personnelId: string]: { [day: number]: ShiftType } }>({});
 
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
   
@@ -280,6 +301,10 @@ export default function Home() {
   }, [personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
 
   const [solvingTarget, setSolvingTarget] = useState<JobGroup | null>(null);
+  const [solverProgress, setSolverProgress] = useState<{current: number, total: number, bestScore: number, lowestWarnings: number} | null>(null);
+  const [finalSummary, setFinalSummary] = useState<ScheduleSummary | null>(null);
+  const [showArena, setShowArena] = useState<boolean>(false);
+  const [showNoRequestDialog, setShowNoRequestDialog] = useState<{ personnel: Personnel[], jobGroup: JobGroup } | null>(null);
 
   // User Authentication & Roles
   // roles: 'admin' | 'headnurse' | 'personnel' | 'guest'
@@ -391,15 +416,20 @@ export default function Home() {
           deptInfo.settings_system || INITIAL_SETTINGS, 
           holidaysInfo.days || {}, 
           fdIdx === -1 ? undefined : fdIdx,
-          holidaysInfo.monthlyDutyHours || null
+          holidaysInfo.monthlyDutyHours ?? undefined,
+          undefined,
+          humanApprovedChanges,
+          previousMonthFinalDays,
+          (prog) => setSolverProgress(prog)
         );
-        setSchedule({
-          year: currentYear,
-          month: currentMonth,
-          assignments: solved.assignments || {},
-          shiftLeaders: solved.shiftLeaders || {},
-          warnings: solved.warnings || []
-        });
+        setSolverProgress(null);
+        setSchedule(solved);
+        if (solved.scenarios) {
+          setArenaScenarios(solved.scenarios);
+          setActiveScenarioId(solved.scenarios[0]?.id);
+          if (solved.summary) setFinalSummary(solved.summary);
+        }
+
         setDismissedWarnings([]);
         setLockedRows([]);
       } catch (e) {
@@ -432,124 +462,130 @@ export default function Home() {
   };
 
   // Load whole state from S3 on mount or department/month change
+  // Load whole state from S3 once or on department change
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const loadDatabase = async () => {
       try {
         setIsLoadingDb(true);
-        setIsPersonnelLoaded(false);
-        setIsRequestsLoaded(false);
-        
+        // Only fetch if not already loaded or if department explicitly changes
         const res = await fetch('/api/storage');
         const data = await res.json();
         
         if (data.success && data.state) {
           setFullDbState(data.state);
+          setDepartments(data.state.departments || []);
           setStorageInfo({
             isConfigured: data.isConfigured,
             bucket: data.bucket,
             endpoint: data.endpoint,
             source: data.source
           });
-          
-          const updatedDb = data.state as AppDatabaseState;
-          setDepartments(updatedDb.departments || []);
-          
-          const deptId = selectedDepartmentId || 'sepehr';
-          if (!updatedDb.deptData[deptId]) {
-            updatedDb.deptData[deptId] = {
-              personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
-              requests: INITIAL_REQUESTS,
-              settings_system: INITIAL_SETTINGS,
-              settings_credentials: { username: 'headnurse', password: '123456' },
-              holidays: {},
-              firstDayOfWeek: {},
-              schedules: {},
-            };
-          }
-          
-          const deptInfo = updatedDb.deptData[deptId];
-          setPersonnel(deptInfo.personnel || []);
-          setRequests(deptInfo.requests || []);
-          setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
-          setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
-          setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
-          
-          const hKey = `${currentYear}_${currentMonth}`;
-          const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
-          setCustomHolidays(holidaysInfo.days || {});
-          setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
-          
-          const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
-          setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
-          
-          const sched = deptInfo.schedules?.[hKey] || null;
-          setSchedule(sched);
-          if (sched) {
-            setDismissedWarnings(sched.dismissedWarnings || []);
-            setLockedRows(sched.lockedRows || []);
-            const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
-            const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
-            const isReqLocked = !!sched.requestsLocked;
-            
-            setFinalizedNursesMonths(prev => {
-              const key = `${currentYear}_${currentMonth}`;
-              if (isFinNurses && !prev.includes(key)) return [...prev, key];
-              if (!isFinNurses) return prev.filter(k => k !== key);
-              return prev;
-            });
-            setFinalizedAssistantsMonths(prev => {
-              const key = `${currentYear}_${currentMonth}`;
-              if (isFinAssistants && !prev.includes(key)) return [...prev, key];
-              if (!isFinAssistants) return prev.filter(k => k !== key);
-              return prev;
-            });
-            setRequestsLockedMonths(prev => {
-              const key = `${currentYear}_${currentMonth}`;
-              if (isReqLocked && !prev.includes(key)) return [...prev, key];
-              if (!isReqLocked) return prev.filter(k => k !== key);
-              return prev;
-            });
-          } else {
-            try {
-              const solved = solveNursingSchedule(
-                currentYear, 
-                currentMonth, 
-                deptInfo.personnel || [], 
-                deptInfo.requests || [], 
-                deptInfo.settings_system || INITIAL_SETTINGS, 
-                holidaysInfo.days || {}, 
-                fdIdx === -1 ? undefined : fdIdx,
-                holidaysInfo.monthlyDutyHours || null
-              );
-              setSchedule({
-                year: currentYear,
-                month: currentMonth,
-                assignments: solved.assignments || {},
-                shiftLeaders: solved.shiftLeaders || {},
-                warnings: solved.warnings || []
-              });
-              setDismissedWarnings([]);
-              setLockedRows([]);
-            } catch (e) {
-              console.error(e);
-            }
-          }
         }
       } catch (err) {
         console.error("Error loading database from Iranian Object Storage S3:", err);
       } finally {
         setIsLoadingDb(false);
-        setIsPersonnelLoaded(true);
-        setIsRequestsLoaded(true);
-        setIsMonthLoaded(true);
         setDbChecked(true);
       }
     };
     
     loadDatabase();
-  }, [selectedDepartmentId, currentYear, currentMonth]);
+  }, [selectedDepartmentId]);
+
+  // Sync data when department, year, month or fullDbState change
+  useEffect(() => {
+    if (!fullDbState) return;
+
+    const syncCurrentData = async () => {
+      const updatedDb = fullDbState;
+      const deptId = selectedDepartmentId || 'sepehr';
+      
+      if (!updatedDb.deptData[deptId]) {
+        updatedDb.deptData[deptId] = {
+          personnel: INITIAL_PERSONNEL.map((p, idx) => ({ ...p, orderIndex: idx })),
+          requests: INITIAL_REQUESTS,
+          settings_system: INITIAL_SETTINGS,
+          settings_credentials: { username: 'headnurse', password: '123456' },
+          holidays: {},
+          firstDayOfWeek: {},
+          schedules: {},
+        };
+      }
+      
+      const deptInfo = updatedDb.deptData[deptId];
+      setPersonnel(deptInfo.personnel || []);
+      setRequests(deptInfo.requests || []);
+      setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
+      setHeadnurseUsername(deptInfo.settings_credentials?.username || 'headnurse');
+      setHeadnursePassword(deptInfo.settings_credentials?.password || '123456');
+      
+      const hKey = `${currentYear}_${currentMonth}`;
+      const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1;
+      const prevYear = currentMonth === 1 ? currentYear - 1 : currentYear;
+      const prevKey = `${prevYear}_${prevMonth}`;
+
+      const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
+      setCustomHolidays(holidaysInfo.days || {});
+      setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
+
+      const prevSched = deptInfo.schedules?.[prevKey];
+      if (prevSched) {
+        const pDays: { [personnelId: string]: { [day: number]: ShiftType } } = {};
+        const lastDay = prevMonth <= 6 ? 31 : 30;
+        (deptInfo.personnel || []).forEach((p: Personnel) => {
+          pDays[p.id] = {
+            [lastDay - 1]: prevSched.assignments[p.id]?.[lastDay - 1] || 'OFF',
+            [lastDay]: prevSched.assignments[p.id]?.[lastDay] || 'OFF'
+          };
+        });
+        setPreviousMonthFinalDays(pDays);
+      }
+      
+      const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
+      setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
+      
+      const sched = deptInfo.schedules?.[hKey] || null;
+      setSchedule(sched);
+      
+      if (sched) {
+        setDismissedWarnings(sched.dismissedWarnings || []);
+        setLockedRows(sched.lockedRows || []);
+        setHumanApprovedChanges(sched.humanApprovedChanges || {});
+        
+        const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
+        const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
+        const isReqLocked = !!sched.requestsLocked;
+        
+        setFinalizedNursesMonths(prev => isFinNurses ? Array.from(new Set([...prev, hKey])) : prev.filter(k => k !== hKey));
+        setFinalizedAssistantsMonths(prev => isFinAssistants ? Array.from(new Set([...prev, hKey])) : prev.filter(k => k !== hKey));
+        setRequestsLockedMonths(prev => isReqLocked ? Array.from(new Set([...prev, hKey])) : prev.filter(k => k !== hKey));
+      } else if (role !== 'guest') {
+        // Only auto-solve if not on login page
+        try {
+          const solved = solveNursingSchedule(
+            currentYear, currentMonth, deptInfo.personnel || [], deptInfo.requests || [], 
+            deptInfo.settings_system || INITIAL_SETTINGS, holidaysInfo.days || {}, 
+            fdIdx === -1 ? undefined : fdIdx, holidaysInfo.monthlyDutyHours ?? undefined,
+            undefined, {}, {}, undefined, true // quickMode = true
+          );
+          setSchedule(solved);
+          if (solved.scenarios) {
+            setArenaScenarios(solved.scenarios);
+            setActiveScenarioId(solved.scenarios[0]?.id);
+            if (solved.summary) setFinalSummary(solved.summary);
+          }
+        } catch (e) { console.error(e); }
+      }
+      
+      setIsPersonnelLoaded(true);
+      setIsRequestsLoaded(true);
+      setIsMonthLoaded(true);
+    };
+
+    syncCurrentData();
+  }, [selectedDepartmentId, currentYear, currentMonth, fullDbState, role]);
 
   const extractWarningDay = (warningText: string) => {
     const dayMatch = warningText.match(/روز (\d+)/);
@@ -698,6 +734,7 @@ export default function Home() {
   const [formExperienceYears, setFormExperienceYears] = useState<number>(1);
   const [formActive, setFormActive] = useState<boolean>(true);
   const [formCanBeShiftLeader, setFormCanBeShiftLeader] = useState<boolean>(true);
+  const [formPriorityScheduling, setFormPriorityScheduling] = useState<boolean>(false);
 
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
@@ -705,6 +742,11 @@ export default function Home() {
   const [editingCell, setEditingCell] = useState<{ pId: string; day: number } | null>(null);
   const [reqPersonnelId, setReqPersonnelId] = useState<string>('');
   const [reqType, setReqType] = useState<'shift' | 'OFF' | 'leave' | 'pattern' | 'avoid_shift'>('shift');
+
+  useEffect(() => {
+    if (role === 'personnel') setReqType('OFF');
+  }, [role]);
+  const [reqOffSubtype, setReqOffSubtype] = useState<'hard' | 'soft'>('hard');
   const [reqPreferredShift, setReqPreferredShift] = useState<'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L'>('M');
   const [reqPatternInput, setReqPatternInput] = useState<string>('EN OFF OFF');
   const [reqIsEssential, setReqIsEssential] = useState<boolean>(false);
@@ -742,13 +784,14 @@ export default function Home() {
     else if (r.scope === 'custom_days') timeLabel = `روزهای ${r.selectedDays?.join('، ')}`;
 
     if (r.requestType === 'avoid_shift') {
-      return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
+      return `🔴 عدم حضور در شیفت ${shiftLabel} (${timeLabel})`;
     } else if (r.requestType === 'OFF') {
-      return `🟡 آف [${timeLabel}]`;
+      const type = r.offSubtype === 'hard' ? 'قطعی' : 'توافقی';
+      return `🟡 آف ${type} (${timeLabel})`;
     } else if (r.requestType === 'leave') {
-      return `🟢 مرخصی [${timeLabel}]`;
+      return `🟢 مرخصی استحقاقی (${timeLabel})`;
     } else {
-      return `🔵 حضور در شیفت ${shiftLabel} [${timeLabel}]`;
+      return `🔵 حضور در شیفت ${shiftLabel} (${timeLabel})`;
     }
   };
 
@@ -861,8 +904,19 @@ export default function Home() {
             updatedS,
             updatedH,
             activeFd === -1 ? undefined : activeFd,
-            calculatedMonthlyDutyHours
+            calculatedMonthlyDutyHours ?? undefined,
+            undefined,
+            humanApprovedChanges,
+            previousMonthFinalDays,
+            (prog) => setSolverProgress(prog)
           );
+          setSolverProgress(null);
+
+          if (freshSolved.scenarios) {
+            setArenaScenarios(freshSolved.scenarios);
+            setActiveScenarioId(freshSolved.scenarios[0]?.id);
+            if (freshSolved.summary) setFinalSummary(freshSolved.summary);
+          }
 
           nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
 
@@ -904,8 +958,15 @@ export default function Home() {
           warnings: verification.warnings
         };
       } else {
-        const freshSolved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
+        const freshSolved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours ?? undefined, undefined, humanApprovedChanges, previousMonthFinalDays, (prog) => setSolverProgress(prog));
+        setSolverProgress(null);
         
+        if (freshSolved.scenarios) {
+          setArenaScenarios(freshSolved.scenarios);
+          setActiveScenarioId(freshSolved.scenarios[0]?.id);
+          if (freshSolved.summary) setFinalSummary(freshSolved.summary);
+        }
+
         if (currentMonthSchedule) {
           const nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
           for (const p of updatedP) {
@@ -963,6 +1024,7 @@ export default function Home() {
             requestsLocked: isReqLocked,
             dismissedWarnings: dismissedWarnings,
             lockedRows: lockedRows,
+            humanApprovedChanges: humanApprovedChanges,
             changeLogs: schedule?.changeLogs || []
           }
         }
@@ -1010,6 +1072,18 @@ export default function Home() {
       if (!confirmUnlock) return;
     }
 
+    const groupPersonnel = personnel.filter(p => p.active && p.jobGroup === jobGroup);
+    const missingRequests = groupPersonnel.filter(p => !requests.some(r => r.personnelId === p.id));
+    
+    if (missingRequests.length > 0) {
+      setShowNoRequestDialog({ personnel: missingRequests, jobGroup });
+      return;
+    }
+
+    executeOptimizer(jobGroup);
+  };
+
+  const executeOptimizer = (jobGroup: JobGroup) => {
     setSolvingTarget(jobGroup);
     setTimeout(async () => {
       try {
@@ -1021,7 +1095,8 @@ export default function Home() {
           settings, 
           customHolidays, 
           firstDayOfWeekIndex, 
-          monthlyDutyHours
+          monthlyDutyHours ?? undefined,
+          (prog) => setSolverProgress(prog)
         );
         
         const baseAssignments = normalizeScheduleAssignments(schedule?.assignments, personnel);
@@ -1029,10 +1104,15 @@ export default function Home() {
           ? { ...baseAssignments }
           : normalizeScheduleAssignments(optimized.assignments, personnel);
 
-        // فقط پرسنلی که قفل نیستند تغییر کنند
         const targetPersonnel = personnel.filter(p => p.jobGroup === jobGroup && !lockedRows.includes(p.id));
         for (const person of targetPersonnel) {
           mergedAssignments[person.id] = { ...(optimized.assignments[person.id] || {}) };
+        }
+
+        if (optimized.scenarios) {
+          setArenaScenarios(optimized.scenarios || []);
+          setActiveScenarioId(optimized.scenarios[0]?.id);
+          if (optimized.summary) setFinalSummary(optimized.summary || null);
         }
 
         const verification = verifyCoverageAndLeaders(
@@ -1084,6 +1164,7 @@ export default function Home() {
         console.error("Solver error:", err);
       } finally {
         setSolvingTarget(null);
+        setSolverProgress(null);
       }
     }, 1500);
   };
@@ -1440,6 +1521,7 @@ export default function Home() {
     setFormExperienceYears(1);
     setFormActive(true);
     setFormCanBeShiftLeader(true);
+    setFormPriorityScheduling(false);
     setShowAddPersonnelModal(true);
   };
 
@@ -1454,6 +1536,7 @@ export default function Home() {
     setFormExperienceYears(p.experienceYears);
     setFormActive(p.active);
     setFormCanBeShiftLeader(p.canBeShiftLeader);
+    setFormPriorityScheduling(!!p.priorityScheduling);
     setShowAddPersonnelModal(true);
   };
 
@@ -1477,7 +1560,8 @@ export default function Home() {
           employmentType: formEmploymentType,
           experienceYears: Number(formExperienceYears),
           active: formActive,
-          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader
+          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          priorityScheduling: formPriorityScheduling
         };
         updatedList = personnel.map(p => p.id === editingPersonnel.id ? pData : p);
       } else {
@@ -1493,6 +1577,7 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          priorityScheduling: formPriorityScheduling,
           username: formLastName.trim(),
           password: '1234',
           orderIndex: personnel.length
@@ -1533,6 +1618,7 @@ export default function Home() {
       id: `draft_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       personnelId: pid,
       requestType: reqType,
+      offSubtype: reqType === 'OFF' ? reqOffSubtype : undefined,
       preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
       patternSteps: steps,
       isEssential: role === 'personnel' ? false : reqIsEssential,
@@ -1560,6 +1646,7 @@ export default function Home() {
         id: `req_${Date.now()}`,
         personnelId: pid,
         requestType: reqType,
+        offSubtype: reqType === 'OFF' ? reqOffSubtype : undefined,
         preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
         patternSteps: steps,
         isEssential: role === 'personnel' ? false : reqIsEssential,
@@ -1639,6 +1726,7 @@ export default function Home() {
           id: editingRequest.id,
           personnelId: pid,
           requestType: reqType,
+          offSubtype: reqType === 'OFF' ? reqOffSubtype : undefined,
           preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
           patternSteps: steps,
           isEssential: role === 'personnel' ? false : reqIsEssential,
@@ -1722,6 +1810,12 @@ export default function Home() {
       const updatedAssignments = { ...schedule.assignments };
       if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
       updatedAssignments[pId][day] = shift;
+
+      // Record as human approved change to be preserved in future optimizations
+      const updatedHumanApproved = { ...humanApprovedChanges };
+      if (!updatedHumanApproved[pId]) updatedHumanApproved[pId] = {};
+      updatedHumanApproved[pId][day] = shift;
+      setHumanApprovedChanges(updatedHumanApproved);
 
       const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
 
@@ -2210,7 +2304,7 @@ export default function Home() {
 
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
-        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
+        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} progress={solverProgress} />}
         <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px] opacity-70"></div>
         <div className="max-w-4xl w-full bg-white border border-slate-200/85 shadow-2xl rounded-3xl p-6 sm:p-10 text-center relative z-10 overflow-hidden">
           <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
@@ -2259,6 +2353,7 @@ export default function Home() {
                 <label className="block text-[11px] font-black text-slate-500 mb-1.5"> بخش پرستاری فعال (مبنای ثبت اطلاعات)</label>
                 <select 
                   value={selectedDepartmentId}
+                  disabled={isLoadingDb}
                   onChange={(e) => {
                     const val = e.target.value;
                     setSelectedDepartmentId(val);
@@ -2266,13 +2361,19 @@ export default function Home() {
                       localStorage.setItem('hospital_selected_dept_id', val);
                     }
                   }}
-                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800"
+                  className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none text-slate-800 disabled:opacity-50"
                 >
-                  {departments.map(d => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} {d.id === 'sepehr' ? '(بخش پیش‌فرض)' : ''}
-                    </option>
-                  ))}
+                  {isLoadingDb ? (
+                    <option>در حال بارگذاری لیست بخش‌ها...</option>
+                  ) : departments.length === 0 ? (
+                    <option>هیچ بخشی تعریف نشده است</option>
+                  ) : (
+                    departments.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} {d.id === 'sepehr' ? '(بخش پیش‌فرض)' : ''}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
               
@@ -2617,7 +2718,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen h-screen w-full overflow-hidden bg-slate-50 font-sans" dir="rtl">
-      {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
+      {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} progress={solverProgress} />}
       
       {isNavOpen && (
         <div 
@@ -3185,6 +3286,111 @@ export default function Home() {
 
           {activeTab === 'schedule' && (
             <div className="space-y-6">
+
+              {arenaScenarios.length > 0 && role === 'headnurse' && (
+                <div className="bg-gradient-to-l from-indigo-50 via-white to-sky-50 border border-indigo-100 rounded-3xl p-5 shadow-sm space-y-4 animate-fade-in print:hidden">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-indigo-600 text-white rounded-2xl shadow-lg shadow-indigo-200">
+                        <Sparkles className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-black text-slate-800">ویترین پیشنهادات برتر هوش مصنوعی</h3>
+                        {finalSummary && (
+                          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 bg-slate-50/50 p-3 rounded-2xl border border-slate-100">
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-black text-slate-500">وضعیت کیفی:</span>
+                                <span className="text-[10px] font-black text-emerald-700 bg-emerald-100/50 px-2 py-0.5 rounded-lg border border-emerald-200">{finalSummary.quality}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-black text-slate-500">هشدارهای باقیمانده:</span>
+                                <span className="text-[10px] font-black text-rose-700 bg-rose-100/50 px-2 py-0.5 rounded-lg border border-rose-200">{finalSummary.warnings} مورد</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-black text-slate-500">شاخص توازن (عدالت):</span>
+                                <span className="text-[10px] font-black text-sky-700 bg-sky-100/50 px-2 py-0.5 rounded-lg border border-sky-200">{finalSummary.fairness}%</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-black text-slate-500">پاسخ به درخواست‌ها:</span>
+                                <span className="text-[10px] font-black text-indigo-700 bg-indigo-100/50 px-2 py-0.5 rounded-lg border border-indigo-200">{finalSummary.satisfaction}%</span>
+                            </div>
+                          </div>
+                        )}
+                        <p className="text-[11px] text-slate-400 font-bold mt-2 leading-relaxed">
+                          سیستم ۵۰ حالت مختلف را با تحلیل واریانس بار کاری بررسی کرد. برنامه فعلی بهینه‌ترین توزیع را بر اساس اولویت‌بندی قوانین دارد.
+                        </p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setShowArena(!showArena)}
+                      className="text-xs font-black text-indigo-600 bg-white border border-indigo-200 px-4 py-2 rounded-xl hover:bg-indigo-50 transition-all cursor-pointer shadow-sm"
+                    >
+                      {showArena ? 'بستن ویترین' : 'مشاهده پیشنهادات برتر'}
+                    </button>
+                  </div>
+
+                  {showArena && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                      {arenaScenarios.map((sc, idx) => {
+                        const isActive = sc.id === activeScenarioId;
+                        return (
+                          <div 
+                            key={sc.id} 
+                            onClick={async () => {
+                              setActiveScenarioId(sc.id);
+                              const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, sc.schedule.assignments, settings, customHolidays, firstDayOfWeekIndex, requests);
+                              setSchedule({
+                                ...sc.schedule,
+                                shiftLeaders: verification.shiftLeaders,
+                                warnings: verification.warnings
+                              });
+                            }}
+                            className={`relative cursor-pointer group transition-all duration-300 transform ${isActive ? 'ring-2 ring-indigo-600 scale-[1.02]' : 'hover:scale-[1.01]'} bg-white border ${isActive ? 'border-indigo-600' : 'border-slate-200'} rounded-2xl p-4 shadow-sm`}
+                          >
+                            {isActive && (
+                              <div className="absolute -top-3 -right-3 bg-indigo-600 text-white p-1 rounded-full shadow-md z-10">
+                                <Check className="w-4 h-4" />
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between mb-3">
+                              <span className={`text-[10px] font-black px-2 py-1 rounded-lg ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                {sc.category || `سناریو ${idx + 1}`}
+                              </span>
+                              <div className="text-[11px] font-black text-amber-500">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                  <span key={i} className={i < (sc.stars || 0) ? "text-amber-500" : "text-slate-200"}>⭐</span>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-500 font-bold">تعداد هشدارها:</span>
+                                <span className={`font-black ${sc.metrics.warningCount === 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{sc.metrics.warningCount} مورد</span>
+                              </div>
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-500 font-bold">میزان رضایتمندی:</span>
+                                <span className="text-indigo-600 font-black">{sc.metrics.requestSatisfaction.toFixed(1)}%</span>
+                              </div>
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-500 font-bold">توازن (عدالت):</span>
+                                <span className="text-sky-600 font-black">{sc.metrics.fairnessRating || (10 - Math.min(9, sc.metrics.fairnessScore / 1000000)).toFixed(1)} از ۱۰</span>
+                              </div>
+                            </div>
+                            
+                            <div className="mt-4 pt-3 border-t border-slate-50 space-y-1">
+                              {sc.explanations?.map((exp: string, i: number) => (
+                                <p key={i} className="text-[9px] text-slate-400 font-medium flex items-start gap-1">
+                                  <span className="text-indigo-400 mt-1">•</span> {exp}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               
               <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4 print:hidden">
                 <div className="flex items-center gap-3">
@@ -3363,13 +3569,13 @@ export default function Home() {
 
                                 if (currentShift === 'M') {
                                   badgeClass = "bg-blue-50 text-blue-700 font-bold border-blue-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'صبح 👑' : 'صبح';
+                                  displayVal = isShiftLeaderCell ? 'M 👑' : 'M';
                                 } else if (currentShift === 'E') {
                                   badgeClass = "bg-amber-50 text-amber-700 font-bold border-amber-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'عصر 👑' : 'عصر';
+                                  displayVal = isShiftLeaderCell ? 'E 👑' : 'E';
                                 } else if (currentShift === 'N') {
                                   badgeClass = "bg-purple-50 text-purple-700 font-bold border-purple-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'شب 👑' : 'شب';
+                                  displayVal = isShiftLeaderCell ? 'N 👑' : 'N';
                                 } else if (currentShift === 'ME') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-amber-50 text-slate-700 font-black border-indigo-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? 'ME 👑' : 'ME';
@@ -3384,19 +3590,21 @@ export default function Home() {
                                   displayVal = isShiftLeaderCell ? 'MEN 👑' : 'MEN';
                                 } else if (currentShift === 'OFF') {
                                   badgeClass = "bg-slate-50 text-slate-300 font-medium text-xs";
-                                  displayVal = 'آف';
+                                  displayVal = 'OFF';
                                 } else if (currentShift.startsWith('L')) {
                                   badgeClass = "bg-emerald-100 text-emerald-800 font-black text-xs border border-emerald-300";
                                   displayVal = currentShift.substring(1);
                                 }
 
                                 const isEditingThis = editingCell?.pId === p.id && editingCell?.day === d.day;
+                                const isHumanApproved = humanApprovedChanges[p.id]?.[d.day] !== undefined;
 
                                 return (
                                   <td 
                                     key={d.day} 
                                     className={`px-0.5 py-1 text-center border-l border-slate-100 relative ${d.isHoliday ? 'bg-rose-50/10' : ''}`}
                                   >
+                                    {isHumanApproved && <div className="absolute top-0 right-0 w-1.5 h-1.5 bg-emerald-500 rounded-full z-10" title="تغییر دستی تایید شده" />}
                                     {isEditingThis ? (
                                       <select 
                                         autoFocus
@@ -3406,14 +3614,14 @@ export default function Home() {
                                         className="absolute inset-0 z-20 w-full h-full text-xs font-bold border border-indigo-500 bg-white"
                                         id={`select-edit-${p.id}-${d.day}`}
                                       >
-                                        <option value="OFF">آف (OFF)</option>
-                                        <option value="M">صبح (M)</option>
-                                        <option value="E">عصر (E)</option>
-                                        <option value="N">شب (N)</option>
-                                        <option value="ME">عصر-صبح (ME)</option>
-                                        <option value="EN">شب-عصر (EN)</option>
-                                        <option value="MN">شب-صبح (MN)</option>
-                                        <option value="MEN">ترکیبی (MEN)</option>
+                                        <option value="OFF">OFF (تعطیل)</option>
+                                        <option value="M">M (صبح)</option>
+                                        <option value="E">E (عصر)</option>
+                                        <option value="N">N (شب)</option>
+                                        <option value="ME">ME (صبح-عصر)</option>
+                                        <option value="EN">EN (عصر-شب)</option>
+                                        <option value="MN">MN (صبح-شب)</option>
+                                        <option value="MEN">MEN (تمام وقت)</option>
                                         <option value="L1">مرخصی روز ۱</option>
                                         <option value="L2">مرخصی روز ۲</option>
                                         <option value="L3">مرخصی روز ۳</option>
@@ -3425,7 +3633,7 @@ export default function Home() {
                                         onClick={() => handleCellClick(p.id, d.day)}
                                         disabled={role === 'personnel' || lockedRows.includes(p.id)}
                                         className={`w-full max-w-[32px] h-8 rounded-lg flex items-center justify-center transition-all ${badgeClass} ${highlightedCellId === cellId ? 'ring-4 ring-red-500 ring-offset-2 ring-offset-white animate-[pulse_0.7s_ease-in-out_5]' : ''} ${(role !== 'personnel' && !lockedRows.includes(p.id)) ? 'hover:scale-105 hover:shadow cursor-pointer' : ''}`}
-                                        title={`${p.firstName} ${p.lastName} • روز ${d.day} \nکلیک برای ویرایش دستی`}
+                                        title={`${p.firstName} ${p.lastName} • روز ${d.day} - ${schedule?.decisionLogs?.[cellId] || 'برنامه عادی سیستم'} - کلیک برای ویرایش دستی`}
                                         id={cellId}
                                       >
                                         {displayVal}
@@ -3445,10 +3653,12 @@ export default function Home() {
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs font-semibold print:hidden">
                 <span className="text-slate-500">راهنمای نوبت‌های کاری:</span>
                 <div className="flex flex-wrap gap-4">
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center rounded font-bold">صبح</span> صبح (M)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">شب</span> شب (N)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center rounded font-bold">M</span> صبح</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">E</span> عصر</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">N</span> شب</span>
+                  <span className="flex items-center gap-1.5"><span className="px-1.5 h-5 bg-indigo-50 text-indigo-700 border border-indigo-200 flex items-center justify-center rounded font-bold">ME</span> عصر-صبح</span>
+                  <span className="flex items-center gap-1.5"><span className="px-1.5 h-5 bg-violet-50 text-violet-700 border border-violet-200 flex items-center justify-center rounded font-bold">EN</span> شب-عصر</span>
+                  <span className="flex items-center gap-1.5"><span className="px-1.5 h-5 bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center rounded font-bold">L</span> مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> کل روز (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
@@ -3523,7 +3733,10 @@ export default function Home() {
                             </div>
                           </td>
                           <td className="px-6 py-3.5 font-mono text-xs font-bold text-slate-500">{p.personalCode}</td>
-                          <td className="px-6 py-3.5 font-bold text-slate-800">{p.firstName} {p.lastName}</td>
+                          <td className="px-6 py-3.5 font-bold text-slate-800">
+                            {p.firstName} {p.lastName}
+                            {p.priorityScheduling && <span className="block text-[9px] text-indigo-600 font-black">★ اولویت تخصیص</span>}
+                          </td>
                           <td className="px-6 py-3.5 text-slate-600">
                             {p.jobGroup === 'assistant' ? (
                               <span className="bg-orange-50 text-orange-700 px-2 py-0.5 rounded-md text-xs font-bold">کمک بهیار</span>
@@ -5352,6 +5565,16 @@ export default function Home() {
                   کاربر فعال باشد (حضور در برنامه‌ریزی)
                 </label>
 
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-black text-indigo-700">
+                  <input 
+                    type="checkbox" 
+                    checked={formPriorityScheduling} 
+                    onChange={(e) => setFormPriorityScheduling(e.target.checked)}
+                    className="rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  اولویت ویژه در چیدمان (بررسی اولویت ۱)
+                </label>
+
                 {formJobGroup !== 'assistant' && (
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input 
@@ -5679,12 +5902,32 @@ export default function Home() {
                     className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
                     id="select-req-type"
                   >
-                    <option value="shift">درخواست شیفت تفکیکی</option>
-                    <option value="OFF">آف</option>
-                    <option value="leave">مرخصی استحقاقی (نمایش عددی)</option>
-                    <option value="avoid_shift">در تاریخ... شیفت....نباشم</option>
+                    {role === 'personnel' ? (
+                        <option value="OFF">آف (OFF)</option>
+                    ) : (
+                        <>
+                            <option value="shift">درخواست شیفت تفکیکی</option>
+                            <option value="OFF">آف (OFF)</option>
+                            <option value="leave">مرخصی استحقاقی (نمایش عددی)</option>
+                            <option value="avoid_shift">در تاریخ... شیفت....نباشم</option>
+                        </>
+                    )}
                   </select>
                 </div>
+
+                {reqType === 'OFF' && role !== 'personnel' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">نوع آف:</label>
+                    <select 
+                      value={reqOffSubtype} 
+                      onChange={(e) => setReqOffSubtype(e.target.value as any)}
+                      className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
+                    >
+                      <option value="hard">آف قطعی (Hard Lock)</option>
+                      <option value="soft">آف توافقی (قابل جابجایی)</option>
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   {reqType === 'shift' && (
@@ -5871,6 +6114,57 @@ export default function Home() {
         </div>
       )}
 
+      {showNoRequestDialog && (
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-[70] p-4 animate-fade-in" id="no-request-dialog" dir="rtl">
+          <div className="bg-white rounded-[2rem] shadow-2xl p-6 md:p-8 w-full max-w-[500px] border border-slate-100 relative">
+            <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mb-6 mx-auto shadow-sm">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            
+            <h3 className="text-xl font-black text-slate-900 text-center mb-2">عدم ثبت درخواست توسط پرسنل</h3>
+            <p className="text-sm text-slate-500 font-bold text-center leading-relaxed mb-6">
+                پرسنل زیر هیچ درخواستی برای ماه جاری ثبت نکرده‌اند. نحوه چیدمان شیفت برای این افراد چگونه باشد؟
+            </p>
+
+            <div className="max-h-32 overflow-y-auto mb-6 p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 scrollbar-thin">
+                {showNoRequestDialog.personnel.map(p => (
+                    <div key={p.id} className="text-xs font-black text-slate-700 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
+                        {p.firstName} {p.lastName} ({p.personalCode})
+                    </div>
+                ))}
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  const jobGroup = showNoRequestDialog.jobGroup;
+                  setShowNoRequestDialog(null);
+                  executeOptimizer(jobGroup);
+                }}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs py-3.5 rounded-2xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Check className="w-4 h-4" /> چیدمان روتین و متعادل (توصیه شده)
+              </button>
+              <button
+                onClick={() => {
+                   alert('قابلیت خالی ماندن لیست در حال حاضر با ثبت درخواست آف جمعی توسط سرپرستار امکان‌پذیر است. لطفاً برای این افراد آف ثبت کنید.');
+                   setShowNoRequestDialog(null);
+                }}
+                className="w-full bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 font-black text-xs py-3.5 rounded-2xl transition-all cursor-pointer"
+              >
+                لیست شیفت‌های این افراد فعلاً خالی بماند
+              </button>
+              <button
+                onClick={() => setShowNoRequestDialog(null)}
+                className="w-full text-slate-400 hover:text-slate-600 font-bold text-[11px] py-1 transition-all cursor-pointer"
+              >
+                انصراف و بازگشت
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -228,47 +228,11 @@ export const INITIAL_SETTINGS: SystemSettings = {
 };
 
 export const INITIAL_REQUESTS: ShiftRequest[] = [
-  {
-    id: 'r1',
-    personnelId: 'p1', // Supervisor
-    requestType: 'OFF',
-    isEssential: true,
-    scope: 'range',
-    startDate: '1405/03/05',
-    endDate: '1405/03/06'
-  },
-  {
-    id: 'r2',
-    personnelId: 'p2', // Staff
-    requestType: 'leave',
-    isEssential: true,
-    scope: 'range',
-    startDate: '1405/03/10',
-    endDate: '1405/03/14' // 5 days of leave (note: 13th is the Friday holiday, so leave starts/operates with rules)
-  },
-  {
-    id: 'r3',
-    personnelId: 'p5', // General
-    requestType: 'shift',
-    preferredShift: 'N',
-    isEssential: false,
-    scope: 'all'
-  },
-  {
-    id: 'r4',
-    personnelId: 'p6', // Conscript General
-    requestType: 'pattern',
-    patternSteps: ['EN', 'OFF', 'OFF'],
-    isEssential: false,
-    scope: 'all'
-  },
-  {
-    id: 'r5',
-    personnelId: 'p12', // Assistant
-    requestType: 'OFF',
-    isEssential: true,
-    scope: 'fridays' // preferred OFF on fridays
-  }
+  { id: 'r1', personnelId: 'p1', requestType: 'OFF', isEssential: true, scope: 'range', startDate: '1405/03/05', endDate: '1405/03/06' },
+  { id: 'r2', personnelId: 'p2', requestType: 'leave', isEssential: true, scope: 'range', startDate: '1405/03/10', endDate: '1405/03/14' },
+  { id: 'r3', personnelId: 'p5', requestType: 'shift', preferredShift: 'N', isEssential: false, scope: 'all' },
+  { id: 'r4', personnelId: 'p6', requestType: 'pattern', patternSteps: ['EN', 'OFF', 'OFF'], isEssential: false, scope: 'all' },
+  { id: 'r5', personnelId: 'p12', requestType: 'OFF', isEssential: true, scope: 'fridays' }
 ];
 
 export const INITIAL_HOLIDAYS_1405_03: { [day: number]: string } = {

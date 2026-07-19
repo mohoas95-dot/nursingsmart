@@ -21,6 +21,7 @@ export interface Personnel {
   username?: string;
   password?: string;
   locked?: boolean;
+  priorityScheduling?: boolean; // New: Priority Personnel
 }
 
 export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
@@ -37,6 +38,7 @@ export interface JalaliDateInfo {
 
 export interface SystemSettings {
   autoCalculateDutyHours?: boolean;
+  scenarioCount?: number;
   dutyHours: {
     official: number;
     contract: number;
@@ -68,11 +70,13 @@ export interface SystemSettings {
 }
 
 export type RequestType = 'shift' | 'OFF' | 'leave' | 'pattern' | 'avoid_shift';
+export type OffSubtype = 'hard' | 'soft';
 
 export interface ShiftRequest {
   id: string;
   personnelId: string;
   requestType: RequestType;
+  offSubtype?: OffSubtype; // New: Hard or Soft OFF
   preferredShift?: 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L';
   patternSteps?: string[];
   isEssential: boolean;
@@ -107,7 +111,10 @@ export interface MonthlySchedule {
   dismissedWarnings?: string[];
   changeLogs?: string[];
   lockedRows?: string[];
-  autoSubstitutions?: AutoSubstitutionRecord[]; // فیلد جدید برای ثبت جایگزینی‌های خودکار
+  autoSubstitutions?: AutoSubstitutionRecord[]; 
+  decisionLogs?: { [key: string]: string }; // [cellId]: "Reason"
+  humanApprovedChanges?: { [personnelId: string]: { [day: number]: ShiftType } }; // New: Preserve manual edits
+  previousMonthFinalDays?: { [personnelId: string]: { [day: number]: ShiftType } }; // New: Memory Freeze
 }
 
 export interface AutoSubstitutionRecord {
@@ -142,9 +149,32 @@ export interface PersonnelReportResult {
   offCount: number;
   leaveCount: number;
   productivityEligible: boolean;
+  
+  // Real Workload Model Metrics
+  equivalentShiftCount: number; // M=1, E=1, N=2
+  attendanceCount: number;      // Physical presence frequency
+  longShiftCount: number;      // ME, EN, MN, MEN
 }
 
 // ====== انواع جدید برای درخواست‌ها ======
+
+export interface ScenarioResult {
+  id: string;
+  schedule: MonthlySchedule;
+  score: number;
+  metrics: {
+    warningCount: number;
+    fairnessScore: number;
+    fairnessRating?: number;
+    requestSatisfaction: number;
+    stabilityScore: number;
+    changeCount: number;
+    realWorkloadVariance: number;
+  };
+  stars?: number; // Added: Rating stars
+  category?: string;
+  explanations?: string[];
+}
 
 export interface AggregatedAlert {
   personnelId: string;
@@ -173,9 +203,14 @@ export interface SmartSuggestion {
   priority: number;
 }
 
-export interface OptimizationResult {
-  assignments: { [pId: string]: { [day: number]: ShiftType } };
-  warnings: string[];
+export interface ScheduleSummary {
+  quality: string;
+  warnings: number;
+  fairness: number;
+  satisfaction: number;
+}
+
+export interface OptimizationResult extends MonthlySchedule {
   coverageGaps: {
     day: number;
     shift: 'M' | 'E' | 'N';
@@ -187,4 +222,6 @@ export interface OptimizationResult {
     level2: string[];
     level3: string[];
   };
+  scenarios?: ScenarioResult[]; // For Arena Mode
+  summary?: ScheduleSummary;
 }

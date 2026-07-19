@@ -107,7 +107,7 @@ export function getS3Client(): { client: S3Client | null; bucket: string; isConf
 // In-memory fallback if S3 is not active or during transition
 let localMemoryState: AppDatabaseState | null = null;
 
-export async function readState(): Promise<{ state: AppDatabaseState; source: 's3' | 'fallback' | 'memory' }> {
+export async function readState(): Promise<{ state: AppDatabaseState; source: 's3' | 'fallback' | 'memory' | 'repaired' }> {
   const { client, bucket, isConfigured } = getS3Client();
 
   if (!isConfigured || !client) {
@@ -130,7 +130,54 @@ export async function readState(): Promise<{ state: AppDatabaseState; source: 's
     }
 
     const dataString = await response.Body.transformToString();
-    const state = JSON.parse(dataString) as AppDatabaseState;
+    let state = JSON.parse(dataString) as AppDatabaseState;
+    
+    // DEBUG: Write the structure to a file we can read
+    const fs = require('fs');
+    const debugInfo = {
+      departments: state.departments,
+      counts: Object.fromEntries(Object.entries(state.deptData || {}).map(([k, v]: [string, any]) => [k, v.personnel?.length || 0]))
+    };
+    fs.writeFileSync('/home/user/nursingsmart/db_debug.json', JSON.stringify(debugInfo, null, 2));
+
+    let modified = false;
+
+    // Emergency Data Recovery: Look for the richest 'Sepehr' department
+    if (state.departments && Array.isArray(state.departments)) {
+      const sepehrDepts = state.departments.filter(d => d.name?.trim() === 'بخش سپهر');
+      if (sepehrDepts.length > 0) {
+        // Find the one with most personnel
+        const bestSepehr = sepehrDepts.reduce((prev, current) => {
+          const dataPrev = state.deptData?.[prev.id];
+          const dataCurr = state.deptData?.[current.id];
+          const countPrev = dataPrev?.personnel?.length || 0;
+          const countCurr = dataCurr?.personnel?.length || 0;
+          return countCurr > countPrev ? current : prev;
+        });
+
+        console.log(`Found best Sepehr with ${state.deptData?.[bestSepehr.id]?.personnel?.length} personnel`);
+
+        // If the best one is not 'sepehr' id, or if 'sepehr' id is empty, move it to 'sepehr'
+        if (bestSepehr.id !== 'sepehr') {
+           const richData = state.deptData[bestSepehr.id];
+           state.deptData['sepehr'] = richData;
+           // Update departments list to ensure 'sepehr' id points to this rich data
+           const deptInList = state.departments.find(d => d.id === 'sepehr');
+           if (deptInList) {
+             deptInList.name = 'بخش سپهر';
+           } else {
+             state.departments.push({ id: 'sepehr', name: 'بخش سپهر', username: bestSepehr.username, password: bestSepehr.password });
+           }
+           modified = true;
+        }
+      }
+    }
+
+    if (modified) {
+      await writeState(state);
+      return { state, source: 'repaired' };
+    }
+
     return { state, source: 's3' };
   } catch (err: any) {
     // If the file does not exist yet (NoSuchKey), create it with initial seed
