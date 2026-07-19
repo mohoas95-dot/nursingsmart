@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  HEAD_NURSE
+  PERSONNEL
+}
+
+model User {
+  id                   String    @id @default(cuid())
+  nationalId           String    @unique @db.VarChar(10)
+  passwordHash         String
+  firstName            String
+  lastName             String
+  role                 UserRole  @default(PERSONNEL)
+  departmentId         String?
+  personnelId          String?   @unique
+  active               Boolean   @default(true)
+  mustChangePassword   Boolean   @default(true)
+  hasResetRequest      Boolean   @default(false)
+  resetRequestedAt     DateTime?
+  passwordResetAt      DateTime?
+  failedLoginAttempts  Int       @default(0)
+  lockedUntil          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  sessions             Session[]
+
+  @@index([departmentId, hasResetRequest])
+  @@index([role, active])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+  ipAddress String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
