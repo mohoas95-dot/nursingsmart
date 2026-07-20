@@ -2,6 +2,7 @@
 
 import { Personnel, ShiftRequest, MonthlySchedule, ShiftType, SystemSettings } from './types';
 import { getJalaliMonthDays } from './jalali';
+import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
 
 export interface SubstitutionResult {
   personnelId: string;
@@ -73,31 +74,15 @@ function violatesPersonnelRequest(
 
 /**
  * بررسی اینکه آیا یک روز در دامنه درخواست قرار می‌گیرد
+ *
+ * Adapter: delegates to domain/requests/request-scope-matcher.ts
+ * For backward compatibility, dayOfWeek is optional. When not provided (legacy call sites),
+ * weekday-specific scopes (saturdays–fridays, weekly_even, weekly_odd) will not match,
+ * preserving the exact legacy behavior.
  */
-function checkIfDayInRequestScope(day: number, request: ShiftRequest): boolean {
-  switch (request.scope) {
-    case 'all':
-      return true;
-    case 'even':
-      return day % 2 === 0;
-    case 'odd':
-      return day % 2 === 1;
-    case 'weekly_even':
-      return day % 2 === 0; // روزهای زوج هفته
-    case 'weekly_odd':
-      return day % 2 === 1; // روزهای فرد هفته
-    case 'range':
-      if (request.startDate && request.endDate) {
-        const [startYear, startMonth, startDay] = request.startDate.split('/').map(Number);
-        const [endYear, endMonth, endDay] = request.endDate.split('/').map(Number);
-        return day >= startDay && day <= endDay;
-      }
-      return false;
-    case 'custom_days':
-      return request.selectedDays?.includes(day) || false;
-    default:
-      return false;
-  }
+function checkIfDayInRequestScope(day: number, request: ShiftRequest, dayOfWeek?: number): boolean {
+  // Use -1 as sentinel so weekday scopes return false when dayOfWeek is unknown (legacy behavior)
+  return isDayInRequestScope(day, dayOfWeek ?? -1, request);
 }
 
 /**

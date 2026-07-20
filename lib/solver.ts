@@ -163,10 +163,10 @@ export function aggregateWarnings(
 export function solveWithPriority(
   year: number,
   month: number,
-  personnelList: Personnel[],
-  requests: ShiftRequest[],
+  personnelList: readonly Personnel[],
+  requests: readonly ShiftRequest[],
   settings: SystemSettings,
-  customHolidays: { [day: number]: string } = {},
+  customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): OptimizationResult {
@@ -343,10 +343,10 @@ export function solveWithPriority(
 export function solveNursingSchedule(
   year: number,
   month: number,
-  personnelList: Personnel[],
-  requests: ShiftRequest[],
+  personnelList: readonly Personnel[],
+  requests: readonly ShiftRequest[],
   settings: SystemSettings,
-  customHolidays: { [day: number]: string } = {},
+  customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): MonthlySchedule {
@@ -1217,12 +1217,12 @@ export function solveNursingSchedule(
 export function verifyCoverageAndLeaders(
   year: number,
   month: number,
-  personnelList: Personnel[],
-  assignments: { [pId: string]: { [day: number]: ShiftType } },
+  personnelList: readonly Personnel[],
+  assignments: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>,
   settings: SystemSettings,
-  customHolidays: { [day: number]: string } = {},
+  customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  requests: ShiftRequest[] = []
+  requests: readonly ShiftRequest[] = []
 ): { warnings: string[], shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } } {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
