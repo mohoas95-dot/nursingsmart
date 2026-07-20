@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import type { MonthlySchedule } from '../../../domain/types';
 import type { JobGroup } from '../../../lib/types';
 
@@ -18,30 +18,30 @@ import type { JobGroup } from '../../../lib/types';
 export interface UseScheduleStateReturn {
   // Schedule
   schedule: MonthlySchedule | null;
-  setSchedule: (schedule: MonthlySchedule | null) => void;
+  setSchedule: Dispatch<SetStateAction<MonthlySchedule | null>>;
 
   // Solving state
   solvingTarget: JobGroup | null;
-  setSolvingTarget: (target: JobGroup | null) => void;
+  setSolvingTarget: Dispatch<SetStateAction<JobGroup | null>>;
 
   // Finalized months
   finalizedNursesMonths: string[];
-  setFinalizedNursesMonths: (months: string[]) => void;
+  setFinalizedNursesMonths: Dispatch<SetStateAction<string[]>>;
   finalizedAssistantsMonths: string[];
-  setFinalizedAssistantsMonths: (months: string[]) => void;
+  setFinalizedAssistantsMonths: Dispatch<SetStateAction<string[]>>;
 
   // Locked rows
   lockedRows: string[];
-  setLockedRows: (rows: string[]) => void;
+  setLockedRows: Dispatch<SetStateAction<string[]>>;
   toggleRowLock: (personnelId: string) => void;
 
   // Dismissed warnings
   dismissedWarnings: string[];
-  setDismissedWarnings: (warnings: string[]) => void;
+  setDismissedWarnings: Dispatch<SetStateAction<string[]>>;
 
   // Editing cell
   editingCell: { pId: string; day: number } | null;
-  setEditingCell: (cell: { pId: string; day: number } | null) => void;
+  setEditingCell: Dispatch<SetStateAction<{ pId: string; day: number } | null>>;
 
   // Helpers
   isScheduleLocked: (jobGroup: JobGroup, monthKey: string) => boolean;
