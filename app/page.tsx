@@ -51,6 +51,16 @@ import {
   checkAndApplyAutoSubstitution
 } from '../lib/balanceChecker';
 import { generateSmartSuggestions } from '../lib/smartSuggestion';
+import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
+import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
+import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
+import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
+import { AlertCenter } from '../features/scheduling/components/AlertCenter';
+import { ProfileSection } from '../features/profile/components/ProfileSection';
+import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
+import { BusyOverlay } from '../features/shared/components/BusyOverlay';
+import { useScheduleState } from '../features/scheduling/hooks/useScheduleState';
+import { usePersonnelForm } from '../features/personnel/hooks/usePersonnelForm';
 import {
   Calendar as CalendarIcon,
   Users,
@@ -106,43 +116,7 @@ class ConcurrencyConflictError extends Error {
   }
 }
 
-function BusyOverlay({ subtitle }: { subtitle: string }) {
-  return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/35 backdrop-blur-md p-4 cursor-progress">
-      <div className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-white/50 bg-white/80 shadow-2xl shadow-slate-900/25">
-        <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-l from-indigo-500 via-sky-500 to-emerald-500" />
-        <div className="absolute -top-20 -right-16 h-44 w-44 rounded-full bg-sky-400/20 blur-3xl" />
-        <div className="absolute -bottom-20 -left-12 h-40 w-40 rounded-full bg-emerald-400/20 blur-3xl" />
 
-        <div
-          className="relative flex flex-col items-center gap-5 px-8 py-9 text-center"
-          role="status"
-          aria-live="polite"
-          aria-busy="true"
-        >
-          <div className="relative flex h-24 w-24 items-center justify-center">
-            <div className="absolute inset-0 rounded-full border-4 border-indigo-200/80" />
-            <div className="absolute inset-2 rounded-full border-[3px] border-transparent border-t-indigo-600 border-r-sky-500 animate-spin" />
-            <div className="absolute inset-5 rounded-full border-2 border-emerald-200/70 border-b-emerald-500 animate-spin [animation-direction:reverse] [animation-duration:1.4s]" />
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 via-sky-500 to-emerald-500 text-white shadow-lg shadow-sky-500/30">
-              <Activity className="h-6 w-6 animate-pulse" />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-2xl font-black text-slate-900">لطفا شکیبا باشید</h3>
-            <p className="text-sm font-bold leading-7 text-slate-600">{subtitle}</p>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-4 py-2 text-[11px] font-extrabold text-slate-500 shadow-sm">
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-            در حال انجام عملیات، لطفاً صفحه را نبندید.
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function Home() {
   const router = useRouter();
@@ -280,8 +254,26 @@ export default function Home() {
     officialCalendarState.calendar,
   ]);
 
-  // Schedule matrix
-  const [schedule, setSchedule] = useState<MonthlySchedule | null>(null);
+  // Schedule state management (extracted to custom hook in Phase 4)
+  const {
+    schedule,
+    setSchedule,
+    solvingTarget,
+    setSolvingTarget,
+    finalizedNursesMonths,
+    setFinalizedNursesMonths,
+    finalizedAssistantsMonths,
+    setFinalizedAssistantsMonths,
+    lockedRows,
+    setLockedRows,
+    toggleRowLock,
+    dismissedWarnings,
+    setDismissedWarnings,
+    editingCell,
+    setEditingCell,
+    isScheduleLocked,
+    isRowLocked,
+  } = useScheduleState();
 
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
 
@@ -322,7 +314,7 @@ export default function Home() {
     return [];
   }, [personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
 
-  const [solvingTarget, setSolvingTarget] = useState<JobGroup | null>(null);
+  // solvingTarget now managed by useScheduleState hook
 
   // User Authentication & Roles
   // roles: 'admin' | 'headnurse' | 'personnel' | 'guest'
@@ -501,18 +493,9 @@ export default function Home() {
     router.replace('/');
   }, [pendingLogin, router]);
 
-  // States for finalized months (locked schedules that won't auto-resolve)
-  const [finalizedNursesMonths, setFinalizedNursesMonths] = useState<string[]>([]);
-  const [finalizedAssistantsMonths, setFinalizedAssistantsMonths] = useState<string[]>([]);
+  // finalizedNursesMonths, finalizedAssistantsMonths, dismissedWarnings, lockedRows
+  // now managed by useScheduleState hook
   const [requestsLockedMonths, setRequestsLockedMonths] = useState<string[]>([]);
-
-  // State for dismissed warnings list per month
-  const [dismissedWarnings, setDismissedWarnings] = useState<string[]>([]);
-
-  // ====== STATE‌های جدید برای درخواست‌ها ======
-
-  // برای قفل ردیف‌ها (درخواست ۶)
-  const [lockedRows, setLockedRows] = useState<string[]>([]);
 
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
 
@@ -1106,27 +1089,48 @@ export default function Home() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'personnel' | 'request'; label: string } | null>(null);
   const [isNavOpen, setIsNavOpen] = useState<boolean>(false);
 
-  // CRUD & Modals State
-  const [showAddPersonnelModal, setShowAddPersonnelModal] = useState<boolean>(false);
-  const [editingPersonnel, setEditingPersonnel] = useState<Personnel | null>(null);
+  // Personnel form state management (extracted to custom hook in Phase 4)
+  const personnelForm = usePersonnelForm();
+  
+  // Destructure for backward compatibility with existing code
+  const showAddPersonnelModal = personnelForm.isOpen;
+  const setShowAddPersonnelModal = (open: boolean) => {
+    if (open) personnelForm.openAddModal();
+    else personnelForm.closeModal();
+  };
+  const editingPersonnel = personnelForm.editingPersonnel;
+  const setEditingPersonnel = (p: Personnel | null) => {
+    if (p) personnelForm.openEditModal(p);
+    else personnelForm.closeModal();
+  };
 
-  // Forms states for Personnel
-  const [formFirstName, setFormFirstName] = useState<string>('');
-  const [formLastName, setFormLastName] = useState<string>('');
-  const [formPersonalCode, setFormPersonalCode] = useState<string>('');
-  const [formNationalId, setFormNationalId] = useState('');
+  // Forms states for Personnel (destructured from hook)
+  const formFirstName = personnelForm.formData.firstName;
+  const setFormFirstName = personnelForm.setFormFirstName;
+  const formLastName = personnelForm.formData.lastName;
+  const setFormLastName = personnelForm.setFormLastName;
+  const formPersonalCode = personnelForm.formData.personalCode;
+  const setFormPersonalCode = personnelForm.setFormPersonalCode;
+  const formNationalId = personnelForm.formData.nationalId;
+  const setFormNationalId = personnelForm.setFormNationalId;
   const [pendingPersonnelId, setPendingPersonnelId] = useState<string | null>(null);
-  const [formJobGroup, setFormJobGroup] = useState<'nurse' | 'assistant'>('nurse');
-  const [formPosition, setFormPosition] = useState<'supervisor' | 'staff' | 'general' | 'none'>('general');
-  const [formEmploymentType, setFormEmploymentType] = useState<'official' | 'contract' | 'conscript' | 'overtime'>('official');
-  const [formExperienceYears, setFormExperienceYears] = useState<number | string>(1);
-  const [formActive, setFormActive] = useState<boolean>(true);
-  const [formCanBeShiftLeader, setFormCanBeShiftLeader] = useState<boolean>(true);
+  const formJobGroup = personnelForm.formData.jobGroup;
+  const setFormJobGroup = personnelForm.setFormJobGroup;
+  const formPosition = personnelForm.formData.position;
+  const setFormPosition = personnelForm.setFormPosition;
+  const formEmploymentType = personnelForm.formData.employmentType;
+  const setFormEmploymentType = personnelForm.setFormEmploymentType;
+  const formExperienceYears = personnelForm.formData.experienceYears;
+  const setFormExperienceYears = personnelForm.setFormExperienceYears;
+  const formActive = personnelForm.formData.active;
+  const setFormActive = personnelForm.setFormActive;
+  const formCanBeShiftLeader = personnelForm.formData.canBeShiftLeader;
+  const setFormCanBeShiftLeader = personnelForm.setFormCanBeShiftLeader;
 
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
   const [editingRequest, setEditingRequest] = useState<ShiftRequest | null>(null);
-  const [editingCell, setEditingCell] = useState<{ pId: string; day: number } | null>(null);
+  // editingCell now managed by useScheduleState hook
   const [reqPersonnelId, setReqPersonnelId] = useState<string>('');
   const [reqType, setReqType] = useState<'shift' | 'OFF' | 'leave' | 'pattern' | 'avoid_shift'>('shift');
   const [reqPreferredShift, setReqPreferredShift] = useState<'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L'>('M');
@@ -1384,9 +1388,12 @@ export default function Home() {
         if (currentMonthSchedule) {
           const nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
           for (const p of updatedP) {
-            const isLocked = p.jobGroup === 'nurse' ? isLockedNurses : isLockedAssistants;
-            // چک قفل گروهی و قفل ردیف فردی - اگر قفل باشد، شیفت‌های این پرسنل تغییر نمی‌کند
-            if (!isLocked && !lockedRows.includes(p.id)) {
+            // Use domain guard to check if this personnel should be updated
+            const finalizedMonthsForGroup = p.jobGroup === 'nurse' ? finalizedNursesMonths : finalizedAssistantsMonths;
+            const shouldUpdate = isPersonnelOptimizationTarget(p.jobGroup, p.jobGroup, p.id, lockedRows)
+              && !finalizedMonthsForGroup.includes(monthKey);
+
+            if (shouldUpdate) {
               nextAssignments[p.id] = { ...(freshSolved.assignments[p.id] || {}) };
             }
           }
@@ -1483,55 +1490,16 @@ export default function Home() {
   };
 
   // Run the smart constraints CP-SAT mimic engine with loading animation
-  const handleRunOptimizer = (jobGroup: JobGroup) => {
-    const key = `${currentYear}_${currentMonth}`;
-    let wasLocked = jobGroup === 'nurse' ? finalizedNursesMonths.includes(key) : finalizedAssistantsMonths.includes(key);
-    if (wasLocked) {
-      const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
-      const confirmUnlock = confirm(`برنامه این ماه ثبت نهایی و قفل شده است. آیا مایلید قفل لیست را باز کرده و بازتولید هوشمند ${groupTitle} را اجرا کنید؟`);
-      if (!confirmUnlock) return;
-    }
+  // Migrated to Facade pattern (Phase 3) — delegates to runOptimizerFacade
+  const handleRunOptimizer = async (jobGroup: JobGroup) => {
+    const deptId = selectedDepartmentId || 'sepehr';
 
-    setSolvingTarget(jobGroup);
-    setTimeout(async () => {
-      try {
-        const optimized = solveWithPriority(
-          currentYear,
-          currentMonth,
-          personnel,
-          requests,
-          settings,
-          customHolidays,
-          firstDayOfWeekIndex,
-          monthlyDutyHours
-        );
-
-        const baseAssignments = normalizeScheduleAssignments(schedule?.assignments, personnel);
-        const mergedAssignments = schedule
-          ? { ...baseAssignments }
-          : normalizeScheduleAssignments(optimized.assignments, personnel);
-
-        // فقط پرسنلی که قفل نیستند تغییر کنند
-        const targetPersonnel = personnel.filter(p => p.jobGroup === jobGroup && !lockedRows.includes(p.id));
-        for (const person of targetPersonnel) {
-          mergedAssignments[person.id] = { ...(optimized.assignments[person.id] || {}) };
-        }
-
-        const verification = verifyCoverageAndLeaders(
-          currentYear,
-          currentMonth,
-          personnel,
-          mergedAssignments,
-          settings,
-          customHolidays,
-          firstDayOfWeekIndex,
-          requests
-        );
-
+    // Persistence adapter: bridges Facade to legacy saveDbState
+    const persistenceAdapter: SchedulePersistence = {
+      saveSchedule: async (newSchedule: any) => {
         const nextDb = getFreshDbCopy();
         if (!nextDb.deptData) nextDb.deptData = {};
 
-        const deptId = selectedDepartmentId || 'sepehr';
         const oldDept = nextDb.deptData[deptId] || {
           personnel: [],
           requests: [],
@@ -1546,28 +1514,53 @@ export default function Home() {
           ...oldDept,
           schedules: {
             ...oldDept.schedules,
-            [`${currentYear}_${currentMonth}`]: {
-              ...(schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
-              year: currentYear,
-              month: currentMonth,
-              assignments: mergedAssignments,
-              shiftLeaders: verification.shiftLeaders,
-              warnings: verification.warnings,
-              ...(jobGroup === 'nurse' ? { finalizedNurses: false } : { finalizedAssistants: false }),
-              dismissedWarnings: dismissedWarnings,
-              lockedRows: lockedRows
-            }
-          }
+            [`${currentYear}_${currentMonth}`]: newSchedule,
+          },
         };
 
         nextDb.deptData[deptId] = updatedDept;
         await saveDbState(nextDb);
-      } catch (err) {
-        console.error("Solver error:", err);
-      } finally {
-        setSolvingTarget(null);
-      }
-    }, 1500);
+      },
+    };
+
+    // UI adapter: bridges Facade to React state
+    const uiAdapter: ScheduleUIFeedback = {
+      setSolvingTarget: (target) => setSolvingTarget(target as JobGroup | null),
+      showConfirmation: (message) => confirm(message),
+      showError: (message) => console.error('Optimizer error:', message),
+    };
+
+    // Call Facade
+    const result = await runOptimizerFacade(
+      {
+        jobGroup,
+        year: currentYear,
+        month: currentMonth,
+        personnel,
+        requests,
+        settings,
+        holidays: customHolidays,
+        firstDayOfWeek: firstDayOfWeekIndex,
+        monthlyDutyHours,
+        currentSchedule: schedule,
+        lockState: {
+          finalizedNursesMonths,
+          finalizedAssistantsMonths,
+          lockedRows,
+        },
+        dismissedWarnings,
+      },
+      solveWithPriority,
+      verifyCoverageAndLeaders,
+      persistenceAdapter,
+      uiAdapter,
+      deptId,
+      { delayMs: 1500 }
+    );
+
+    if (!result.success && result.error) {
+      alert('خطا در اجرای بهینه‌ساز: ' + result.error);
+    }
   };
 
   const handleToggleLock = async (jobGroup: JobGroup) => {
@@ -2027,13 +2020,19 @@ export default function Home() {
       const p = personnel.find(per => per.id === pId);
       if (p) {
         const monthKey = `${currentYear}_${currentMonth}`;
-        const isLocked = p.jobGroup === 'nurse' ? finalizedNursesMonths.includes(monthKey) : finalizedAssistantsMonths.includes(monthKey);
-        if (isLocked) {
-          alert(`برنامه ${p.jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} قفل شده است و امکان ویرایش دستی وجود ندارد.`);
-          return;
-        }
-        if (lockedRows.includes(pId)) {
-          alert('این ردیف قفل شده است و نمی‌توان آن را ویرایش کرد.');
+        const finalizedMonthsForGroup = p.jobGroup === 'nurse' ? finalizedNursesMonths : finalizedAssistantsMonths;
+
+        // Use domain guard to check editability (pure function, no side effects)
+        const editCheck = canEditShiftCell({
+          jobGroup: p.jobGroup,
+          personnelId: pId,
+          finalizedMonths: finalizedMonthsForGroup,
+          lockedRows: lockedRows,
+          monthKey: monthKey,
+        });
+
+        if (!editCheck.allowed && editCheck.message) {
+          alert(editCheck.message);
           return;
         }
       }
@@ -2045,50 +2044,74 @@ export default function Home() {
     if (!schedule) return;
 
     try {
-      const updatedAssignments = { ...schedule.assignments };
-      if (!updatedAssignments[pId]) updatedAssignments[pId] = {};
-      updatedAssignments[pId][day] = shift;
-
-      const verification = verifyCoverageAndLeaders(currentYear, currentMonth, personnel, updatedAssignments, settings, customHolidays, firstDayOfWeekIndex, requests);
-
-      const nextDb = getFreshDbCopy();
-      if (!nextDb.deptData) nextDb.deptData = {};
-
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
+
+      // Create persistence adapter for the Facade
+      const persistenceAdapter: SchedulePersistence = {
+        saveSchedule: async (newSchedule) => {
+          const nextDb = getFreshDbCopy();
+          if (!nextDb.deptData) nextDb.deptData = {};
+
+          const oldDept = nextDb.deptData[deptId] || {
+            personnel: [],
+            requests: [],
+            settings_system: INITIAL_SETTINGS,
+            settings_credentials: { username: 'headnurse', password: '123456' },
+            holidays: {},
+            firstDayOfWeek: {},
+            schedules: {},
+          };
+
+          const updatedDept = {
+            ...oldDept,
+            schedules: {
+              ...oldDept.schedules,
+              [`${currentYear}_${currentMonth}`]: {
+                ...newSchedule,
+                dismissedWarnings: dismissedWarnings,
+                lockedRows: lockedRows,
+              },
+            },
+          };
+
+          nextDb.deptData[deptId] = updatedDept;
+          await saveDbState(nextDb, { showBusyOverlay: false });
+        },
       };
 
-      const updatedDept = {
-        ...oldDept,
-        schedules: {
-          ...oldDept.schedules,
-          [`${currentYear}_${currentMonth}`]: {
-            year: currentYear,
-            month: currentMonth,
-            assignments: updatedAssignments,
-            shiftLeaders: verification.shiftLeaders,
-            warnings: verification.warnings,
-            finalized: false,
-            dismissedWarnings: dismissedWarnings,
-            lockedRows: lockedRows
-          }
-        }
-      };
+      // Use the Facade (delegates pure logic to domain layer)
+      const result = await applyManualShiftChangeFacade(
+        {
+          personnelId: pId,
+          day,
+          shift,
+          year: currentYear,
+          month: currentMonth,
+          currentSchedule: schedule,
+          personnel,
+          requests,
+          settings,
+          holidays: customHolidays,
+          firstDayOfWeek: firstDayOfWeekIndex,
+          lockState: {
+            finalizedNursesMonths,
+            finalizedAssistantsMonths,
+            lockedRows,
+          },
+        },
+        verifyCoverageAndLeaders,
+        persistenceAdapter,
+        deptId
+      );
 
-      nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb, { showBusyOverlay: false });
-
-      setEditingCell(null);
+      if (!result.success) {
+        alert('خطا در تغییر دستی شیفت: ' + result.error);
+      } else {
+        setEditingCell(null);
+      }
     } catch (error) {
-      console.error("Error setting manual shift change:", error);
-      alert("خطا در تغییر دستی شیفت: " + (error instanceof Error ? error.message : String(error)));
+      console.error('Error setting manual shift change:', error);
+      alert('خطا در تغییر دستی شیفت: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -5347,33 +5370,8 @@ export default function Home() {
             </div>
           )}
 
-          {activeTab === 'profile' && (
-            <div className="mx-auto w-full max-w-3xl animate-fade-in print:hidden" dir="rtl">
-              <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-9">
-                <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-4">
-                    <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
-                      <User className="h-7 w-7" />
-                    </span>
-                    <div>
-                      <h3 className="text-lg font-black text-slate-900">{authenticatedUser.firstName} {authenticatedUser.lastName}</h3>
-                      <p className="mt-1 text-xs font-bold text-slate-500">کد ملی: <span className="font-mono" dir="ltr">{authenticatedUser.nationalId}</span></p>
-                      <p className="mt-1 text-[11px] font-bold text-slate-400">سطح دسترسی: {authenticatedUser.role === 'ADMIN' ? 'مدیر سامانه' : authenticatedUser.role === 'HEAD_NURSE' ? 'سرپرستار بخش' : 'پرسنل'}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => router.push('/change-password')}
-                    className="rounded-xl bg-indigo-600 px-5 py-3 text-xs font-black text-white shadow-md transition hover:bg-indigo-700"
-                  >
-                    تغییر امن رمز عبور
-                  </button>
-                </div>
-                <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-bold leading-7 text-amber-800">
-                  رمز عبور در پایگاه داده امن و به‌صورت Hash نگهداری می‌شود و در هیچ بخش از رابط کاربری نمایش داده نخواهد شد.
-                </div>
-              </div>
-            </div>
+          {activeTab === 'profile' && authenticatedUser && (
+            <ProfileSection user={authenticatedUser} />
           )}
 
           <div className="hidden print:block w-full bg-white text-slate-900 p-8">
@@ -5451,62 +5449,21 @@ export default function Home() {
         </div>
       </main>
 
-      {deleteTarget && (
-        <div
-          className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in"
-          id="delete-confirm-modal"
-          dir="rtl"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              if (deleteTarget.type === 'personnel') {
-                handleDeletePersonnel(deleteTarget.id);
-              } else {
-                handleDeleteRequest(deleteTarget.id);
-              }
-              setDeleteTarget(null);
+      <DeleteConfirmModal
+        isOpen={!!deleteTarget}
+        label={deleteTarget?.label || ''}
+        onConfirm={() => {
+          if (deleteTarget) {
+            if (deleteTarget.type === 'personnel') {
+              handleDeletePersonnel(deleteTarget.id);
+            } else {
+              handleDeleteRequest(deleteTarget.id);
             }
-          }}
-        >
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (deleteTarget.type === 'personnel') {
-                handleDeletePersonnel(deleteTarget.id);
-              } else {
-                handleDeleteRequest(deleteTarget.id);
-              }
-              setDeleteTarget(null);
-            }}
-            className="bg-white rounded-3xl p-6 max-w-sm w-full border border-slate-200 shadow-2xl space-y-4 text-center"
-          >
-            <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-2">
-              <Trash2 className="w-6 h-6" />
-            </div>
-            <h3 className="font-extrabold text-slate-900 text-base font-sans">تایید حذف نهایی</h3>
-            <p className="text-xs text-slate-500 leading-relaxed font-bold">
-              آیا از حذف <b className="text-rose-600">«{deleteTarget.label}»</b> اطمینان دارید؟ تمام فعالیت‌ها و شیفت‌های مرتبط نیز پاک خواهند شد. این عملیات غیرقابل بازگشت است.
-            </p>
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setDeleteTarget(null)}
-                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer"
-              >
-                انصراف
-              </button>
-              <button
-                type="submit"
-                autoFocus
-                className="w-full bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer shadow-md shadow-rose-200/20"
-                id="btn-confirm-delete-action"
-              >
-                تایید و حذف دائم
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+          }
+          setDeleteTarget(null);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
 
       {showDeleteDeptModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-[70] p-4 print:hidden animate-fade-in" id="delete-dept-modal" dir="rtl">
@@ -5691,423 +5648,46 @@ export default function Home() {
         </div>
       )}
 
-      {showAddPersonnelModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="personnel-modal">
-          <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative scrollbar-thin">
-            <button
-              onClick={() => setShowAddPersonnelModal(false)}
-              className="absolute top-4 left-4 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg p-1.5 cursor-pointer"
-            >
-              ✕
-            </button>
+      <AddPersonnelModal
+        isOpen={showAddPersonnelModal}
+        onClose={() => setShowAddPersonnelModal(false)}
+        editingPersonnel={editingPersonnel}
+        formFirstName={formFirstName}
+        formLastName={formLastName}
+        formPersonalCode={formPersonalCode}
+        formNationalId={formNationalId}
+        formJobGroup={formJobGroup}
+        formPosition={formPosition}
+        formEmploymentType={formEmploymentType}
+        formExperienceYears={formExperienceYears}
+        formActive={formActive}
+        formCanBeShiftLeader={formCanBeShiftLeader}
+        setFormFirstName={setFormFirstName}
+        setFormLastName={setFormLastName}
+        setFormPersonalCode={setFormPersonalCode}
+        setFormNationalId={setFormNationalId}
+        setFormJobGroup={setFormJobGroup}
+        setFormPosition={setFormPosition}
+        setFormEmploymentType={setFormEmploymentType}
+        setFormExperienceYears={setFormExperienceYears}
+        setFormActive={setFormActive}
+        setFormCanBeShiftLeader={setFormCanBeShiftLeader}
+        onSubmit={handleSavePersonnel}
+        parseNumberInput={parseNumberInput}
+      />
 
-            <h3 className="text-base font-black text-slate-800 mb-6 border-b pb-3 border-slate-100">
-              {editingPersonnel ? 'ویرایش اطلاعات پرسنلی' : 'تعریف پرسنل جدید'}
-            </h3>
-
-            <form onSubmit={handleSavePersonnel} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">نام</label>
-                  <input
-                    type="text"
-                    value={formFirstName}
-                    onChange={(e) => setFormFirstName(e.target.value)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                    id="input-form-fname"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">نام خانوادگی</label>
-                  <input
-                    type="text"
-                    value={formLastName}
-                    onChange={(e) => setFormLastName(e.target.value)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                    id="input-form-lname"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">کد پرسنلی (اختیاری)</label>
-                <input
-                  type="text"
-                  value={formPersonalCode}
-                  onChange={(e) => setFormPersonalCode(e.target.value)}
-                  className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono"
-                  id="input-form-code"
-                  placeholder="در صورت وجود وارد کنید"
-                />
-              </div>
-
-              {!editingPersonnel && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی برای ورود به سامانه</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={10}
-                    value={formNationalId}
-                    onChange={(e) => setFormNationalId(e.target.value)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono text-center"
-                    id="input-form-national-id"
-                    placeholder="رمز اولیه حساب: ۱۲۳۴"
-                  />
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">گروه شغلی</label>
-                  <select
-                    value={formJobGroup}
-                    onChange={(e) => {
-                      const mode = e.target.value as 'nurse' | 'assistant';
-                      setFormJobGroup(mode);
-                      if (mode === 'assistant') {
-                        setFormPosition('none');
-                        setFormCanBeShiftLeader(false);
-                      } else {
-                        setFormPosition('general');
-                        setFormCanBeShiftLeader(true);
-                      }
-                    }}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                    id="select-form-job"
-                  >
-                    <option value="nurse">پرستار</option>
-                    <option value="assistant">کمک بهیار</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">سمت پرستاری</label>
-                  <select
-                    value={formPosition}
-                    disabled={formJobGroup === 'assistant'}
-                    onChange={(e) => setFormPosition(e.target.value as any)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
-                    id="select-form-position"
-                  >
-                    <option value="none">بدون سمت</option>
-                    <option value="supervisor">سرپرستار</option>
-                    <option value="staff">استاف</option>
-                    <option value="general">کارشناس عمومی</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">نوع استخدام</label>
-                  <select
-                    value={formEmploymentType}
-                    onChange={(e) => setFormEmploymentType(e.target.value as any)}
-                    className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                    id="select-form-emptype"
-                  >
-                    <option value="official">رسمی</option>
-                    <option value="contract">قراردادی</option>
-                    <option value="conscript">طرح / وظیفه</option>
-                    <option value="overtime">اضافه‌کاری</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">سابقه کار (سال)</label>
-                  <input
-                    type="number"
-                    value={formExperienceYears}
-                    onChange={(e) => setFormExperienceYears(parseNumberInput(e.target.value))}
-                    className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                    id="input-form-years"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 flex flex-col gap-2 border-t border-slate-100">
-                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={formActive}
-                    onChange={(e) => setFormActive(e.target.checked)}
-                    className="rounded border-slate-300 accent-indigo-600 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  کاربر فعال باشد (حضور در برنامه‌ریزی)
-                </label>
-
-                {formJobGroup !== 'assistant' && (
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={formCanBeShiftLeader}
-                      disabled={formPosition === 'supervisor'}
-                      onChange={(e) => setFormCanBeShiftLeader(e.target.checked)}
-                      className="rounded border-slate-300 accent-indigo-600 text-indigo-600"
-                    />
-                    قابلیت سرشیفت شدن (ویژه استاف و کارشناس عمومی)
-                  </label>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg mt-4 cursor-pointer"
-                id="btn-save-form-personnel"
-              >
-                ثبت اطلاعات و به‌روزرسانی بانک داده
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {showAlertCenter && role === 'headnurse' && activeTab === 'schedule' && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-[60] p-4 print:hidden animate-fade-in" id="alert-center-modal" dir="rtl">
-          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="px-5 py-4 border-b border-slate-200 bg-amber-50/70 flex items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-5 h-5 text-amber-600" />
-                  <h3 className="text-base font-black text-slate-800">پنجره هشدارهای باقی‌مانده</h3>
-                </div>
-                <p className="text-xs font-bold text-slate-600 mt-1">
-                  روی هر بخش کلیک کنید تا هشدارها باز/بسته شوند.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="bg-amber-100 text-amber-800 text-xs font-black px-2.5 py-1 rounded-full">
-                  {getVisibleWarnings().length} هشدار فعال
-                </span>
-                <button
-                  onClick={() => setShowAlertCenter(false)}
-                  className="text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl p-2 bg-white transition-colors cursor-pointer"
-                  title="بستن پنجره هشدارها"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 bg-slate-50 space-y-4">
-              {allAlertsForDialog.filter(a => a.warnings.length > 0).length === 0 ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-emerald-800 text-sm font-black text-center">
-                  ✨ هشدار فعالی برای این ماه باقی نمانده است.
-                </div>
-              ) : (
-                <>
-                  {/* بخش هشدارهای عمومی - کرکره‌ای */}
-                  {(() => {
-                    const generalAlerts = allAlertsForDialog.filter(a => a.groupType === 'general' && a.warnings.length > 0);
-                    if (generalAlerts.length === 0) return null;
-                    const activeCount = generalAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0);
-                    return (
-                      <div className="space-y-3">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedAlertSections(prev => ({...prev, general: !prev.general}))}
-                          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl cursor-pointer transition-all"
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className="w-3 h-3 rounded-full bg-indigo-500"></div>
-                            <h4 className="text-sm font-black text-indigo-800">هشدارهای عمومی</h4>
-                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
-                              {activeCount} مورد
-                            </span>
-                          </div>
-                          <ChevronDown className={`w-5 h-5 text-indigo-600 transition-transform ${expandedAlertSections.general ? 'rotate-180' : ''}`} />
-                        </button>
-                        {expandedAlertSections.general && generalAlerts.map((alert) => {
-                          const allWarnings = alert.warnings;
-                          const severityClasses =
-                            alert.severity === 'high'
-                              ? 'border-red-200 bg-red-50/40'
-                              : alert.severity === 'medium'
-                                ? 'border-amber-200 bg-amber-50/40'
-                                : 'border-blue-200 bg-blue-50/40';
-
-                          return (
-                            <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div className="flex items-center gap-3">
-                                  <span className={`text-sm font-black ${
-                                    alert.severity === 'high'
-                                      ? 'text-red-600'
-                                      : alert.severity === 'medium'
-                                        ? 'text-amber-600'
-                                        : 'text-blue-600'
-                                  }`}>
-                                    {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
-                                  </span>
-                                  <div>
-                                    <div className="font-black text-slate-800 text-sm">{alert.personnelName}</div>
-                                    <div className="text-[11px] font-bold text-slate-500">
-                                      {allWarnings.filter(w => !dismissedAlertWarnings[w]).length} هشدار فعال
-                                      {' • هشدارهای بدون پرسنل مشخص'}
-                                    </div>
-                                  </div>
-                                </div>
-                                <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-indigo-100 border border-indigo-200 text-indigo-700">
-                                  عمومی
-                                </span>
-                              </div>
-
-                              <div className="mt-4 space-y-2">
-                                {allWarnings.map((warn, idx) => {
-                                  const day = extractWarningDay(warn);
-                                  const isDismissed = !!dismissedAlertWarnings[warn];
-
-                                  return (
-                                    <div key={`${alert.personnelId}-${idx}`} className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'}`}>
-                                      <div className="flex items-start gap-2 flex-1">
-                                        <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
-                                        <div className="space-y-1">
-                                          <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{warn}</div>
-                                          {day !== null && (
-                                            <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                                              روز {day}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-2 shrink-0">
-                                        <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
-                                          فاقد سلول مستقیم
-                                        </span>
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); handleDismissAlert(warn); }}
-                                          className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${isDismissed ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'}`}
-                                          title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
-                                        >
-                                          {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-
-                  {/* بخش هشدارهای پرسنلی - کرکره‌ای */}
-                  {(() => {
-                    const personnelAlerts = allAlertsForDialog.filter(a => a.groupType !== 'general' && a.warnings.length > 0);
-                    if (personnelAlerts.length === 0) return null;
-                    const activeCount = personnelAlerts.reduce((acc, a) => acc + a.warnings.filter(w => !dismissedAlertWarnings[w]).length, 0);
-                    return (
-                      <div className="space-y-3">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedAlertSections(prev => ({...prev, personnel: !prev.personnel}))}
-                          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl cursor-pointer transition-all"
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-                            <h4 className="text-sm font-black text-amber-800">هشدارهای پرسنلی</h4>
-                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                              {activeCount} مورد
-                            </span>
-                          </div>
-                          <ChevronDown className={`w-5 h-5 text-amber-600 transition-transform ${expandedAlertSections.personnel ? 'rotate-180' : ''}`} />
-                        </button>
-                        {expandedAlertSections.personnel && personnelAlerts.map((alert) => {
-                          const allWarnings = alert.warnings;
-                          const severityClasses =
-                            alert.severity === 'high'
-                              ? 'border-red-200 bg-red-50/40'
-                              : alert.severity === 'medium'
-                                ? 'border-amber-200 bg-amber-50/40'
-                                : 'border-blue-200 bg-blue-50/40';
-
-                          return (
-                            <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div className="flex items-center gap-3">
-                                  <span className={`text-sm font-black ${
-                                    alert.severity === 'high'
-                                      ? 'text-red-600'
-                                      : alert.severity === 'medium'
-                                        ? 'text-amber-600'
-                                        : 'text-blue-600'
-                                  }`}>
-                                    {alert.severity === 'high' ? '🔴' : alert.severity === 'medium' ? '🟡' : '🔵'}
-                                  </span>
-                                  <div>
-                                    <div className="font-black text-slate-800 text-sm">{alert.personnelName}</div>
-                                    <div className="text-[11px] font-bold text-slate-500">
-                                      {allWarnings.filter(w => !dismissedAlertWarnings[w]).length} هشدار فعال
-                                    </div>
-                                  </div>
-                                </div>
-                                <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-700">
-                                  پرسنلی
-                                </span>
-                              </div>
-
-                              <div className="mt-4 space-y-2">
-                                {allWarnings.map((warn, idx) => {
-                                  const day = extractWarningDay(warn);
-                                  const canNavigateToCell = day !== null;
-                                  const isDismissed = !!dismissedAlertWarnings[warn];
-
-                                  return (
-                                    <div key={`${alert.personnelId}-${idx}`} className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'}`}>
-                                      <div className="flex items-start gap-2 flex-1">
-                                        <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
-                                        <div className="space-y-1">
-                                          <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{warn}</div>
-                                          {day !== null && (
-                                            <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                                              روز {day}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      <div className="flex items-center gap-2 shrink-0">
-                                        {canNavigateToCell && day !== null && !isDismissed ? (
-                                          <button
-                                            onClick={() => handleAlertClick(alert.personnelId, day)}
-                                            className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
-                                          >
-                                            رفتن به سلول
-                                          </button>
-                                        ) : !isDismissed ? (
-                                          <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
-                                            فاقد سلول مستقیم
-                                          </span>
-                                        ) : null}
-
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); handleDismissAlert(warn); }}
-                                          className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${isDismissed ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'}`}
-                                          title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
-                                        >
-                                          {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <AlertCenter
+        isOpen={showAlertCenter && role === 'headnurse' && activeTab === 'schedule'}
+        onClose={() => setShowAlertCenter(false)}
+        allAlerts={allAlertsForDialog}
+        visibleWarningsCount={getVisibleWarnings().length}
+        dismissedAlertWarnings={dismissedAlertWarnings}
+        expandedSections={expandedAlertSections}
+        onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
+        onDismissAlert={handleDismissAlert}
+        onAlertClick={handleAlertClick}
+        extractWarningDay={extractWarningDay}
+      />
 
       {showAddRequestModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="request-modal">
