@@ -163,10 +163,10 @@ export function aggregateWarnings(
 export function solveWithPriority(
   year: number,
   month: number,
-  personnelList: Personnel[],
-  requests: ShiftRequest[],
+  personnelList: readonly Personnel[],
+  requests: readonly ShiftRequest[],
   settings: SystemSettings,
-  customHolidays: { [day: number]: string } = {},
+  customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): OptimizationResult {
@@ -343,10 +343,10 @@ export function solveWithPriority(
 export function solveNursingSchedule(
   year: number,
   month: number,
-  personnelList: Personnel[],
-  requests: ShiftRequest[],
+  personnelList: readonly Personnel[],
+  requests: readonly ShiftRequest[],
   settings: SystemSettings,
-  customHolidays: { [day: number]: string } = {},
+  customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): MonthlySchedule {
