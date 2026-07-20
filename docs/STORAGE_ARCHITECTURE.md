@@ -15,7 +15,7 @@ nursingsmart/{development|staging|production}/v1/
   departments/{departmentId}/schedules/{yyyy_m}.json
 ```
 
-Department removal only removes it from the conditional index update. Its documents remain orphaned intentionally, making accidental deletion recoverable through lifecycle/versioning policy.
+Department removal is only possible through the re-authenticated hard-delete endpoint (`DELETE /api/head-nurse/department`): it unpublishes the department from the conditional index update, permanently deletes every document under `departments/{departmentId}/` (personnel, requests, settings, holidays, first-day-of-week and all monthly schedules), and wipes the related database users and sessions. There is no unauthenticated or soft-delete path; bucket lifecycle/versioning policy remains the recovery net.
 
 ## Required environment variables
 

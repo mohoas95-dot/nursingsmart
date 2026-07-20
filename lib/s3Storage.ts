@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -326,6 +327,79 @@ export async function createDepartmentStorage(input: {
 export async function readDepartmentSummaries() {
   const index = await readDepartmentIndexOptional();
   return (index?.data || []).map(department => ({ id: department.id, name: department.name }));
+}
+
+export async function departmentExistsInIndex(departmentId: string): Promise<boolean> {
+  const index = await readDepartmentIndexOptional();
+  return (index?.data || []).some(department => department.id === departmentId);
+}
+
+async function listDepartmentObjectKeys(departmentId: string): Promise<string[]> {
+  beforeStorageCall();
+  const { client, bucket, prefix } = getS3Client();
+  const fullPrefix = `${prefix}/${departmentPrefix(departmentId)}/`;
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+
+  try {
+    do {
+      const response = await client.send(new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: fullPrefix,
+        ContinuationToken: continuationToken,
+      }));
+      for (const object of response.Contents || []) {
+        if (object.Key) keys.push(object.Key);
+      }
+      continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+    } while (continuationToken);
+    recordStorageSuccess();
+    return keys;
+  } catch (error) {
+    recordStorageFailure();
+    throw new StorageUnavailableError(`Failed to list objects for ${departmentId}`, { cause: error });
+  }
+}
+
+async function deleteObjectHard(key: string): Promise<void> {
+  beforeStorageCall();
+  const { client, bucket } = getS3Client();
+  try {
+    // S3 DeleteObject is idempotent: deleting a missing key succeeds silently.
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    recordStorageSuccess();
+  } catch (error) {
+    recordStorageFailure();
+    throw new StorageUnavailableError(`Failed to delete ${key}`, { cause: error });
+  }
+}
+
+// Hard delete: removes the department from the conditional index update and then
+// permanently purges every stored document (personnel, requests, settings,
+// holidays, first-day-of-week and all monthly schedules). Only callable from the
+// re-authenticated department management API, never from the generic storage API.
+export async function deleteDepartmentStorage(departmentId: string): Promise<void> {
+  // Unpublish the department first so no reader/writer can target it mid-purge.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await readDepartmentIndexOptional();
+    const departments = current?.data || [];
+    if (!departments.some(department => department.id === departmentId)) break;
+    try {
+      await writeResource(
+        { type: 'departments' },
+        departments.filter(department => department.id !== departmentId),
+        current?.etag || null,
+      );
+      break;
+    } catch (error) {
+      if (!(error instanceof StorageConflictError) || attempt === 4) throw error;
+    }
+  }
+
+  const keys = await listDepartmentObjectKeys(departmentId);
+  for (const key of keys) {
+    await deleteObjectHard(key);
+  }
 }
 
 export async function readDatabaseState(options?: { departmentIds?: string[] }): Promise<DatabaseReadResult> {
