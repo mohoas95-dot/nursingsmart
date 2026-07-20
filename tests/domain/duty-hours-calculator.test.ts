@@ -150,7 +150,7 @@ test('calculateMonthlyDutyHours: 29-day month (Esfand non-leap)', () => {
 
 test('calculateMonthlyDutyHours: contract is always official + 14', () => {
   // Spot-check across different configurations
-  const configs = [
+  const configs: Array<{ totalDays: number; holidays: Record<number, string>; firstDay: number }> = [
     { totalDays: 31, holidays: {}, firstDay: 0 },
     { totalDays: 30, holidays: { 5: 'test' }, firstDay: 3 },
     { totalDays: 29, holidays: { 1: 'a', 2: 'b', 3: 'c' }, firstDay: 6 },

@@ -4490,7 +4490,7 @@ export default function Home() {
                     لاگ‌ها و اتفاقات (تاریخچه قفل‌ها و مهلت درخواست)
                   </h4>
                   <ul className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                    {schedule.changeLogs.slice().reverse().map((log, idx) => (
+                    {schedule.changeLogs.slice().reverse().map((log: string, idx: number) => (
                       <li key={idx} className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 flex items-center gap-2">
                         <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0"></div>
                         {log}

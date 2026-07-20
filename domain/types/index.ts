@@ -43,6 +43,41 @@ export interface ShiftEditCheckResult {
   message?: string;
 }
 
+export interface AutoSubstitutionRecord {
+  personnelId: string;
+  day: number;
+  originalShift: ShiftType;
+  newShift: ShiftType;
+  reason: string;
+  timestamp: string;
+}
+
+export interface MonthlySchedule {
+  year: number;
+  month: number;
+  assignments: {
+    [personnelId: string]: {
+      [day: number]: ShiftType;
+    };
+  };
+  shiftLeaders: {
+    [day: number]: {
+      morning?: string;
+      afternoon?: string;
+      night?: string;
+    };
+  };
+  warnings: string[];
+  finalized?: boolean;
+  finalizedNurses?: boolean;
+  finalizedAssistants?: boolean;
+  requestsLocked?: boolean;
+  dismissedWarnings?: string[];
+  changeLogs?: string[];
+  lockedRows?: string[];
+  autoSubstitutions?: AutoSubstitutionRecord[];
+}
+
 // ============================================================================
 // Request Types
 // ============================================================================
