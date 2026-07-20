@@ -98,6 +98,14 @@ interface Department {
   password?: string;
 }
 
+// خطای تداخل قفل خوش‌بینانه (ETag) — برای شناسایی داخلی و بازیابی خودکار در صف ذخیره‌سازی.
+class ConcurrencyConflictError extends Error {
+  constructor(resource: string) {
+    super(`Optimistic concurrency conflict for ${resource}`);
+    this.name = 'ConcurrencyConflictError';
+  }
+}
+
 function BusyOverlay({ subtitle }: { subtitle: string }) {
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/35 backdrop-blur-md p-4 cursor-progress">
@@ -241,7 +249,10 @@ export default function Home() {
       if (previous.dutyHours.official === official && previous.dutyHours.contract === contract && previous.autoCalculateDutyHours) return previous;
       return { ...previous, autoCalculateDutyHours: true, dutyHours: { ...previous.dutyHours, official, contract } };
     });
-  }, [officialCalendarState.calendar]);
+    // وابستگی به fullDbState تعمدی است: پس از اتمام بارگذاری/ذخیره وضعیت از S3، مقادیر موظفی
+    // قدیمیِ ذخیره‌شده سراسری بخش نباید ساعت محاسبه‌شده ماه جاری را بازنویسی کنند (رفع برگشت
+    // نمایش ساعت موظفی به ماه پیش‌فرض پس از چند ثانیه از تعویض ماه).
+  }, [officialCalendarState.calendar, fullDbState]);
 
   // State for monthly approved duty hours
   const [monthlyDutyHours, setMonthlyDutyHours] = useState<any>(null);
@@ -595,22 +606,11 @@ export default function Home() {
     return mutations;
   };
 
-  const saveDbState = async (
-    updatedDb: AppDatabaseState,
-    options: { showBusyOverlay?: boolean } = {}
-  ) => {
-    const { showBusyOverlay = true } = options;
-    const baseDb = optimisticDbRef.current;
-    if (!baseDb || storageWriteBlockedRef.current || storageLoadCountRef.current > 0) {
-      throw new Error('ذخیره‌سازی هنگام بارگذاری یا پس از خطای هم‌زمانی متوقف است؛ صفحه را تازه‌سازی کنید.');
-    }
-
-    const mutations = buildStorageMutations(baseDb, updatedDb);
-    optimisticDbRef.current = updatedDb;
-    setFullDbState(updatedDb);
-
+  // با جایگزینی کامل وضعیت دیتابیس (بارگذاری، ذخیره یا بازیابی پس از تداخل)، تمام
+  // stateهای محلی مشتق‌شده از آن نیز همگام می‌شوند تا رابط کاربری با سرور سازگار بماند.
+  const syncLocalStateFromDb = (nextDb: AppDatabaseState) => {
     const deptId = selectedDepartmentId || 'sepehr';
-    const deptInfo = updatedDb.deptData[deptId] || {
+    const deptInfo = nextDb.deptData[deptId] || {
       personnel: [],
       requests: [],
       settings_system: INITIAL_SETTINGS,
@@ -620,7 +620,7 @@ export default function Home() {
       schedules: {},
     };
 
-    setDepartments(updatedDb.departments || []);
+    setDepartments(nextDb.departments || []);
     setPersonnel(deptInfo.personnel || []);
     setRequests(deptInfo.requests || []);
     setSettings(deptInfo.settings_system || INITIAL_SETTINGS);
@@ -685,35 +685,150 @@ export default function Home() {
         console.error(error);
       }
     }
+  };
+
+  // Fetch the latest committed snapshot (state + ETags) for concurrency recovery.
+  const fetchLatestSnapshot = async (): Promise<{ state: AppDatabaseState; versions: Record<string, string> }> => {
+    const response = await fetch('/api/storage', { cache: 'no-store' });
+    const result = await response.json();
+    if (!response.ok || !result.success || !result.state || !result.versions) {
+      throw new Error(result.error || 'خواندن امن دیتابیس برای همگام‌سازی مجدد ناموفق بود.');
+    }
+    return { state: result.state as AppDatabaseState, versions: result.versions as Record<string, string> };
+  };
+
+  const readCommittedResourceValue = (snapshot: AppDatabaseState, resource: StorageResource): unknown => {
+    if (resource.type === 'departments') return snapshot.departments;
+    const dept = snapshot.deptData[resource.departmentId];
+    if (!dept) return undefined;
+    switch (resource.type) {
+      case 'personnel': return dept.personnel;
+      case 'requests': return dept.requests;
+      case 'settings': return {
+        activeYear: dept.activeYear,
+        settings_system: dept.settings_system,
+        settings_credentials: dept.settings_credentials,
+      };
+      case 'holidays': return dept.holidays;
+      case 'firstDayOfWeek': return dept.firstDayOfWeek;
+      case 'schedule': return dept.schedules?.[resource.monthKey];
+    }
+  };
+
+  // Merge a not-yet-written user change onto the freshly-read server snapshot.
+  const applyMutationToSnapshot = (snapshot: AppDatabaseState, mutation: StorageMutation): AppDatabaseState => {
+    const next: AppDatabaseState = JSON.parse(JSON.stringify(snapshot));
+    const resource = mutation.resource;
+    if (resource.type === 'departments') {
+      next.departments = mutation.data as AppDatabaseState['departments'];
+      return next;
+    }
+    const dept = next.deptData[resource.departmentId];
+    if (!dept) throw new Error(`داده بخش ${resource.departmentId} وجود ندارد.`);
+    switch (resource.type) {
+      case 'personnel': dept.personnel = mutation.data as typeof dept.personnel; break;
+      case 'requests': dept.requests = mutation.data as typeof dept.requests; break;
+      case 'settings': {
+        const value = mutation.data as { activeYear?: number; settings_system: typeof dept.settings_system; settings_credentials: typeof dept.settings_credentials };
+        dept.activeYear = value.activeYear;
+        dept.settings_system = value.settings_system;
+        dept.settings_credentials = value.settings_credentials;
+        break;
+      }
+      case 'holidays': dept.holidays = mutation.data as typeof dept.holidays; break;
+      case 'firstDayOfWeek': dept.firstDayOfWeek = mutation.data as typeof dept.firstDayOfWeek; break;
+      case 'schedule': dept.schedules = { ...dept.schedules, [resource.monthKey]: mutation.data as typeof dept.schedules[string] }; break;
+    }
+    return next;
+  };
+
+  const saveDbState = async (
+    updatedDb: AppDatabaseState,
+    options: { showBusyOverlay?: boolean } = {}
+  ) => {
+    const { showBusyOverlay = true } = options;
+    const baseDb = optimisticDbRef.current;
+    if (!baseDb || storageWriteBlockedRef.current || storageLoadCountRef.current > 0) {
+      throw new Error('ذخیره‌سازی هنگام بارگذاری یا پس از خطای هم‌زمانی متوقف است؛ صفحه را تازه‌سازی کنید.');
+    }
+
+    const mutations = buildStorageMutations(baseDb, updatedDb);
+    optimisticDbRef.current = updatedDb;
+    setFullDbState(updatedDb);
+    syncLocalStateFromDb(updatedDb);
+
+    const writeMutationOnce = async (mutation: StorageMutation) => {
+      const versionId = versionIdForResource(mutation.resource);
+      const expectedETag = storageVersionsRef.current[versionId];
+      if (mutation.existed && !expectedETag) {
+        throw new Error(`ETag منبع ${versionId} موجود نیست؛ ذخیره متوقف شد.`);
+      }
+
+      const response = await fetch('/api/storage', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(mutation.existed
+            ? { 'If-Match': expectedETag }
+            : { 'If-None-Match': '*' }),
+        },
+        body: JSON.stringify({ resource: mutation.resource, data: mutation.data }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success || !result.etag) {
+        if (result.code === 'ETAG_CONFLICT') throw new ConcurrencyConflictError(versionId);
+        throw new Error(result.error || `خطای ذخیره منبع ${versionId}`);
+      }
+      storageVersionsRef.current[versionId] = result.etag;
+    };
 
     const execute = async () => {
       setPendingDbSaveCount(count => count + 1);
       if (showBusyOverlay) setBlockingDbSaveCount(count => count + 1);
       try {
-        for (const mutation of mutations) {
-          const versionId = versionIdForResource(mutation.resource);
-          const expectedETag = storageVersionsRef.current[versionId];
-          if (mutation.existed && !expectedETag) {
-            throw new Error(`ETag منبع ${versionId} موجود نیست؛ ذخیره متوقف شد.`);
+        let pendingMutations = mutations;
+        // خطای تداخل نباید یک ذخیره معتبر را زمین‌گیر کند: در تداخل، جدیدترین وضعیت سرور
+        // خوانده می‌شود، تغییر هدف کاربر روی آن مرج و یک‌بار دیگر ذخیره می‌شود؛ پس از آن
+        // دیگر نیازی به تازه‌سازی دستی صفحه نیست. اگر تداخل تکرار شود، رفتار fail-closed باقی می‌ماند.
+        for (let pass = 0; pass < 2 && pendingMutations.length > 0; pass += 1) {
+          const succeeded: StorageMutation[] = [];
+          let conflicted = false;
+          for (const mutation of pendingMutations) {
+            try {
+              await writeMutationOnce(mutation);
+              succeeded.push(mutation);
+            } catch (error) {
+              if (!(error instanceof ConcurrencyConflictError)) throw error;
+              conflicted = true;
+              break;
+            }
+          }
+          if (!conflicted) {
+            pendingMutations = [];
+            break;
+          }
+          if (pass === 1) {
+            throw new Error('اطلاعات توسط کاربر دیگری تغییر کرده است؛ برای جلوگیری از بازنویسی، صفحه را تازه‌سازی کنید.');
           }
 
-          const response = await fetch('/api/storage', {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(mutation.existed
-                ? { 'If-Match': expectedETag }
-                : { 'If-None-Match': '*' }),
-            },
-            body: JSON.stringify({ resource: mutation.resource, data: mutation.data }),
-          });
-          const result = await response.json();
-          if (!response.ok || !result.success || !result.etag) {
-            throw new Error(result.code === 'ETAG_CONFLICT'
-              ? 'اطلاعات توسط کاربر دیگری تغییر کرده است؛ برای جلوگیری از بازنویسی، صفحه را تازه‌سازی کنید.'
-              : result.error || `خطای ذخیره منبع ${versionId}`);
-          }
-          storageVersionsRef.current[versionId] = result.etag;
+          const snapshot = await fetchLatestSnapshot();
+          storageVersionsRef.current = snapshot.versions;
+          const remaining = pendingMutations.filter(m => !succeeded.includes(m));
+          // تغییراتی که سرور هم‌اکنون با مقدار هدف ذخیره شده‌اند، دیگر نیاز به نوشتن ندارند.
+          const converged = remaining.filter(m =>
+            sameDocument(readCommittedResourceValue(snapshot.state, m.resource), m.data));
+          let merged = snapshot.state;
+          for (const mutation of remaining) merged = applyMutationToSnapshot(merged, mutation);
+          optimisticDbRef.current = merged;
+          setFullDbState(merged);
+          syncLocalStateFromDb(merged);
+          // وضعیت وجود سند دوباره محاسبه می‌شود تا شرط If-Match/If-None-Match درست انتخاب شود.
+          pendingMutations = remaining
+            .filter(m => !converged.includes(m))
+            .map(m => ({
+              ...m,
+              existed: readCommittedResourceValue(snapshot.state, m.resource) !== undefined,
+            }));
         }
       } catch (error) {
         // A batch can span multiple objects and S3 has no multi-object transaction.
