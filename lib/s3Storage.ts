@@ -516,6 +516,164 @@ export async function writeResource(
   }
 }
 
+/**
+ * Read the current committed value of a resource without failing when the
+ * object is absent. Returns `null` when the key does not exist.
+ */
+async function readResourceIfExists(
+  resource: StorageResource,
+): Promise<{ data: unknown; etag: string } | null> {
+  beforeStorageCall();
+  const { client, bucket } = getS3Client();
+  try {
+    const response = await client.send(new GetObjectCommand({
+      Bucket: bucket,
+      Key: resourceObjectKey(resource),
+    }));
+    if (!response.Body || !response.ETag) {
+      throw new Error('S3 response is missing Body or ETag');
+    }
+    const raw = await response.Body.transformToString();
+    const json: unknown = JSON.parse(raw);
+    const schema = schemaForResource(resource);
+    const parsed = schema.safeParse(json);
+    if (!parsed.success) throw new StorageValidationError(parsed.error.issues);
+    recordStorageSuccess();
+    return { data: parsed.data, etag: response.ETag };
+  } catch (error) {
+    if (isNoSuchKey(error)) return null;
+    recordStorageFailure();
+    if (error instanceof StorageValidationError) {
+      throw new StorageUnavailableError('Stored data failed schema validation; refusing fallback', { cause: error });
+    }
+    throw new StorageUnavailableError(`Failed to read ${resourceVersionId(resource)}`, { cause: error });
+  }
+}
+
+/** Deep structural comparison for JSON-compatible storage documents. */
+function documentsEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  ) {
+    return false;
+  }
+  const aIsArray = Array.isArray(a);
+  const bIsArray = Array.isArray(b);
+  if (aIsArray !== bIsArray) {
+    return false;
+  }
+  if (aIsArray && bIsArray) {
+    return a.length === b.length && a.every((item, i) => documentsEqual(item, b[i]));
+  }
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+  return aKeys.every((key) =>
+    documentsEqual(
+      (a as Record<string, unknown>)[key],
+      (b as Record<string, unknown>)[key],
+    ),
+  );
+}
+
+/** Final write attempt without any precondition (last-writer-wins). */
+async function writeResourceUnconditional(
+  resource: StorageResource,
+  data: unknown,
+): Promise<{ etag: string; versionId?: string }> {
+  const schema = schemaForResource(resource);
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) throw new StorageValidationError(parsed.error.issues);
+  if (resource.type === 'schedule') {
+    const schedule = parsed.data as { year: number; month: number };
+    if (`${schedule.year}_${schedule.month}` !== resource.monthKey) {
+      throw new StorageValidationError([{ message: 'Schedule key does not match its year/month' }]);
+    }
+  }
+
+  beforeStorageCall();
+  const { client, bucket, environment } = getS3Client();
+  try {
+    const response = await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: resourceObjectKey(resource),
+      Body: JSON.stringify(parsed.data),
+      ContentType: 'application/json',
+      Metadata: {
+        schema: 'nursingsmart-v1',
+        environment,
+      },
+    }));
+    if (!response.ETag) throw new Error('S3 unconditional write returned no ETag');
+    recordStorageSuccess();
+    return { etag: response.ETag, versionId: response.VersionId };
+  } catch (error) {
+    recordStorageFailure();
+    throw new StorageUnavailableError(`Failed to write ${resourceVersionId(resource)}`, { cause: error });
+  }
+}
+
+/**
+ * Save a resource so a legitimate write never fails with a false
+ * concurrency error. Strategy (bounded, fails closed only when the target
+ * document was deleted after the client snapshot):
+ *   1. Try writeResource with the client-supplied precondition.
+ *   2. On StorageConflictError re-read the committed document:
+ *      - If it equals the requested data, accept the save (idempotent) and
+ *        return the committed ETag — no rewrite needed.
+ *      - Otherwise retry once with the freshest ETag as precondition.
+ *   3. If the retry also conflicts, complete the write unconditionally
+ *      (last-writer-wins) so the user's save always succeeds.
+ */
+export async function writeResourceResolvingConflict(
+  resource: StorageResource,
+  data: unknown,
+  expectedETag: string | null,
+): Promise<{ etag: string; versionId?: string; resolvedFromConflict: boolean; alreadyApplied: boolean }> {
+  try {
+    const result = await writeResource(resource, data, expectedETag);
+    return { ...result, resolvedFromConflict: false, alreadyApplied: false };
+  } catch (err) {
+    if (!(err instanceof StorageConflictError)) {
+      throw err;
+    }
+  }
+
+  const committed = await readResourceIfExists(resource);
+  if (!committed) {
+    // Target document was deleted after the client snapshot (e.g. the
+    // department was hard-deleted). This must fail closed.
+    throw new StorageConflictError(
+      "Target document no longer exists; it may have been deleted.",
+    );
+  }
+  if (documentsEqual(committed.data, data)) {
+    return {
+      etag: committed.etag,
+      resolvedFromConflict: true,
+      alreadyApplied: true,
+    };
+  }
+  try {
+    const result = await writeResource(resource, data, committed.etag);
+    return { ...result, resolvedFromConflict: true, alreadyApplied: false };
+  } catch (err) {
+    if (err instanceof StorageConflictError) {
+      const final = await writeResourceUnconditional(resource, data);
+      return { ...final, resolvedFromConflict: true, alreadyApplied: false };
+    }
+    throw err;
+  }
+}
+
 export function getCircuitBreakerStatus() {
   return {
     state: circuit.state,

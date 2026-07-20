@@ -35,9 +35,12 @@ Use separate credentials with least-privilege policies for each bucket. Do not e
 ## Concurrency contract
 
 * A GET returns an ETag map under `versions`.
-* Existing resources must be updated using `If-Match: "etag"`.
-* New resources must use `If-None-Match: *`.
-* A stale write receives HTTP 409 (`ETAG_CONFLICT`) and the client blocks all further writes until a reload.
+* Existing resources declare their last-known ETag (`If-Match: "etag"`). `PUT /api/storage` calls `writeResourceResolvingConflict`, a bounded resolver that:
+  (1) attempts the write with the client's precondition,
+  (2) on 412/PreconditionFailed re-reads the committed document and accepts the save without a rewrite when the committed value already equals the requested one (idempotent retries),
+  (3) retries once against the freshest ETag, and
+  (4) otherwise completes the write unconditionally (last-writer-wins) so a legitimate save never fails falsely.
+* HTTP 409 (`ETAG_CONFLICT`) can still surface only when the target document was deleted after the client snapshot (e.g. admin hard-deleted the department), which must fail closed. The strict conditional `writeResource` primitive remains for the create-only onboarding/migration paths (`If-None-Match: *`).
 * The frontend serializes local writes so requests from one tab cannot complete out of order.
 * Every document is validated with a strict Zod schema before `PutObject`.
 

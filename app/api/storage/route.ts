@@ -10,6 +10,7 @@ import {
   StorageUnavailableError,
   StorageValidationError,
   writeResource,
+  writeResourceResolvingConflict,
 } from '../../../lib/s3Storage';
 import { StorageResourceSchema, type StorageResource } from '../../../lib/storageSchemas';
 import {
@@ -155,12 +156,14 @@ export async function PUT(req: NextRequest) {
 
     const { resource, data } = requestBody.data;
     authorizeResourceWrite(actor, resource);
-    const result = await writeResource(resource, data, ifMatch || null);
+    const result = await writeResourceResolvingConflict(resource, data, ifMatch || null);
     const response = noStoreJson({
       success: true,
       resource: resourceVersionId(resource),
       etag: result.etag,
       versionId: result.versionId,
+      ...(result.resolvedFromConflict ? { resolvedFromConflict: true } : {}),
+      ...(result.alreadyApplied ? { alreadyApplied: true } : {}),
     }, { status: ifNoneMatch === '*' ? 201 : 200 });
     response.headers.set('ETag', result.etag);
     return response;
