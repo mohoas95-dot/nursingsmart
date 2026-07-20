@@ -11,7 +11,9 @@ export const DepartmentSchema = z.object({
   password: z.string().max(500).optional(),
 }).strict();
 
-export const DepartmentsSchema = z.array(DepartmentSchema).min(1, 'At least one department is required').superRefine((departments, ctx) => {
+// The index may legally become empty only through the authenticated hard-delete
+// department endpoint; all create paths still write at least one department first.
+export const DepartmentsSchema = z.array(DepartmentSchema).superRefine((departments, ctx) => {
   const ids = new Set<string>();
   for (const department of departments) {
     if (ids.has(department.id)) {
@@ -25,7 +27,8 @@ export const PersonnelSchema = z.object({
   id: nonEmptyId,
   firstName: z.string().trim().min(1).max(200),
   lastName: z.string().trim().min(1).max(200),
-  personalCode: z.string().min(1).max(100),
+  // کد پرسنلی اختیاری است؛ مقدار خالی مجاز است.
+  personalCode: z.string().trim().max(100),
   jobGroup: z.enum(['nurse', 'assistant']),
   position: z.enum(['supervisor', 'staff', 'general', 'none']),
   employmentType: z.enum(['official', 'contract', 'conscript', 'overtime']),

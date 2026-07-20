@@ -251,6 +251,24 @@ export default function Home() {
     contract: settings.dutyHours.contract
   };
 
+  // ساعت موظفی رسمی و قراردادی دیگر قابل ویرایش دستی نیست و همیشه به‌صورت پویا از روی
+  // تنظیمات تقویم (تعطیلات و روز اول هفته) با ماژول محاسبه موظفی ماهانه به‌دست می‌آید.
+  const autoDutyHours = React.useMemo(() => {
+    const officialMonth = officialCalendarState.calendar;
+    if (settings.autoCalculateDutyHours === false || !officialMonth) {
+      // تا قبل از آماده‌شدن تقویم رسمی (یا در حالت محاسبه غیرخودکار) آخرین مقدار همگام‌شده نمایش داده می‌شود.
+      return { official: settings.dutyHours.official, contract: settings.dutyHours.contract };
+    }
+    return calculateAutoDutyHours(currentYear, currentMonth, officialMonth.holidays, officialMonth.firstDayOfWeek);
+  }, [
+    settings.autoCalculateDutyHours,
+    settings.dutyHours.official,
+    settings.dutyHours.contract,
+    currentYear,
+    currentMonth,
+    officialCalendarState.calendar,
+  ]);
+
   // Schedule matrix
   const [schedule, setSchedule] = useState<MonthlySchedule | null>(null);
 
@@ -1012,6 +1030,19 @@ export default function Home() {
   const [aiProposedRequests, setAiProposedRequests] = useState<ShiftRequest[]>([]);
   const [aiSelectedPersonnelId, setAiSelectedPersonnelId] = useState<string>('');
 
+  // عملیات حساس مدیریت بخش: حذف دائمی بخش (با احراز هویت مجدد) و انتقال امن مدیریت
+  const [showDeleteDeptModal, setShowDeleteDeptModal] = useState<boolean>(false);
+  const [deleteDeptNationalId, setDeleteDeptNationalId] = useState<string>('');
+  const [deleteDeptPassword, setDeleteDeptPassword] = useState<string>('');
+  const [isDeletingDept, setIsDeletingDept] = useState<boolean>(false);
+  const [showTransferDeptModal, setShowTransferDeptModal] = useState<boolean>(false);
+  const [transferPrevNationalId, setTransferPrevNationalId] = useState<string>('');
+  const [transferPrevPassword, setTransferPrevPassword] = useState<string>('');
+  const [transferNewNationalId, setTransferNewNationalId] = useState<string>('');
+  const [transferNewFirstName, setTransferNewFirstName] = useState<string>('');
+  const [transferNewLastName, setTransferNewLastName] = useState<string>('');
+  const [isTransferringDept, setIsTransferringDept] = useState<boolean>(false);
+
   const getRequestSummaryText = (r: ShiftRequest): string => {
     const shiftLabel = r.preferredShift === 'M' ? 'صبح (M)' :
                        r.preferredShift === 'E' ? 'عصر (E)' :
@@ -1567,8 +1598,9 @@ export default function Home() {
 
   const handleSavePersonnel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formFirstName.trim() || !formLastName.trim() || !formPersonalCode.trim() || (!editingPersonnel && !formNationalId.trim())) {
-      alert('لطفاً تمام فیلدها را پر کنید.');
+    // کد پرسنلی اختیاری است؛ فقط نام، نام خانوادگی و (برای پرسنل جدید) کد ملی الزامی هستند.
+    if (!formFirstName.trim() || !formLastName.trim() || (!editingPersonnel && !formNationalId.trim())) {
+      alert('لطفاً نام، نام خانوادگی و کد ملی فرد را وارد کنید. کد پرسنلی اختیاری است.');
       return;
     }
 
@@ -1930,6 +1962,99 @@ export default function Home() {
       await saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
     } catch (error) {
       console.error("Error removing holiday:", error);
+    }
+  };
+
+  // --- Sensitive department management (hard delete / secure ownership transfer) ---
+  const exitToGuestPortal = () => {
+    setAuthenticatedUser(null);
+    setRole('guest');
+    setPendingLogin(null);
+    localStorage.removeItem('hospital_saved_role');
+    localStorage.removeItem('hospital_saved_personnel_id');
+    localStorage.removeItem('hospital_selected_dept_id');
+    router.replace('/');
+  };
+
+  const handleDeleteDepartment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deleteDeptNationalId.trim() || !deleteDeptPassword) {
+      alert('برای تأیید حذف بخش، وارد کردن کد ملی و رمز عبور خود الزامی است.');
+      return;
+    }
+    const targetDepartmentId = role === 'headnurse' ? (authenticatedUser?.departmentId || selectedDepartmentId) : selectedDepartmentId;
+    setIsDeletingDept(true);
+    try {
+      const response = await fetch('/api/head-nurse/department', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nationalId: deleteDeptNationalId,
+          password: deleteDeptPassword,
+          ...(role === 'admin' ? { departmentId: targetDepartmentId } : {}),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'حذف بخش انجام نشد.');
+      setShowDeleteDeptModal(false);
+      setDeleteDeptNationalId('');
+      setDeleteDeptPassword('');
+      if (result.ownAccountRemoved) {
+        // حساب مدیر فعلی نیز حذف شده است؛ خروج اجباری و بازگشت به ورود امن.
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+        exitToGuestPortal();
+      } else {
+        window.location.reload();
+      }
+    } catch (error) {
+      alert('خطا در حذف دائمی بخش: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsDeletingDept(false);
+    }
+  };
+
+  const handleTransferHeadNurse = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferPrevNationalId.trim() || !transferPrevPassword || !transferNewNationalId.trim() || !transferNewFirstName.trim() || !transferNewLastName.trim()) {
+      alert('لطفاً اطلاعات سرپرستار جدید و تأیید امنیتی سرپرستار قبلی را کامل وارد کنید.');
+      return;
+    }
+    setIsTransferringDept(true);
+    try {
+      const response = await fetch('/api/head-nurse/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(role === 'admin' ? { departmentId: selectedDepartmentId } : {}),
+          previousNationalId: transferPrevNationalId,
+          previousPassword: transferPrevPassword,
+          newHeadNurse: {
+            nationalId: transferNewNationalId,
+            firstName: transferNewFirstName,
+            lastName: transferNewLastName,
+          },
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'انتقال مدیریت بخش انجام نشد.');
+      setShowTransferDeptModal(false);
+      setTransferPrevNationalId('');
+      setTransferPrevPassword('');
+      setTransferNewNationalId('');
+      setTransferNewFirstName('');
+      setTransferNewLastName('');
+      if (result.transferredByPreviousHeadNurse) {
+        // حساب سرپرستار قبلی غیرفعال شده است؛ خروج اجباری و بازگشت به ورود امن.
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+        exitToGuestPortal();
+      } else {
+        alert(result.message || 'مدیریت بخش با موفقیت منتقل شد.');
+        window.location.reload();
+      }
+    } catch (error) {
+      alert('خطا در انتقال امن مدیریت بخش: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsTransferringDept(false);
     }
   };
 
@@ -2874,7 +2999,6 @@ export default function Home() {
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
           <TehranDateTime lastSync={calendarSyncedAt} />
-          {(role === 'headnurse' || role === 'admin') && <ResetRequestList />}
           {officialCalendarState.status !== 'ready' && (
             <div className={`rounded-2xl border p-4 text-xs font-black print:hidden ${officialCalendarState.status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`} role="status">
               {officialCalendarState.status === 'error' ? 'اتصال به تقویم رسمی کشور برقرار نشد؛ لطفاً اتصال اینترنت را بررسی و صفحه را تازه‌سازی کنید.' : 'در حال همگام‌سازی کامل روزها، مناسبت‌ها و تعطیلات رسمی ماه انتخاب‌شده…'}
@@ -3449,6 +3573,9 @@ export default function Home() {
 
           {activeTab === 'personnel' && role !== 'personnel' && (
             <div className="space-y-6">
+              {/* درخواست‌های بازیابی رمز عبور فقط در پنل مدیریت، زیرمجموعه بخش مدیریت پرسنل قابل مشاهده است. */}
+              {(role === 'headnurse' || role === 'admin') && <ResetRequestList />}
+
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-black text-slate-900">لیست کادر پرستاری و کمک‌بهیاران بخش</h3>
                 <button
@@ -4226,27 +4353,23 @@ export default function Home() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">موظفی کادر رسمی (ساعت)</label>
-                      <input
-                        type="number"
-                        value={settings.dutyHours.official}
-                        onChange={(e) => setSettings({
-                          ...settings,
-                          dutyHours: { ...settings.dutyHours, official: Number(e.target.value) }
-                        })}
-                        className="w-full text-sm font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                      />
+                      <output
+                        dir="ltr"
+                        title="این مقدار به‌صورت خودکار و پویا از روی تنظیمات تقویم محاسبه می‌شود"
+                        className="block w-full text-sm font-extrabold bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 text-slate-700 select-none cursor-not-allowed text-center"
+                      >
+                        {autoDutyHours.official}
+                      </output>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">موظفی قراردادی (ساعت)</label>
-                      <input
-                        type="number"
-                        value={settings.dutyHours.contract}
-                        onChange={(e) => setSettings({
-                          ...settings,
-                          dutyHours: { ...settings.dutyHours, contract: Number(e.target.value) }
-                        })}
-                        className="w-full text-sm font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                      />
+                      <output
+                        dir="ltr"
+                        title="این مقدار به‌صورت خودکار و پویا از روی تنظیمات تقویم محاسبه می‌شود"
+                        className="block w-full text-sm font-extrabold bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 text-slate-700 select-none cursor-not-allowed text-center"
+                      >
+                        {autoDutyHours.contract}
+                      </output>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 mb-1">موظفی طرح و وظیفه (ساعت)</label>
@@ -4273,6 +4396,10 @@ export default function Home() {
                       />
                     </div>
                   </div>
+
+                  <p className="text-[10px] font-bold leading-5 text-slate-400 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+                    مقادیر موظفی کادر رسمی و قراردادی فقط خواندنی است و به‌صورت کاملاً پویا از روی تقویم رسمی، تعطیلات و تنظیمات بخش تقویم (روز آغاز هفته) با ماژول محاسبه ساعت موظفی ماهانه تعیین می‌شود؛ برای تغییر آن‌ها کافی است تقویم یا تعطیلات ماه را اصلاح کنید.
+                  </p>
 
                   <h4 className="font-extrabold text-slate-800 text-sm mt-6 mb-2">حد نیازمندی پوشش نیرو در ایام هفته (روزهای عادی):</h4>
                   <div className="grid grid-cols-2 gap-4">
@@ -4722,6 +4849,68 @@ export default function Home() {
                 </div>
 
               </div>
+
+              <div className="lg:col-span-2 bg-white border border-rose-200 rounded-3xl p-6 shadow-sm space-y-5">
+                <div>
+                  <h3 className="text-lg font-black text-rose-700 border-b pb-3 border-rose-100 flex items-center gap-2">
+                    <ShieldAlert className="w-5 h-5" /> مدیریت و امنیت بخش (عملیات حساس)
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-2 font-bold leading-6">
+                    این بخش مخصوص مدیریت بخش است و عملیات آن فقط با احراز هویت مجدد (کد ملی و رمز عبور) و پس از بررسی سخت‌گیرانه سمت سرور انجام می‌شود.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 flex flex-col justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                        <UserCheck className="w-4 h-4 text-indigo-500" /> انتقال مدیریت (جایگزینی سرپرستار)
+                      </h4>
+                      <p className="text-[11px] font-bold leading-6 text-slate-500 mt-2">
+                        جایگزینی سرپرستار/مدیر فعلی با مدیر جدید تنها با تأیید امنیتی سرپرستار قبلی انجام می‌شود؛ پس از انتقال، حساب قبلی غیرفعال می‌گردد.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTransferPrevNationalId(role === 'headnurse' ? (authenticatedUser?.nationalId || '') : '');
+                        setTransferPrevPassword('');
+                        setTransferNewNationalId('');
+                        setTransferNewFirstName('');
+                        setTransferNewLastName('');
+                        setShowTransferDeptModal(true);
+                      }}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-xl transition-all cursor-pointer shadow-md"
+                      id="btn-open-transfer-dept"
+                    >
+                      شروع انتقال امن مدیریت بخش
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 flex flex-col justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-rose-700 flex items-center gap-2">
+                        <Trash2 className="w-4 h-4" /> حذف دائمی بخش
+                      </h4>
+                      <p className="text-[11px] font-bold leading-6 text-slate-500 mt-2">
+                        تمام داده‌های بخش شامل پرسنل، شیفت‌ها، درخواست‌ها، تنظیمات و تمام حساب‌های کاربری مرتبط به‌صورت کامل و غیرقابل‌بازگشت حذف می‌شود.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteDeptNationalId('');
+                        setDeleteDeptPassword('');
+                        setShowDeleteDeptModal(true);
+                      }}
+                      className="w-full bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs py-3 rounded-xl transition-all cursor-pointer shadow-md shadow-rose-200/40"
+                      id="btn-open-delete-dept"
+                    >
+                      حذف کامل و دائمی بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || ''}»
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -5117,6 +5306,189 @@ export default function Home() {
         </div>
       )}
 
+      {showDeleteDeptModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-[70] p-4 print:hidden animate-fade-in" id="delete-dept-modal" dir="rtl">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full border border-rose-200 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 border-b border-rose-100 pb-3">
+              <span className="w-11 h-11 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="font-black text-slate-900 text-sm">حذف دائمی بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || ''}»</h3>
+                <p className="text-[10px] font-bold text-rose-600 mt-1">این عملیات قطعی، فوری و کاملاً غیرقابل بازگشت است.</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-[11px] font-bold leading-6 text-rose-700">
+              با این کار تمام اسناد و سوابق بخش (پرسنل، درخواست‌ها، تنظیمات، تعطیلات و کل شیفت‌های ماهانه) و تمام حساب‌های کاربری مرتبط با این بخش (از جمله حساب سرپرستار و پرسنل) برای همیشه از پایگاه‌داده و فضای ذخیره‌سازی پاک می‌شود.
+            </div>
+
+            <form onSubmit={handleDeleteDepartment} className="space-y-3">
+              <p className="text-[11px] font-black text-slate-700">
+                برای تأیید، احراز هویت مجدد کنید — کد ملی و رمز عبور <span className="text-rose-600">حساب خودتان</span> را وارد نمایید:
+              </p>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی مدیر فعلی</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  autoComplete="username"
+                  value={deleteDeptNationalId}
+                  onChange={(e) => setDeleteDeptNationalId(e.target.value)}
+                  className="w-full text-xs font-black bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-rose-500 focus:outline-none text-center font-mono"
+                  placeholder="کد ملی ۱۰ رقمی"
+                  id="input-delete-dept-national-id"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">رمز عبور</label>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={deleteDeptPassword}
+                  onChange={(e) => setDeleteDeptPassword(e.target.value)}
+                  className="w-full text-xs font-black bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-rose-500 focus:outline-none text-center font-mono"
+                  placeholder="رمز عبور حساب شما"
+                  id="input-delete-dept-password"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteDeptModal(false)}
+                  disabled={isDeletingDept}
+                  className="w-full bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  disabled={isDeletingDept}
+                  className="w-full bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer shadow-md shadow-rose-200/20"
+                  id="btn-confirm-delete-dept"
+                >
+                  {isDeletingDept ? 'در حال حذف دائمی...' : 'تأیید و حذف کامل بخش'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showTransferDeptModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-[70] p-4 print:hidden animate-fade-in" id="transfer-dept-modal" dir="rtl">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full border border-indigo-200 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center gap-3 border-b border-indigo-100 pb-3">
+              <span className="w-11 h-11 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shrink-0">
+                <UserCheck className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="font-black text-slate-900 text-sm">انتقال امن مدیریت بخش «{departments.find(d => d.id === selectedDepartmentId)?.name || ''}»</h3>
+                <p className="text-[10px] font-bold text-indigo-600 mt-1">جایگزینی سرپرستار فعلی فقط با تأیید امنیتی خودِ او انجام می‌شود.</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3 text-[11px] font-bold leading-6 text-indigo-700">
+              پس از انتقال، حساب سرپرستار جدید با رمز اولیه ۱۲۳۴ ساخته می‌شود (اجبار به تغییر رمز در اولین ورود) و حساب سرپرستار قبلی به‌همراه تمام نشست‌هایش غیرفعال می‌گردد. تمام داده‌ها و پرسنل بخش دست‌نخورده باقی می‌مانند.
+            </div>
+
+            <form onSubmit={handleTransferHeadNurse} className="space-y-3">
+              <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/50 p-3">
+                <p className="text-[11px] font-black text-slate-700">مشخصات سرپرستار جدید:</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">نام</label>
+                    <input
+                      type="text"
+                      value={transferNewFirstName}
+                      onChange={(e) => setTransferNewFirstName(e.target.value)}
+                      className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
+                      id="input-transfer-new-fname"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">نام خانوادگی</label>
+                    <input
+                      type="text"
+                      value={transferNewLastName}
+                      onChange={(e) => setTransferNewLastName(e.target.value)}
+                      className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
+                      id="input-transfer-new-lname"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی سرپرستار جدید</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    value={transferNewNationalId}
+                    onChange={(e) => setTransferNewNationalId(e.target.value)}
+                    className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none text-center font-mono"
+                    placeholder="کد ملی ۱۰ رقمی"
+                    id="input-transfer-new-national-id"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/50 p-3">
+                <p className="text-[11px] font-black text-amber-800 flex items-center gap-1.5">
+                  <ShieldAlert className="w-4 h-4" /> تأیید امنیتی سرپرستار قبلی (الزامی):
+                </p>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی سرپرستار فعلی</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    autoComplete="username"
+                    value={transferPrevNationalId}
+                    onChange={(e) => setTransferPrevNationalId(e.target.value)}
+                    className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-amber-500 focus:outline-none text-center font-mono"
+                    placeholder="کد ملی ۱۰ رقمی"
+                    id="input-transfer-prev-national-id"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">رمز عبور سرپرستار فعلی</label>
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={transferPrevPassword}
+                    onChange={(e) => setTransferPrevPassword(e.target.value)}
+                    className="w-full text-xs font-black bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-amber-500 focus:outline-none text-center font-mono"
+                    placeholder="رمز عبور سرپرستار فعلی"
+                    id="input-transfer-prev-password"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowTransferDeptModal(false)}
+                  disabled={isTransferringDept}
+                  className="w-full bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  disabled={isTransferringDept}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer shadow-md"
+                  id="btn-confirm-transfer-dept"
+                >
+                  {isTransferringDept ? 'در حال انتقال...' : 'تأیید و انتقال مدیریت'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {showAddPersonnelModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="personnel-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative scrollbar-thin">
@@ -5156,13 +5528,14 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">کد پرسنلی (یکتا)</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1">کد پرسنلی (اختیاری)</label>
                 <input
                   type="text"
                   value={formPersonalCode}
                   onChange={(e) => setFormPersonalCode(e.target.value)}
                   className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono"
                   id="input-form-code"
+                  placeholder="در صورت وجود وارد کنید"
                 />
               </div>
 
