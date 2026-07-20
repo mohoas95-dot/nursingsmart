@@ -198,7 +198,7 @@ export default function Home() {
   const [requests, setRequests] = useState<ShiftRequest[]>([]);
   const [isPersonnelLoaded, setIsPersonnelLoaded] = useState<boolean>(false);
   const [isRequestsLoaded, setIsRequestsLoaded] = useState<boolean>(false);
-  const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
+  const [settings, setSettings] = useState<any>(INITIAL_SETTINGS);
   const [dbChecked, setDbChecked] = useState<boolean>(false);
 
   // تنها منبع سال، ماه، چیدمان هفته و تعطیلات رسمی در کل رابط کاربری
@@ -245,7 +245,7 @@ export default function Home() {
     // فرمول موجود سیستم بدون تغییر: رسمی = (روز کاری × ۷) - (پنجشنبه کاری × ۲)، قراردادی = رسمی + ۱۴
     const official = (workDays * 7) - (workingThursdays * 2);
     const contract = official + 14;
-    setSettings(previous => {
+    setSettings((previous: any) => {
       if (previous.dutyHours.official === official && previous.dutyHours.contract === contract && previous.autoCalculateDutyHours) return previous;
       return { ...previous, autoCalculateDutyHours: true, dutyHours: { ...previous.dutyHours, official, contract } };
     });
@@ -1119,7 +1119,7 @@ export default function Home() {
   const [formJobGroup, setFormJobGroup] = useState<'nurse' | 'assistant'>('nurse');
   const [formPosition, setFormPosition] = useState<'supervisor' | 'staff' | 'general' | 'none'>('general');
   const [formEmploymentType, setFormEmploymentType] = useState<'official' | 'contract' | 'conscript' | 'overtime'>('official');
-  const [formExperienceYears, setFormExperienceYears] = useState<number>(1);
+  const [formExperienceYears, setFormExperienceYears] = useState<number | string>(1);
   const [formActive, setFormActive] = useState<boolean>(true);
   const [formCanBeShiftLeader, setFormCanBeShiftLeader] = useState<boolean>(true);
 
@@ -1190,7 +1190,7 @@ export default function Home() {
   };
 
   // Custom Holiday Management Form
-  const [holidayDayInput, setHolidayDayInput] = useState<number>(1);
+  const [holidayDayInput, setHolidayDayInput] = useState<number | string>(1);
   const [holidayTitleInput, setHolidayTitleInput] = useState<string>('');
 
   type ScheduleUpdateStrategy = {
@@ -1220,6 +1220,47 @@ export default function Home() {
     }, {} as MonthlySchedule['assignments']);
   };
 
+  const parseNumberInput = (val: string): any => val === '' ? '' : Number(val);
+
+  const normalizeSettings = (s?: SystemSettings | any): SystemSettings => {
+    if (!s) return INITIAL_SETTINGS;
+    const dh = s.dutyHours || {};
+    const wd = s.demand?.weekday || {};
+    const hd = s.demand?.holiday || {};
+    return {
+      ...s,
+      autoCalculateDutyHours: s.autoCalculateDutyHours,
+      dutyHours: {
+        official: Number(dh.official) || 0,
+        contract: Number(dh.contract) || 0,
+        conscript: Number(dh.conscript) || 0,
+        overtime: Number(dh.overtime) || 0,
+      },
+      demand: {
+        weekday: {
+          morningNurse: Number(wd.morningNurse) || 0,
+          morningAssistant: Number(wd.morningAssistant) || 0,
+          afternoonNurse: Number(wd.afternoonNurse) || 0,
+          afternoonAssistant: Number(wd.afternoonAssistant) || 0,
+          afternoonLeader: Number(wd.afternoonLeader) || 0,
+          nightNurse: Number(wd.nightNurse) || 0,
+          nightAssistant: Number(wd.nightAssistant) || 0,
+          nightLeader: Number(wd.nightLeader) || 0,
+        },
+        holiday: {
+          morningNurse: Number(hd.morningNurse) || 0,
+          morningAssistant: Number(hd.morningAssistant) || 0,
+          afternoonNurse: Number(hd.afternoonNurse) || 0,
+          afternoonAssistant: Number(hd.afternoonAssistant) || 0,
+          afternoonLeader: Number(hd.afternoonLeader) || 0,
+          nightNurse: Number(hd.nightNurse) || 0,
+          nightAssistant: Number(hd.nightAssistant) || 0,
+          nightLeader: Number(hd.nightLeader) || 0,
+        },
+      },
+    };
+  };
+
   const saveState = async (
     updatedP: Personnel[],
     updatedR: ShiftRequest[],
@@ -1229,6 +1270,7 @@ export default function Home() {
     strategy?: ScheduleUpdateStrategy
   ) => {
     try {
+      const cleanUpdatedS = normalizeSettings(updatedS);
       let activeFd: number;
       let finalStrategy: ScheduleUpdateStrategy = { mode: 'preserve_current' };
 
@@ -1241,7 +1283,7 @@ export default function Home() {
       }
 
       let calculatedMonthlyDutyHours = monthlyDutyHours;
-      if (updatedS.autoCalculateDutyHours) {
+      if (cleanUpdatedS.autoCalculateDutyHours) {
         const autoHours = calculateAutoDutyHours(
           currentYear,
           currentMonth,
@@ -1249,7 +1291,7 @@ export default function Home() {
           activeFd === -1 ? undefined : activeFd
         );
         calculatedMonthlyDutyHours = {
-          ...updatedS.dutyHours,
+          ...cleanUpdatedS.dutyHours,
           official: autoHours.official,
           contract: autoHours.contract
         };
@@ -1291,7 +1333,7 @@ export default function Home() {
             currentMonth,
             updatedP,
             updatedR,
-            updatedS,
+            cleanUpdatedS,
             updatedH,
             activeFd === -1 ? undefined : activeFd,
             calculatedMonthlyDutyHours
@@ -1322,7 +1364,7 @@ export default function Home() {
           currentMonth,
           updatedP,
           nextAssignments,
-          updatedS,
+          cleanUpdatedS,
           updatedH,
           activeFd === -1 ? undefined : activeFd,
           updatedR
@@ -1337,7 +1379,7 @@ export default function Home() {
           warnings: verification.warnings
         };
       } else {
-        const freshSolved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, updatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
+        const freshSolved = solveNursingSchedule(currentYear, currentMonth, updatedP, updatedR, cleanUpdatedS, updatedH, activeFd === -1 ? undefined : activeFd, calculatedMonthlyDutyHours);
 
         if (currentMonthSchedule) {
           const nextAssignments = normalizeScheduleAssignments(currentMonthSchedule.assignments, updatedP);
@@ -1353,7 +1395,7 @@ export default function Home() {
             currentMonth,
             updatedP,
             nextAssignments,
-            updatedS,
+            cleanUpdatedS,
             updatedH,
             activeFd === -1 ? undefined : activeFd,
             updatedR
@@ -1371,16 +1413,23 @@ export default function Home() {
         }
       }
 
+      const cleanMonthlyDutyHours = calculatedMonthlyDutyHours ? {
+        official: Number(calculatedMonthlyDutyHours.official) || 0,
+        contract: Number(calculatedMonthlyDutyHours.contract) || 0,
+        conscript: Number(calculatedMonthlyDutyHours.conscript) || 0,
+        overtime: Number(calculatedMonthlyDutyHours.overtime) || 0,
+      } : null;
+
       const updatedDept = {
         ...oldDept,
         personnel: updatedP,
         requests: updatedR,
-        settings_system: updatedS,
+        settings_system: cleanUpdatedS,
         holidays: {
           ...oldDept.holidays,
           [`${currentYear}_${currentMonth}`]: {
             days: updatedH,
-            monthlyDutyHours: calculatedMonthlyDutyHours || null
+            monthlyDutyHours: cleanMonthlyDutyHours
           }
         },
         firstDayOfWeek: {
@@ -2626,6 +2675,12 @@ export default function Home() {
               {authError}
             </div>
           )}
+          {isPortalSubmitting && (
+            <div className="mb-6 p-4 bg-sky-50 text-sky-800 border border-sky-300 text-xs rounded-xl font-black max-w-2xl mx-auto flex items-center justify-center gap-2.5 shadow-sm animate-pulse" role="status">
+              <span className="inline-block w-4 h-4 border-2 border-sky-600 border-t-transparent rounded-full animate-spin shrink-0"></span>
+              <span>در حال بررسی اطلاعات و ورود به سامانه، لطفاً شکیبا باشید...</span>
+            </div>
+          )}
           {portalNotice && (
             <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs rounded-xl font-black max-w-2xl mx-auto" role="status">
               {portalNotice}
@@ -2642,7 +2697,7 @@ export default function Home() {
                 <h3 className="font-extrabold text-slate-800 text-base mb-1">ورود کادر درمان کشیک</h3>
                 <p className="text-[11px] text-slate-500 leading-relaxed mb-4">جهت ورود و ثبت درخواست‌ها، کد ملی و کلمه عبور خود را وارد نمایید.</p>
               </div>
-              <div className="space-y-2 text-right pt-4">
+              <form onSubmit={(e) => { e.preventDefault(); void handlePortalLogin('staff'); }} className="space-y-2 text-right pt-4">
                 <input
                   type="text"
                   inputMode="numeric"
@@ -2664,12 +2719,19 @@ export default function Home() {
                 />
 
                 <button
-                  onClick={() => void handlePortalLogin('staff')}
+                  type="submit"
                   disabled={isPortalSubmitting}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2"
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-500 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2 flex items-center justify-center gap-2"
                   id="btn-login-personnel"
                 >
-                  ورود به پرتال شخصی کادر درمان
+                  {isPortalSubmitting ? (
+                    <>
+                      <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0"></span>
+                      <span>در حال ورود...</span>
+                    </>
+                  ) : (
+                    'ورود به پرتال شخصی کادر درمان'
+                  )}
                 </button>
                 <button
                   type="button"
@@ -2684,7 +2746,7 @@ export default function Home() {
                     {staffAuthNotice}
                   </div>
                 )}
-              </div>
+              </form>
             </div>
 
             <div className="bg-slate-50/70 border border-slate-200 p-6 rounded-2xl hover:border-emerald-400 hover:bg-slate-50 transition-all flex flex-col justify-between" id="portal-headnurse">
@@ -2695,7 +2757,7 @@ export default function Home() {
                 <h3 className="font-extrabold text-slate-800 text-base mb-1">پنل سرپرستار بخش</h3>
                 <p className="text-[11px] text-slate-500 leading-relaxed mb-4">مدیریت مستقیم تعهدات ماهیانه، تعریف الگوهای پوشش فعال و بهینه‌ساز خودکار توزیع متعادل شیفت.</p>
               </div>
-              <div className="space-y-2">
+              <form onSubmit={(e) => { e.preventDefault(); void handlePortalLogin('head-nurse'); }} className="space-y-2">
                 <input
                   type="text"
                   placeholder="کد ملی سرپرستار"
@@ -2720,14 +2782,21 @@ export default function Home() {
                 )}
 
                 <button
-                  onClick={() => void handlePortalLogin('head-nurse')}
+                  type="submit"
                   disabled={isPortalSubmitting}
-                  className="w-full bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2"
+                  className="w-full bg-sky-600 hover:bg-sky-700 disabled:bg-sky-500 text-white font-extrabold text-xs py-3.5 rounded-xl transition-all cursor-pointer shadow-md hover:scale-[1.01] mt-2 flex items-center justify-center gap-2"
                   id="btn-login-headnurse"
                 >
-                  {isNewDeptWithDefaults ? 'ثبت و ورود اولین‌بار سرپرستار' : 'ورود سرپرستار بخش'}
+                  {isPortalSubmitting ? (
+                    <>
+                      <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0"></span>
+                      <span>در حال ورود...</span>
+                    </>
+                  ) : (
+                    isNewDeptWithDefaults ? 'ثبت و ورود اولین‌بار سرپرستار' : 'ورود سرپرستار بخش'
+                  )}
                 </button>
-              </div>
+              </form>
             </div>
 
           </div>
@@ -2751,7 +2820,7 @@ export default function Home() {
                 هر سرپرستار مدیر بخش خود است. حساب شما با رمز اولیه ۱۲۳۴ ساخته می‌شود و در اولین ورود باید رمز را تغییر دهید.
               </p>
 
-              <div className="space-y-3">
+              <form onSubmit={(e) => { e.preventDefault(); void handleHeadNurseOnboarding(); }} className="space-y-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 mb-1">نام بخش (فارسی)</label>
                   <input
@@ -2794,29 +2863,28 @@ export default function Home() {
                     placeholder="کد ملی ۱۰ رقمی"
                   />
                 </div>
-              </div>
 
-              {authError && (
-                <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700" role="alert">{authError}</p>
-              )}
+                {authError && (
+                  <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700" role="alert">{authError}</p>
+                )}
 
-              <div className="pt-3 border-t border-slate-100 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddDeptModal(false)}
-                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs py-2 rounded-xl transition-all"
-                >
-                  انصراف
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleHeadNurseOnboarding()}
-                  disabled={isOnboardingSubmitting}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-xs py-2 rounded-xl transition-all shadow-md"
-                >
-                  {isOnboardingSubmitting ? 'در حال ساخت...' : 'ساخت بخش و حساب من'}
-                </button>
-              </div>
+                <div className="pt-3 border-t border-slate-100 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddDeptModal(false)}
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs py-2 rounded-xl transition-all cursor-pointer"
+                  >
+                    انصراف
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isOnboardingSubmitting}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-xs py-2 rounded-xl transition-all shadow-md cursor-pointer"
+                  >
+                    {isOnboardingSubmitting ? 'در حال ساخت...' : 'ساخت بخش و حساب من'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
@@ -4493,7 +4561,7 @@ export default function Home() {
                         value={settings.dutyHours.conscript}
                         onChange={(e) => setSettings({
                           ...settings,
-                          dutyHours: { ...settings.dutyHours, conscript: Number(e.target.value) }
+                          dutyHours: { ...settings.dutyHours, conscript: parseNumberInput(e.target.value) }
                         })}
                         className="w-full text-sm font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
                       />
@@ -4505,7 +4573,7 @@ export default function Home() {
                         value={settings.dutyHours.overtime}
                         onChange={(e) => setSettings({
                           ...settings,
-                          dutyHours: { ...settings.dutyHours, overtime: Number(e.target.value) }
+                          dutyHours: { ...settings.dutyHours, overtime: parseNumberInput(e.target.value) }
                         })}
                         className="w-full text-sm font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
                       />
@@ -4530,7 +4598,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                weekday: { ...settings.demand.weekday, morningNurse: Number(e.target.value) }
+                                weekday: { ...settings.demand.weekday, morningNurse: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4545,7 +4613,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                weekday: { ...settings.demand.weekday, afternoonNurse: Number(e.target.value) }
+                                weekday: { ...settings.demand.weekday, afternoonNurse: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4560,7 +4628,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                weekday: { ...settings.demand.weekday, nightNurse: Number(e.target.value) }
+                                weekday: { ...settings.demand.weekday, nightNurse: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4581,7 +4649,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                weekday: { ...settings.demand.weekday, morningAssistant: Number(e.target.value) }
+                                weekday: { ...settings.demand.weekday, morningAssistant: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4596,7 +4664,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                weekday: { ...settings.demand.weekday, afternoonAssistant: Number(e.target.value) }
+                                weekday: { ...settings.demand.weekday, afternoonAssistant: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4611,7 +4679,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                weekday: { ...settings.demand.weekday, nightAssistant: Number(e.target.value) }
+                                weekday: { ...settings.demand.weekday, nightAssistant: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4635,7 +4703,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                holiday: { ...settings.demand.holiday, morningNurse: Number(e.target.value) }
+                                holiday: { ...settings.demand.holiday, morningNurse: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4650,7 +4718,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                holiday: { ...settings.demand.holiday, afternoonNurse: Number(e.target.value) }
+                                holiday: { ...settings.demand.holiday, afternoonNurse: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4665,7 +4733,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                holiday: { ...settings.demand.holiday, nightNurse: Number(e.target.value) }
+                                holiday: { ...settings.demand.holiday, nightNurse: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4686,7 +4754,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                holiday: { ...settings.demand.holiday, morningAssistant: Number(e.target.value) }
+                                holiday: { ...settings.demand.holiday, morningAssistant: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4701,7 +4769,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                holiday: { ...settings.demand.holiday, afternoonAssistant: Number(e.target.value) }
+                                holiday: { ...settings.demand.holiday, afternoonAssistant: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4716,7 +4784,7 @@ export default function Home() {
                               ...settings,
                               demand: {
                                 ...settings.demand,
-                                holiday: { ...settings.demand.holiday, nightAssistant: Number(e.target.value) }
+                                holiday: { ...settings.demand.holiday, nightAssistant: parseNumberInput(e.target.value) }
                               }
                             })}
                             className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none"
@@ -4750,7 +4818,7 @@ export default function Home() {
                       min="1"
                       max="31"
                       value={holidayDayInput}
-                      onChange={(e) => setHolidayDayInput(Number(e.target.value))}
+                      onChange={(e) => setHolidayDayInput(parseNumberInput(e.target.value))}
                       className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:outline-none"
                     />
                   </div>
@@ -5257,7 +5325,7 @@ export default function Home() {
                           type="number"
                           value={settings.dutyHours.conscript}
                           onChange={(e) => {
-                            const val = Number(e.target.value);
+                            const val = parseNumberInput(e.target.value);
                             const updated = {
                               ...settings,
                               dutyHours: {
@@ -5266,7 +5334,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, updated, customHolidays, { mode: 'full_resolve' });
+                            saveState(personnel, requests, normalizeSettings(updated), customHolidays, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
@@ -5384,8 +5452,34 @@ export default function Home() {
       </main>
 
       {deleteTarget && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in" id="delete-confirm-modal" dir="rtl">
-          <div className="bg-white rounded-3xl p-6 max-w-sm w-full border border-slate-200 shadow-2xl space-y-4 text-center">
+        <div
+          className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-55 p-4 print:hidden animate-fade-in"
+          id="delete-confirm-modal"
+          dir="rtl"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              if (deleteTarget.type === 'personnel') {
+                handleDeletePersonnel(deleteTarget.id);
+              } else {
+                handleDeleteRequest(deleteTarget.id);
+              }
+              setDeleteTarget(null);
+            }
+          }}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (deleteTarget.type === 'personnel') {
+                handleDeletePersonnel(deleteTarget.id);
+              } else {
+                handleDeleteRequest(deleteTarget.id);
+              }
+              setDeleteTarget(null);
+            }}
+            className="bg-white rounded-3xl p-6 max-w-sm w-full border border-slate-200 shadow-2xl space-y-4 text-center"
+          >
             <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-2">
               <Trash2 className="w-6 h-6" />
             </div>
@@ -5402,22 +5496,15 @@ export default function Home() {
                 انصراف
               </button>
               <button
-                type="button"
-                onClick={() => {
-                  if (deleteTarget.type === 'personnel') {
-                    handleDeletePersonnel(deleteTarget.id);
-                  } else {
-                    handleDeleteRequest(deleteTarget.id);
-                  }
-                  setDeleteTarget(null);
-                }}
+                type="submit"
+                autoFocus
                 className="w-full bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all cursor-pointer shadow-md shadow-rose-200/20"
                 id="btn-confirm-delete-action"
               >
                 تایید و حذف دائم
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
@@ -5732,7 +5819,7 @@ export default function Home() {
                   <input
                     type="number"
                     value={formExperienceYears}
-                    onChange={(e) => setFormExperienceYears(Number(e.target.value))}
+                    onChange={(e) => setFormExperienceYears(parseNumberInput(e.target.value))}
                     className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
                     id="input-form-years"
                   />

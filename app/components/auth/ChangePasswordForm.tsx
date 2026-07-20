@@ -44,7 +44,7 @@ export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolea
       <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} autoComplete="new-password" placeholder="رمز عبور جدید؛ حداقل ۸ کاراکتر" className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10" required />
       <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" placeholder="تکرار رمز عبور جدید" className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10" required />
       {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-center text-xs font-bold text-rose-700">{error}</p>}
-      <button disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white hover:bg-indigo-700 disabled:opacity-60">
+      <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white hover:bg-indigo-700 disabled:opacity-60">
         {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
         {submitting ? 'در حال ثبت...' : 'ثبت رمز جدید و ادامه'}
       </button>
