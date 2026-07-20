@@ -625,19 +625,19 @@ export default function Home() {
       const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
       const isReqLocked = !!sched.requestsLocked;
 
-      setFinalizedNursesMonths(prev => {
+      setFinalizedNursesMonths((prev: string[]) => {
         const key = `${currentYear}_${currentMonth}`;
         if (isFinNurses && !prev.includes(key)) return [...prev, key];
         if (!isFinNurses) return prev.filter(k => k !== key);
         return prev;
       });
-      setFinalizedAssistantsMonths(prev => {
+      setFinalizedAssistantsMonths((prev: string[]) => {
         const key = `${currentYear}_${currentMonth}`;
         if (isFinAssistants && !prev.includes(key)) return [...prev, key];
         if (!isFinAssistants) return prev.filter(k => k !== key);
         return prev;
       });
-      setRequestsLockedMonths(prev => {
+      setRequestsLockedMonths((prev: string[]) => {
         const key = `${currentYear}_${currentMonth}`;
         if (isReqLocked && !prev.includes(key)) return [...prev, key];
         if (!isReqLocked) return prev.filter(k => k !== key);
@@ -898,19 +898,19 @@ export default function Home() {
             const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
             const isReqLocked = !!sched.requestsLocked;
 
-            setFinalizedNursesMonths(prev => {
+            setFinalizedNursesMonths((prev: string[]) => {
               const key = `${currentYear}_${currentMonth}`;
               if (isFinNurses && !prev.includes(key)) return [...prev, key];
               if (!isFinNurses) return prev.filter(k => k !== key);
               return prev;
             });
-            setFinalizedAssistantsMonths(prev => {
+            setFinalizedAssistantsMonths((prev: string[]) => {
               const key = `${currentYear}_${currentMonth}`;
               if (isFinAssistants && !prev.includes(key)) return [...prev, key];
               if (!isFinAssistants) return prev.filter(k => k !== key);
               return prev;
             });
-            setRequestsLockedMonths(prev => {
+            setRequestsLockedMonths((prev: string[]) => {
               const key = `${currentYear}_${currentMonth}`;
               if (isReqLocked && !prev.includes(key)) return [...prev, key];
               if (!isReqLocked) return prev.filter(k => k !== key);
