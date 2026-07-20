@@ -1550,7 +1550,19 @@ export default function Home() {
         },
         dismissedWarnings,
       },
-      solveWithPriority,
+      // Adapter wrapper to convert readonly params to mutable for solveWithPriority
+      (year, month, personnel, requests, settings, holidays, firstDayOfWeek, monthlyDutyHours) => {
+        return solveWithPriority(
+          year,
+          month,
+          [...personnel] as Personnel[],
+          [...requests] as ShiftRequest[],
+          settings,
+          { ...holidays } as { [day: number]: string },
+          firstDayOfWeek,
+          monthlyDutyHours
+        );
+      },
       verifyCoverageAndLeaders,
       persistenceAdapter,
       uiAdapter,
