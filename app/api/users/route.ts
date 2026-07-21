@@ -44,6 +44,29 @@ export async function POST(request: NextRequest) {
         });
         return authJson({ success: true, user: reactivated, message: 'حساب پرسنل با رمز اولیه ۱۲۳۴ دوباره فعال شد.' });
       }
+
+      // If the existing user is the head nurse (sarparastar) of this department, link their personnelId
+      if (existing.role === 'HEAD_NURSE' && existing.departmentId === requestedDepartmentId) {
+        const updated = await prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            personnelId: input.personnelId || existing.personnelId || null,
+          },
+        });
+        return authJson({
+          success: true,
+          user: {
+            id: updated.id,
+            nationalId: updated.nationalId,
+            firstName: updated.firstName,
+            lastName: updated.lastName,
+            role: updated.role,
+            mustChangePassword: updated.mustChangePassword,
+          },
+          message: 'حساب سرپرستار با موفقیت به پرسنل بخش متصل گردید.',
+        });
+      }
+
       const isSameAccount = existing.role === input.role &&
         existing.departmentId === requestedDepartmentId &&
         existing.personnelId === (input.personnelId || null);
