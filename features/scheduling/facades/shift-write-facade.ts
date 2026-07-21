@@ -34,6 +34,12 @@ import {
 } from '../../../domain/scheduling/schedule-operations';
 import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
 
+interface ShiftLeaderRecord {
+  morning?: string;
+  afternoon?: string;
+  night?: string;
+}
+
 // ============================================================================
 // Persistence Interface (Dependency Injection)
 // ============================================================================
@@ -98,7 +104,7 @@ export async function runOptimizerFacade(
     holidays: Readonly<Record<number, string>>,
     firstDayOfWeek: number | undefined,
     requests: ReadonlyArray<ShiftRequest>
-  ) => { shiftLeaders: Record<number, any>; warnings: string[] },
+  ) => { shiftLeaders: Record<number, ShiftLeaderRecord>; warnings: string[] },
   persistence: SchedulePersistence,
   ui: ScheduleUIFeedback,
   departmentId: string,
@@ -255,7 +261,7 @@ export async function applyManualShiftChangeFacade(
     holidays: Readonly<Record<number, string>>,
     firstDayOfWeek: number | undefined,
     requests: ReadonlyArray<ShiftRequest>
-  ) => { shiftLeaders: Record<number, any>; warnings: string[] },
+  ) => { shiftLeaders: Record<number, ShiftLeaderRecord>; warnings: string[] },
   persistence: SchedulePersistence,
   departmentId: string
 ): Promise<ManualShiftChangeResult> {
