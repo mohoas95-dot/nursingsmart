@@ -27,6 +27,7 @@ export interface AddPersonnelModalProps {
   formLastName: string;
   formPersonalCode: string;
   formNationalId: string;
+  isLoadingNationalId?: boolean;
   formJobGroup: 'nurse' | 'assistant';
   formPosition: 'supervisor' | 'staff' | 'general' | 'none';
   formEmploymentType: 'official' | 'contract' | 'conscript' | 'overtime';
@@ -62,6 +63,7 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     formLastName,
     formPersonalCode,
     formNationalId,
+    isLoadingNationalId = false,
     formJobGroup,
     formPosition,
     formEmploymentType,
@@ -137,21 +139,20 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
             />
           </div>
 
-          {!editingPersonnel && (
-            <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی برای ورود به سامانه</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                value={formNationalId}
-                onChange={(e) => setFormNationalId(e.target.value)}
-                className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono text-center"
-                id="input-form-national-id"
-                placeholder="رمز اولیه حساب: ۱۲۳۴"
-              />
-            </div>
-          )}
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی برای ورود به سامانه</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={10}
+              value={formNationalId}
+              disabled={isLoadingNationalId}
+              onChange={(e) => setFormNationalId(e.target.value)}
+              className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono text-center disabled:bg-slate-100 disabled:text-slate-400"
+              id="input-form-national-id"
+              placeholder={isLoadingNationalId ? 'در حال دریافت کد ملی...' : (editingPersonnel ? 'کد ملی را در صورت نیاز اصلاح کنید' : 'رمز اولیه حساب: ۱۲۳۴')}
+            />
+          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -249,7 +250,8 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
 
           <button
             type="submit"
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg mt-4 cursor-pointer"
+            disabled={isLoadingNationalId}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 disabled:cursor-not-allowed text-white font-extrabold text-xs py-3 rounded-xl shadow-lg mt-4 cursor-pointer"
             id="btn-save-form-personnel"
           >
             ثبت اطلاعات و به‌روزرسانی بانک داده

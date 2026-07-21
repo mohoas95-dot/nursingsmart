@@ -1106,6 +1106,7 @@ export default function Home() {
   const formNationalId = personnelForm.formData.nationalId;
   const setFormNationalId = personnelForm.setFormNationalId;
   const [pendingPersonnelId, setPendingPersonnelId] = useState<string | null>(null);
+  const [isLoadingPersonnelNationalId, setIsLoadingPersonnelNationalId] = useState(false);
   const formJobGroup = personnelForm.formData.jobGroup;
   const setFormJobGroup = personnelForm.setFormJobGroup;
   const formPosition = personnelForm.formData.position;
@@ -1715,28 +1716,57 @@ export default function Home() {
   // --- Personnel CRUD Helpers ---
   const handleOpenAddPersonnel = () => {
     setPendingPersonnelId(null);
+    setIsLoadingPersonnelNationalId(false);
     personnelForm.openAddModal();
   };
 
-  const handleOpenEditPersonnel = (p: Personnel) => {
+  const handleOpenEditPersonnel = async (p: Personnel) => {
     // openEditModal populates every field before making the modal visible.
     // Do not call openAddModal here: it resets the form and turns an edit into
     // an empty "new personnel" form.
     setPendingPersonnelId(null);
     personnelForm.openEditModal(p);
+    setIsLoadingPersonnelNationalId(true);
+    try {
+      const response = await fetch(`/api/users/personnel/${encodeURIComponent(p.id)}`);
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'دریافت کد ملی پرسنل انجام نشد.');
+      }
+      setFormNationalId(result.nationalId);
+    } catch (error) {
+      console.error('Error loading personnel national ID:', error);
+      alert('کد ملی این پرسنل دریافت نشد: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsLoadingPersonnelNationalId(false);
+    }
   };
 
   const handleSavePersonnel = async (e: React.FormEvent) => {
     e.preventDefault();
     // کد پرسنلی اختیاری است؛ فقط نام، نام خانوادگی و (برای پرسنل جدید) کد ملی الزامی هستند.
-    if (!formFirstName.trim() || !formLastName.trim() || (!editingPersonnel && !formNationalId.trim())) {
+    if (!formFirstName.trim() || !formLastName.trim() || !formNationalId.trim()) {
       alert('لطفاً نام، نام خانوادگی و کد ملی فرد را وارد کنید. کد پرسنلی اختیاری است.');
+      return;
+    }
+    if (isLoadingPersonnelNationalId) {
+      alert('لطفاً تا دریافت کد ملی فعلی پرسنل صبر کنید.');
       return;
     }
 
     try {
       let updatedList: Personnel[];
       if (editingPersonnel) {
+        const accountResponse = await fetch(`/api/users/personnel/${encodeURIComponent(editingPersonnel.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nationalId: formNationalId }),
+        });
+        const accountResult = await accountResponse.json();
+        if (!accountResponse.ok || !accountResult.success) {
+          throw new Error(accountResult.error || 'ویرایش کد ملی پرسنل انجام نشد.');
+        }
+
         const pData = {
           ...editingPersonnel,
           firstName: formFirstName,
@@ -5629,6 +5659,7 @@ export default function Home() {
         formLastName={formLastName}
         formPersonalCode={formPersonalCode}
         formNationalId={formNationalId}
+        isLoadingNationalId={isLoadingPersonnelNationalId}
         formJobGroup={formJobGroup}
         formPosition={formPosition}
         formEmploymentType={formEmploymentType}
