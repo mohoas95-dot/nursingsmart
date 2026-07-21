@@ -1094,15 +1094,7 @@ export default function Home() {
   
   // Destructure for backward compatibility with existing code
   const showAddPersonnelModal = personnelForm.isOpen;
-  const setShowAddPersonnelModal = (open: boolean) => {
-    if (open) personnelForm.openAddModal();
-    else personnelForm.closeModal();
-  };
   const editingPersonnel = personnelForm.editingPersonnel;
-  const setEditingPersonnel = (p: Personnel | null) => {
-    if (p) personnelForm.openEditModal(p);
-    else personnelForm.closeModal();
-  };
 
   // Forms states for Personnel (destructured from hook)
   const formFirstName = personnelForm.formData.firstName;
@@ -1722,35 +1714,16 @@ export default function Home() {
 
   // --- Personnel CRUD Helpers ---
   const handleOpenAddPersonnel = () => {
-    setEditingPersonnel(null);
-    setFormFirstName('');
-    setFormLastName('');
-    setFormPersonalCode('');
-    setFormNationalId('');
     setPendingPersonnelId(null);
-    setFormJobGroup('nurse');
-    setFormPosition('general');
-    setFormEmploymentType('official');
-    setFormExperienceYears(1);
-    setFormActive(true);
-    setFormCanBeShiftLeader(true);
-    setShowAddPersonnelModal(true);
+    personnelForm.openAddModal();
   };
 
   const handleOpenEditPersonnel = (p: Personnel) => {
-    setEditingPersonnel(p);
-    setFormFirstName(p.firstName);
-    setFormLastName(p.lastName);
-    setFormPersonalCode(p.personalCode);
-    setFormNationalId('');
+    // openEditModal populates every field before making the modal visible.
+    // Do not call openAddModal here: it resets the form and turns an edit into
+    // an empty "new personnel" form.
     setPendingPersonnelId(null);
-    setFormJobGroup(p.jobGroup);
-    setFormPosition(p.position);
-    setFormEmploymentType(p.employmentType);
-    setFormExperienceYears(p.experienceYears);
-    setFormActive(p.active);
-    setFormCanBeShiftLeader(p.canBeShiftLeader);
-    setShowAddPersonnelModal(true);
+    personnelForm.openEditModal(p);
   };
 
   const handleSavePersonnel = async (e: React.FormEvent) => {
@@ -1815,7 +1788,7 @@ export default function Home() {
       await saveState(updatedList, requests, settings, customHolidays, { mode: 'full_resolve' });
       setPendingPersonnelId(null);
       setFormNationalId('');
-      setShowAddPersonnelModal(false);
+      personnelForm.closeModal();
     } catch (error) {
       console.error("Error saving personnel:", error);
       alert("خطا در ثبت اطلاعات پرسنل: " + (error instanceof Error ? error.message : String(error)));
@@ -5650,7 +5623,7 @@ export default function Home() {
 
       <AddPersonnelModal
         isOpen={showAddPersonnelModal}
-        onClose={() => setShowAddPersonnelModal(false)}
+        onClose={personnelForm.closeModal}
         editingPersonnel={editingPersonnel}
         formFirstName={formFirstName}
         formLastName={formLastName}
