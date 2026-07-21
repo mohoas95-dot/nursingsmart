@@ -1094,15 +1094,7 @@ export default function Home() {
   
   // Destructure for backward compatibility with existing code
   const showAddPersonnelModal = personnelForm.isOpen;
-  const setShowAddPersonnelModal = (open: boolean) => {
-    if (open) personnelForm.openAddModal();
-    else personnelForm.closeModal();
-  };
   const editingPersonnel = personnelForm.editingPersonnel;
-  const setEditingPersonnel = (p: Personnel | null) => {
-    if (p) personnelForm.openEditModal(p);
-    else personnelForm.closeModal();
-  };
 
   // Forms states for Personnel (destructured from hook)
   const formFirstName = personnelForm.formData.firstName;
@@ -1114,6 +1106,7 @@ export default function Home() {
   const formNationalId = personnelForm.formData.nationalId;
   const setFormNationalId = personnelForm.setFormNationalId;
   const [pendingPersonnelId, setPendingPersonnelId] = useState<string | null>(null);
+  const [isLoadingPersonnelNationalId, setIsLoadingPersonnelNationalId] = useState(false);
   const formJobGroup = personnelForm.formData.jobGroup;
   const setFormJobGroup = personnelForm.setFormJobGroup;
   const formPosition = personnelForm.formData.position;
@@ -1722,48 +1715,58 @@ export default function Home() {
 
   // --- Personnel CRUD Helpers ---
   const handleOpenAddPersonnel = () => {
-    setEditingPersonnel(null);
-    setFormFirstName('');
-    setFormLastName('');
-    setFormPersonalCode('');
-    setFormNationalId('');
     setPendingPersonnelId(null);
-    setFormJobGroup('nurse');
-    setFormPosition('general');
-    setFormEmploymentType('official');
-    setFormExperienceYears(1);
-    setFormActive(true);
-    setFormCanBeShiftLeader(true);
-    setShowAddPersonnelModal(true);
+    setIsLoadingPersonnelNationalId(false);
+    personnelForm.openAddModal();
   };
 
-  const handleOpenEditPersonnel = (p: Personnel) => {
-    setEditingPersonnel(p);
-    setFormFirstName(p.firstName);
-    setFormLastName(p.lastName);
-    setFormPersonalCode(p.personalCode);
-    setFormNationalId('');
+  const handleOpenEditPersonnel = async (p: Personnel) => {
+    // openEditModal populates every field before making the modal visible.
+    // Do not call openAddModal here: it resets the form and turns an edit into
+    // an empty "new personnel" form.
     setPendingPersonnelId(null);
-    setFormJobGroup(p.jobGroup);
-    setFormPosition(p.position);
-    setFormEmploymentType(p.employmentType);
-    setFormExperienceYears(p.experienceYears);
-    setFormActive(p.active);
-    setFormCanBeShiftLeader(p.canBeShiftLeader);
-    setShowAddPersonnelModal(true);
+    personnelForm.openEditModal(p);
+    setIsLoadingPersonnelNationalId(true);
+    try {
+      const response = await fetch(`/api/users/personnel/${encodeURIComponent(p.id)}`);
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'دریافت کد ملی پرسنل انجام نشد.');
+      }
+      setFormNationalId(result.nationalId);
+    } catch (error) {
+      console.error('Error loading personnel national ID:', error);
+      alert('کد ملی این پرسنل دریافت نشد: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsLoadingPersonnelNationalId(false);
+    }
   };
 
   const handleSavePersonnel = async (e: React.FormEvent) => {
     e.preventDefault();
     // کد پرسنلی اختیاری است؛ فقط نام، نام خانوادگی و (برای پرسنل جدید) کد ملی الزامی هستند.
-    if (!formFirstName.trim() || !formLastName.trim() || (!editingPersonnel && !formNationalId.trim())) {
+    if (!formFirstName.trim() || !formLastName.trim() || !formNationalId.trim()) {
       alert('لطفاً نام، نام خانوادگی و کد ملی فرد را وارد کنید. کد پرسنلی اختیاری است.');
+      return;
+    }
+    if (isLoadingPersonnelNationalId) {
+      alert('لطفاً تا دریافت کد ملی فعلی پرسنل صبر کنید.');
       return;
     }
 
     try {
       let updatedList: Personnel[];
       if (editingPersonnel) {
+        const accountResponse = await fetch(`/api/users/personnel/${encodeURIComponent(editingPersonnel.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nationalId: formNationalId }),
+        });
+        const accountResult = await accountResponse.json();
+        if (!accountResponse.ok || !accountResult.success) {
+          throw new Error(accountResult.error || 'ویرایش کد ملی پرسنل انجام نشد.');
+        }
+
         const pData = {
           ...editingPersonnel,
           firstName: formFirstName,
@@ -1815,7 +1818,7 @@ export default function Home() {
       await saveState(updatedList, requests, settings, customHolidays, { mode: 'full_resolve' });
       setPendingPersonnelId(null);
       setFormNationalId('');
-      setShowAddPersonnelModal(false);
+      personnelForm.closeModal();
     } catch (error) {
       console.error("Error saving personnel:", error);
       alert("خطا در ثبت اطلاعات پرسنل: " + (error instanceof Error ? error.message : String(error)));
@@ -5650,12 +5653,13 @@ export default function Home() {
 
       <AddPersonnelModal
         isOpen={showAddPersonnelModal}
-        onClose={() => setShowAddPersonnelModal(false)}
+        onClose={personnelForm.closeModal}
         editingPersonnel={editingPersonnel}
         formFirstName={formFirstName}
         formLastName={formLastName}
         formPersonalCode={formPersonalCode}
         formNationalId={formNationalId}
+        isLoadingNationalId={isLoadingPersonnelNationalId}
         formJobGroup={formJobGroup}
         formPosition={formPosition}
         formEmploymentType={formEmploymentType}
