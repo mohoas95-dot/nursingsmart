@@ -12,6 +12,10 @@ import { prisma } from '../../../../lib/prisma';
 import {
   deleteDepartmentStorage,
   departmentExistsInIndex,
+  StorageConflictError,
+  StorageValidationError,
+  StorageUnavailableError,
+  StorageConfigurationError,
 } from '../../../../lib/s3Storage';
 
 // حذف قطعی و دائمی بخش: تمام اسناد ذخیره‌سازی ابری (پرسنل، درخواست‌ها، تنظیمات،
@@ -102,6 +106,18 @@ export async function DELETE(request: NextRequest) {
       message: 'بخش و تمام سوابق و حساب‌های مرتبط با آن به‌صورت دائمی حذف شد.',
     });
   } catch (error) {
+    if (error instanceof StorageConflictError) {
+      return authJson({ success: false, error: 'خطای همزمانی در حذف اطلاعات ابری بخش؛ لطفاً دوباره تلاش کنید.' }, { status: 409 });
+    }
+    if (error instanceof StorageValidationError) {
+      return authJson({ success: false, error: 'خطای اعتبارسنجی در اطلاعات ذخیره‌شده بخش.' }, { status: 422 });
+    }
+    if (error instanceof StorageUnavailableError) {
+      return authJson({ success: false, error: 'فضای ذخیره‌سازی ابری موقتاً در دسترس نیست؛ لطفاً کمی بعد دوباره تلاش کنید.' }, { status: 503 });
+    }
+    if (error instanceof StorageConfigurationError) {
+      return authJson({ success: false, error: 'پیکربندی فضای ذخیره‌سازی ابری ناقص یا اشتباه است.' }, { status: 503 });
+    }
     return authErrorResponse(error);
   }
 }
