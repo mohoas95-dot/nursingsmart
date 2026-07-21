@@ -380,20 +380,17 @@ async function deleteObjectHard(key: string): Promise<void> {
 // re-authenticated department management API, never from the generic storage API.
 export async function deleteDepartmentStorage(departmentId: string): Promise<void> {
   // Unpublish the department first so no reader/writer can target it mid-purge.
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const current = await readDepartmentIndexOptional();
-    const departments = current?.data || [];
-    if (!departments.some(department => department.id === departmentId)) break;
-    try {
-      await writeResource(
-        { type: 'departments' },
-        departments.filter(department => department.id !== departmentId),
-        current?.etag || null,
-      );
-      break;
-    } catch (error) {
-      if (!(error instanceof StorageConflictError) || attempt === 4) throw error;
-    }
+  // Use resolve-conflict writer so concurrent index modifications don't cause
+  // spurious failures; the conflict resolver re-reads, retries with the freshest
+  // ETag and ultimately falls back to an unconditional last-writer-wins write.
+  const current = await readDepartmentIndexOptional();
+  const departments = current?.data || [];
+  if (departments.some(department => department.id === departmentId)) {
+    await writeResourceResolvingConflict(
+      { type: 'departments' },
+      departments.filter(department => department.id !== departmentId),
+      current?.etag || null,
+    );
   }
 
   const keys = await listDepartmentObjectKeys(departmentId);
