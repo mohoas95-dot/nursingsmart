@@ -92,10 +92,12 @@ export async function POST(request: NextRequest) {
     const existingNewUser = await prisma.user.findUnique({
       where: { nationalId: input.newHeadNurse.nationalId },
     });
-    if (existingNewUser?.active) {
-      return authJson({ success: false, error: 'برای این کد ملی قبلاً حساب کاربری فعال ساخته شده است.' }, { status: 409 });
+    // مدیر سامانه (ADMIN) قابل تنزل به سرپرستار نیست.
+    if (existingNewUser?.active && existingNewUser.role === 'ADMIN') {
+      return authJson({ success: false, error: 'این کد ملی متعلق به مدیر سامانه است و نمی‌توان آن را به سرپرستار بخش تغییر داد.' }, { status: 409 });
     }
-    if (existingNewUser && existingNewUser.role !== 'HEAD_NURSE') {
+    // حساب غیرفعال فقط در صورتی قابل استفادهٔ مجدد است که قبلاً سرپرستار بوده باشد.
+    if (existingNewUser && !existingNewUser.active && existingNewUser.role !== 'HEAD_NURSE') {
       return authJson({ success: false, error: 'این کد ملی قابل ثبت به‌عنوان سرپرستار نیست.' }, { status: 409 });
     }
 
