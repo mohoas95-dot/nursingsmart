@@ -34,6 +34,9 @@ export interface AddPersonnelModalProps {
   formExperienceYears: number | string;
   formActive: boolean;
   formCanBeShiftLeader: boolean;
+  formIsFixedRoutine?: boolean;
+  formRoutineType?: Personnel['routineType'];
+  formRoutinePattern?: string;
 
   // Form setters
   setFormFirstName: (value: string) => void;
@@ -46,6 +49,9 @@ export interface AddPersonnelModalProps {
   setFormExperienceYears: (value: number | string) => void;
   setFormActive: (value: boolean) => void;
   setFormCanBeShiftLeader: (value: boolean) => void;
+  setFormIsFixedRoutine?: (value: boolean) => void;
+  setFormRoutineType?: (value: Personnel['routineType']) => void;
+  setFormRoutinePattern?: (value: string) => void;
 
   // Submit handler
   onSubmit: (e: React.FormEvent) => void;
@@ -70,6 +76,9 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     formExperienceYears,
     formActive,
     formCanBeShiftLeader,
+    formIsFixedRoutine,
+    formRoutineType = 'none',
+    formRoutinePattern = '',
     setFormFirstName,
     setFormLastName,
     setFormPersonalCode,
@@ -80,6 +89,9 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     setFormExperienceYears,
     setFormActive,
     setFormCanBeShiftLeader,
+    setFormIsFixedRoutine,
+    setFormRoutineType,
+    setFormRoutinePattern,
     onSubmit,
     parseNumberInput,
   } = props;
@@ -223,7 +235,7 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
             </div>
           </div>
 
-          <div className="pt-3 flex flex-col gap-2 border-t border-slate-100">
+          <div className="pt-3 flex flex-col gap-3 border-t border-slate-100">
             <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700">
               <input
                 type="checkbox"
@@ -246,6 +258,56 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
                 قابلیت سرشیفت شدن (ویژه استاف و کارشناس عمومی)
               </label>
             )}
+
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 space-y-3">
+              <label className="flex items-start gap-2 cursor-pointer text-xs font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!!formIsFixedRoutine}
+                  onChange={(e) => setFormIsFixedRoutine?.(e.target.checked)}
+                  className="rounded border-amber-300 accent-amber-600 text-amber-600 mt-0.5"
+                />
+                <span className="leading-5">
+                  برچسب راهنما قدیمی: <b>روتین ثابت</b> — نگه داشته شده برای سازگاری (اکنون از فیلد روتین دقیق زیر استفاده کنید)
+                </span>
+              </label>
+
+              <div className="space-y-2 pt-2 border-t border-amber-100">
+                <label className="block text-[11px] font-black text-amber-800">🎯 تگ روتین شیفت (راهنمای Solver — تحلیل سنگین را دور می‌زند، محدودیت سفت ایجاد نمی‌کند)</label>
+                <select
+                  value={formRoutineType}
+                  onChange={(e) => setFormRoutineType?.(e.target.value as any)}
+                  className="w-full text-xs font-bold bg-white border border-amber-300 rounded-xl px-3 py-2.5 focus:border-amber-500 focus:outline-none"
+                  id="select-routine-type"
+                >
+                  <option value="none">بدون روتین خاص — Solver آزاد</option>
+                  <option value="morning">صبح‌کار (M) — فقط صبح</option>
+                  <option value="morning_evening">صبح و عصر کار (M,E,ME)</option>
+                  <option value="evening_night">عصر و شب کار (E,N,EN)</option>
+                  <option value="night">شب‌کار (N,EN,MN)</option>
+                  <option value="24h">۲۴ ساعته (MEN,EN,MN,ME)</option>
+                  <option value="rotating">چرخشی (برخی روزها ۲۴، برخی عصر+شب، برخی صبح/شب تک) — الگوی کلاسیک</option>
+                  <option value="custom">سفارشی — الگو را دستی وارد کن</option>
+                </select>
+                <p className="text-[10px] text-slate-500 font-bold leading-5">
+                  چرخشی یعنی: بعضی روزها ۲۴ میاد (MEN)، بعضی مواقع عصر و شب (EN)، بعضی مواقع صبح تک (M) یا شب تک (N). Solver به این روتین احترام می‌گذارد و از تکه‌تکه شدن M M E E N جلوگیری می‌کند و شیفت‌ها را خوشه‌ای (Shift Clustering) می‌چیند.
+                </p>
+
+                {formRoutineType === 'custom' && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 mb-1">الگوی سفارشی (مثال: MEN OFF OFF EN M N OFF)</label>
+                    <input
+                      type="text"
+                      value={formRoutinePattern}
+                      onChange={(e) => setFormRoutinePattern?.(e.target.value)}
+                      placeholder="MEN OFF OFF EN M N OFF"
+                      className="w-full text-xs font-bold bg-white border border-amber-300 rounded-xl px-3 py-2.5 focus:border-amber-500 focus:outline-none font-mono"
+                      id="input-routine-pattern"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <button

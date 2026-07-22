@@ -472,40 +472,26 @@ export function solveNursingSchedule(
   const assistants = activePersonnel.filter(p => p.jobGroup === 'assistant');
 
   // Pre-process Leaves
+  // Clarification: If personnel is on leave on holiday, count 7 hours for that day (per user request 2026-07-22)
+  // Previously holiday leave was converted to OFF and shifted; now it is kept as L and counts as 7h on holiday
   activePersonnel.forEach(p => {
     let leaveDayCount = 0;
     let isCurrentlyOnLeave = false;
-    let leaveStartShifted = false;
 
     for (let d = 1; d <= totalDays; d++) {
       const req = dailyRequests[p.id][d];
-      const isHoliday = calendar[d - 1].isHoliday;
 
       if (req && req.requestType === 'leave') {
         if (!isCurrentlyOnLeave) {
-          if (isHoliday) {
-            assignments[p.id][d] = 'OFF';
-            leaveStartShifted = true;
-            continue;
-          } else {
-            isCurrentlyOnLeave = true;
-            leaveDayCount = 1;
-            assignments[p.id][d] = `L${leaveDayCount}` as ShiftType;
-          }
-        } else {
-          leaveDayCount++;
-          assignments[p.id][d] = `L${leaveDayCount}` as ShiftType;
-        }
-      } else {
-        if (leaveStartShifted && req?.requestType === 'leave') {
           isCurrentlyOnLeave = true;
           leaveDayCount = 1;
-          assignments[p.id][d] = `L${leaveDayCount}` as ShiftType;
-          leaveStartShifted = false;
         } else {
-          isCurrentlyOnLeave = false;
-          leaveDayCount = 0;
+          leaveDayCount++;
         }
+        assignments[p.id][d] = `L${leaveDayCount}` as ShiftType;
+      } else {
+        isCurrentlyOnLeave = false;
+        leaveDayCount = 0;
       }
     }
   });
@@ -1464,8 +1450,19 @@ export function generatePersonnelReports(
       mnCount * SHIFT_HOURS.MN +
       menCount * SHIFT_HOURS.MEN;
 
-    const leaveRate = getLeaveHours(p.employmentType);
-    const leaveHours = leaveCount * leaveRate;
+    // Clarification: If personnel is on leave on holiday, count 7 hours for that day
+    // Previously holiday leave was converted to OFF; now it is kept as L and counts as 7h on holiday, employment-based otherwise
+    let leaveHours = 0;
+    for (let d = 1; d <= totalDays; d++) {
+      const shift = pAssignments[d] || 'OFF';
+      if (!shift.startsWith('L')) continue;
+      const isHoliday = calendar[d - 1]?.isHoliday;
+      if (isHoliday) {
+        leaveHours += 7.0; // per user request: 7 hours if leave on holiday
+      } else {
+        leaveHours += getLeaveHours(p.employmentType);
+      }
+    }
     workedHours += leaveHours;
 
     const experienceHours = getSeniorityHours(p);

@@ -21,9 +21,25 @@ export interface Personnel {
   username?: string;
   password?: string;
   locked?: boolean;
+  /** Lightweight guidance tag for solver to bypass heavy historical analysis. Does NOT restrict solver. */
+  isFixedRoutine?: boolean;
+  /** Detailed routine tag entered by head nurse: morning, rotating, 24h, etc. This is guidance map, not hard restriction. */
+  routineType?: RoutineType;
+  /** Optional custom pattern for rotating staff, e.g., "MEN OFF OFF EN M" */
+  routinePattern?: string;
 }
 
-export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
+export type RoutineType =
+  | 'none'
+  | 'morning' // صبح‌کار
+  | 'morning_evening' // صبح و عصر کار
+  | 'evening_night' // عصر و شب کار
+  | 'night' // شب‌کار
+  | '24h' // 24 ساعته (MEN/EN/MN)
+  | 'rotating' // چرخشی: بعضی روزها 24، بعضی عصر+شب، بعضی صبح تک یا شب تک
+  | 'custom'; // الگوی سفارشی
+
+export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'UNFILLED' | string;
 
 export interface JalaliDateInfo {
   year: number;
@@ -154,6 +170,7 @@ export interface AggregatedAlert {
   severity: 'low' | 'medium' | 'high';
   isExpanded: boolean;
   groupType?: 'personnel' | 'general';
+  jobGroup?: JobGroup;
 }
 
 export interface SmartSuggestion {

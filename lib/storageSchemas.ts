@@ -27,7 +27,6 @@ export const PersonnelSchema = z.object({
   id: nonEmptyId,
   firstName: z.string().trim().min(1).max(200),
   lastName: z.string().trim().min(1).max(200),
-  // کد پرسنلی اختیاری است؛ مقدار خالی مجاز است.
   personalCode: z.string().trim().max(100),
   jobGroup: z.enum(['nurse', 'assistant']),
   position: z.enum(['supervisor', 'staff', 'general', 'none']),
@@ -39,6 +38,9 @@ export const PersonnelSchema = z.object({
   username: z.string().max(200).optional(),
   password: z.string().max(500).optional(),
   locked: z.boolean().optional(),
+  isFixedRoutine: z.boolean().optional(),
+  routineType: z.enum(['none', 'morning', 'morning_evening', 'evening_night', 'night', '24h', 'rotating', 'custom']).optional(),
+  routinePattern: z.string().max(500).optional(),
 }).strict();
 
 export const PersonnelListSchema = z.array(PersonnelSchema).superRefine((items, ctx) => {

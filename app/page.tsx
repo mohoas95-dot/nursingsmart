@@ -54,13 +54,18 @@ import { generateSmartSuggestions } from '../lib/smartSuggestion';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
 import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
+import { runArenaFacade } from '../features/scheduling/facades/arena-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
+import { SolverArenaProgress } from '../features/scheduling/components/SolverArenaProgress';
+import { ArenaComparisonModal } from '../features/scheduling/components/ArenaComparisonModal';
+import { UnfilledLegend } from '../features/scheduling/components/UnfilledShiftCell';
 import { useScheduleState } from '../features/scheduling/hooks/useScheduleState';
 import { usePersonnelForm } from '../features/personnel/hooks/usePersonnelForm';
+import { useMultiScenarioSolver } from '../features/scheduling/hooks/useMultiScenarioSolver';
 import {
   Calendar as CalendarIcon,
   Users,
@@ -275,11 +280,15 @@ export default function Home() {
     isRowLocked,
   } = useScheduleState();
 
+  // Multi-Scenario Solver (Arena) — per clarification: auto 100-500 scenarios, TOP 3-5 display
+  const multiSolver = useMultiScenarioSolver();
+  const [showArenaModal, setShowArenaModal] = useState<boolean>(false);
+
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
 
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
-  const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean}>({general: true, personnel: true});
+  const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, nurses: boolean, assistants: boolean}>({general: true, nurses: true, assistants: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
 
   const personnelRef = React.useRef(personnel);
@@ -1119,6 +1128,12 @@ export default function Home() {
   const setFormActive = personnelForm.setFormActive;
   const formCanBeShiftLeader = personnelForm.formData.canBeShiftLeader;
   const setFormCanBeShiftLeader = personnelForm.setFormCanBeShiftLeader;
+  const formIsFixedRoutine = personnelForm.formData.isFixedRoutine;
+  const setFormIsFixedRoutine = personnelForm.setFormIsFixedRoutine;
+  const formRoutineType = personnelForm.formData.routineType;
+  const setFormRoutineType = personnelForm.setFormRoutineType;
+  const formRoutinePattern = personnelForm.formData.routinePattern;
+  const setFormRoutinePattern = personnelForm.setFormRoutinePattern;
 
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
@@ -1556,6 +1571,188 @@ export default function Home() {
     }
   };
 
+  // --- NEW: Multi-Scenario Arena Runner (100-500 auto, TOP 3-5) ---
+  // Fixes: shows several top lists per scoring + respects exact staffing demand
+  const handleRunArena = async () => {
+    const deptId = selectedDepartmentId || 'sepehr';
+    const prevMonthKey = currentMonth > 1 ? `${currentYear}_${currentMonth - 1}` : `${currentYear - 1}_12`;
+    const monthKey = `${currentYear}_${currentMonth}`;
+
+    // Retrieve previous month schedule for memory freeze (prevMonthKey from DB)
+    const nextDbForPrev = getFreshDbCopy();
+    const prevSched = nextDbForPrev.deptData[deptId]?.schedules?.[prevMonthKey] || null;
+
+    const persistenceAdapter = {
+      saveSchedule: async (newSchedule: any) => {
+        const nextDb = getFreshDbCopy();
+        if (!nextDb.deptData) nextDb.deptData = {};
+        const oldDept = nextDb.deptData[deptId] || {
+          personnel: [],
+          requests: [],
+          settings_system: INITIAL_SETTINGS,
+          settings_credentials: { username: 'headnurse', password: '123456' },
+          holidays: {},
+          firstDayOfWeek: {},
+          schedules: {},
+        };
+        const updatedDept = {
+          ...oldDept,
+          schedules: {
+            ...oldDept.schedules,
+            [monthKey]: newSchedule,
+          },
+        };
+        nextDb.deptData[deptId] = updatedDept;
+        await saveDbState(nextDb);
+      },
+    };
+
+    const uiAdapter = {
+      onProgress: (msg: string) => console.log('Arena progress:', msg),
+      showError: (msg: string) => {
+        console.error('Arena error:', msg);
+        alert('خطا در آِرنا هوشمند: ' + msg);
+      },
+    };
+
+    try {
+      const result = await runArenaFacade(
+        {
+          year: currentYear,
+          month: currentMonth,
+          personnel,
+          requests,
+          settings,
+          holidays: customHolidays,
+          firstDayOfWeek: firstDayOfWeekIndex,
+          monthlyDutyHours,
+          currentSchedule: schedule,
+          previousMonthSchedule: prevSched,
+          finalizedMonths: [...finalizedNursesMonths, ...finalizedAssistantsMonths],
+          humanApprovedLocks: lockedRows.flatMap((pId) => {
+            // For demo, treat locked rows as human approved? Actually human approved locks are manual edits
+            // We'll keep empty for now, manual edits already handled via editingCell
+            return [];
+          }),
+        },
+        persistenceAdapter,
+        uiAdapter,
+        deptId
+      );
+
+      if (result.error) {
+        alert(result.error);
+        return;
+      }
+
+      if (result.arena && result.topAlternatives.length > 0) {
+        // Show comparison modal with TOP 3-5
+        setShowArenaModal(true);
+        // Store arena in multiSolver state? We'll use multiSolver's arena
+        // For simplicity, we also set multiSolver's arena via its run? But we used facade directly
+        // We will manually set via multiSolver? Instead, we rely on showArenaModal and result
+        (window as any)._lastArenaResult = result.arena; // for debugging, modal will read from multiSolver.arena or this
+        // Also update local schedule to best if user wants? Already persisted best
+        alert(`آِرنا هوشمند تکمیل شد: ${result.arena.totalScenarios} سناریو بررسی شد. TOP ${result.topAlternatives.length} سناریوی برتر در پنل مقایسه نمایش داده می‌شود. بهترین امتیاز: ${result.best?.score?.total}`);
+      }
+    } catch (e) {
+      alert('خطا در اجرای آِرنا: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  // Alternate arena runner using useMultiScenarioSolver hook (non-blocking UI)
+  const handleRunArenaWithHook = async () => {
+    const prevMonthKey = currentMonth > 1 ? `${currentYear}_${currentMonth - 1}` : `${currentYear - 1}_12`;
+    const nextDb = getFreshDbCopy();
+    const deptId = selectedDepartmentId || 'sepehr';
+    const prevSched = nextDb.deptData[deptId]?.schedules?.[prevMonthKey] || null;
+
+    // Build previous memory
+    let prevMemory: any[] | undefined;
+    if (prevSched) {
+      const lastDay = Object.keys(prevSched.assignments[Object.keys(prevSched.assignments)[0] ?? ''] ?? {}).length || 31;
+      prevMemory = Object.keys(prevSched.assignments).map(pId => {
+        const asgn = prevSched.assignments[pId];
+        const lastTwo: string[] = [];
+        for (let d = Math.max(1, lastDay - 1); d <= lastDay; d++) if (asgn[d]) lastTwo.push(asgn[d]);
+        return { personnelId: pId, lastTwoDays: lastTwo };
+      });
+    }
+
+    // Build calendar Days with routine respect
+    const { generateJalaliMonthCalendar } = await import('../lib/jalali');
+    const calDays = generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
+    const calendarDTO = calDays.map((d: any) => ({
+      day: d.day,
+      dayOfWeek: d.dayOfWeek,
+      isHoliday: d.isHoliday,
+      isFriday: d.isFriday,
+      holidayTitle: d.holidayTitle,
+    }));
+
+    const demandDTO = {
+      weekday: settings.demand.weekday,
+      holiday: settings.demand.holiday,
+    };
+
+    const reqByPerson = new Map<string, number>();
+    for (const r of requests) reqByPerson.set(r.personnelId, (reqByPerson.get(r.personnelId) ?? 0) + 1);
+
+    const { autoScenarioCount } = await import('../domain/solver/types');
+    const autoCount = autoScenarioCount(personnel.filter(p => p.active).length);
+
+    const solverInput = {
+      year: currentYear,
+      month: currentMonth,
+      personnel: personnel.filter(p => p.active).map(p => ({
+        id: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        jobGroup: p.jobGroup as any,
+        position: p.position as any,
+        employmentType: p.employmentType as any,
+        experienceYears: p.experienceYears,
+        active: p.active,
+        canBeShiftLeader: p.canBeShiftLeader,
+        orderIndex: p.orderIndex,
+        isFixedRoutine: p.isFixedRoutine,
+        routineType: (p.routineType as any) ?? 'none',
+        routinePattern: p.routinePattern,
+        hasNoRequests: (reqByPerson.get(p.id) ?? 0) === 0,
+      })),
+      requests: requests.map(r => ({
+        id: r.id,
+        personnelId: r.personnelId,
+        requestType: r.requestType as any,
+        preferredShift: r.preferredShift as any,
+        patternSteps: r.patternSteps,
+        isEssential: r.isEssential,
+        scope: r.scope as any,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        selectedDays: r.selectedDays,
+        isPublished: [...finalizedNursesMonths, ...finalizedAssistantsMonths].includes(`${currentYear}_${currentMonth}`),
+      })),
+      calendar: calendarDTO,
+      demand: demandDTO,
+      dutyHours: {
+        official: settings.dutyHours.official,
+        contract: settings.dutyHours.contract,
+        conscript: settings.dutyHours.conscript,
+        overtime: settings.dutyHours.overtime,
+      },
+      scenarioCount: autoCount,
+      previousMonthMemory: prevMemory,
+      previousMonthKey: prevMonthKey,
+      isPublishedMonth: [...finalizedNursesMonths, ...finalizedAssistantsMonths].includes(`${currentYear}_${currentMonth}`),
+      finalizedMonths: [...finalizedNursesMonths, ...finalizedAssistantsMonths],
+      baselineAssignments: schedule?.assignments as any,
+    };
+
+    await multiSolver.run(solverInput as any, { repairEnabled: true, maxChainDepth: 3 });
+    setShowArenaModal(true);
+  };
+
   const handleToggleLock = async (jobGroup: JobGroup) => {
     if (role === 'personnel') return;
     try {
@@ -1777,7 +1974,10 @@ export default function Home() {
           employmentType: formEmploymentType,
           experienceYears: Number(formExperienceYears),
           active: formActive,
-          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader
+          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          isFixedRoutine: formIsFixedRoutine,
+          routineType: formRoutineType,
+          routinePattern: formRoutinePattern
         };
         updatedList = personnel.map(p => p.id === editingPersonnel.id ? pData : p);
       } else {
@@ -1794,6 +1994,9 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          isFixedRoutine: formIsFixedRoutine,
+          routineType: formRoutineType,
+          routinePattern: formRoutinePattern,
           orderIndex: personnel.length
         };
         const accountResponse = await fetch('/api/users', {
@@ -3225,29 +3428,8 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5">
-              {role !== 'personnel' && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() => handleRunOptimizer('nurse')}
-                    disabled={solvingTarget !== null}
-                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-indigo-500/10 cursor-pointer"
-                    id="btn-run-solver-nurse"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${solvingTarget === 'nurse' ? 'animate-spin' : ''}`} />
-                    {solvingTarget === 'nurse' ? 'در حال بازتولید هوشمند پرستاران...' : 'بازتولید هوشمند پرستاران'}
-                  </button>
-                  <button
-                    onClick={() => handleRunOptimizer('assistant')}
-                    disabled={solvingTarget !== null}
-                    className="flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-teal-500/10 cursor-pointer"
-                    id="btn-run-solver-assistant"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${solvingTarget === 'assistant' ? 'animate-spin' : ''}`} />
-                    {solvingTarget === 'assistant' ? 'در حال بازتولید هوشمند کمک‌بهیاران...' : 'بازتولید هوشمند کمک‌بهیاران'}
-                  </button>
-                </div>
-              )}
+            <div className="flex items-center gap-2 text-[11px] font-bold text-slate-500">
+              <UnfilledLegend />
             </div>
           </div>
 
@@ -3766,7 +3948,7 @@ export default function Home() {
 
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs font-semibold print:hidden">
                 <span className="text-slate-500">راهنمای نوبت‌های کاری:</span>
-                <div className="flex flex-wrap gap-4">
+                <div className="flex flex-wrap gap-4 items-center">
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center rounded font-bold">صبح</span> صبح (M)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">شب</span> شب (N)</span>
@@ -3774,6 +3956,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> کل روز (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
+                  <UnfilledLegend />
                 </div>
               </div>
 
@@ -5666,6 +5849,9 @@ export default function Home() {
         formExperienceYears={formExperienceYears}
         formActive={formActive}
         formCanBeShiftLeader={formCanBeShiftLeader}
+        formIsFixedRoutine={formIsFixedRoutine}
+        formRoutineType={formRoutineType}
+        formRoutinePattern={formRoutinePattern}
         setFormFirstName={setFormFirstName}
         setFormLastName={setFormLastName}
         setFormPersonalCode={setFormPersonalCode}
@@ -5676,6 +5862,9 @@ export default function Home() {
         setFormExperienceYears={setFormExperienceYears}
         setFormActive={setFormActive}
         setFormCanBeShiftLeader={setFormCanBeShiftLeader}
+        setFormIsFixedRoutine={setFormIsFixedRoutine}
+        setFormRoutineType={setFormRoutineType}
+        setFormRoutinePattern={setFormRoutinePattern}
         onSubmit={handleSavePersonnel}
         parseNumberInput={parseNumberInput}
       />
@@ -5691,6 +5880,59 @@ export default function Home() {
         onDismissAlert={handleDismissAlert}
         onAlertClick={handleAlertClick}
         extractWarningDay={extractWarningDay}
+      />
+
+      <SolverArenaProgress
+        progress={multiSolver.progress}
+        status={multiSolver.status}
+        error={multiSolver.error}
+        onCancel={() => multiSolver.cancel()}
+      />
+
+      <ArenaComparisonModal
+        isOpen={showArenaModal}
+        onClose={() => setShowArenaModal(false)}
+        arena={multiSolver.arena || (typeof window !== 'undefined' ? (window as any)._lastArenaResult : null)}
+        onSelectScenario={async (scenarioId) => {
+          const arena = multiSolver.arena || (window as any)._lastArenaResult;
+          if (!arena) return;
+          const selected = arena.allScenariosSorted.find((s: any) => s.id === scenarioId) || arena.categories.find((c: any) => c.scenario?.id === scenarioId)?.scenario;
+          if (!selected) return;
+          if (!confirm(`آیا می‌خواهید سناریوی ${selected.strategy} با امتیاز ${selected.score?.total} را به عنوان برنامه نهایی انتخاب و ذخیره کنید؟`)) return;
+
+          const deptId = selectedDepartmentId || 'sepehr';
+          const monthKey = `${currentYear}_${currentMonth}`;
+          const nextDb = getFreshDbCopy();
+          const oldDept = nextDb.deptData[deptId];
+          if (!oldDept) return;
+
+          const newSchedule = {
+            year: currentYear,
+            month: currentMonth,
+            assignments: selected.assignments as any,
+            shiftLeaders: selected.shiftLeaders as any,
+            warnings: selected.violations.map((v: any) => v.messageFa),
+            finalized: false,
+            dismissedWarnings: [],
+            lockedRows: [],
+            changeLogs: [
+              `انتخاب از آِرنا: ${selected.id} استراتژی ${selected.strategy} امتیاز ${selected.score?.total} — TOP ${arena.categories.length}`,
+              ...(selected.repairLog?.slice(0, 3).map((l: any) => l.reasonFa) ?? []),
+            ],
+          };
+
+          const updatedDept = {
+            ...oldDept,
+            schedules: {
+              ...oldDept.schedules,
+              [monthKey]: newSchedule,
+            },
+          };
+          nextDb.deptData[deptId] = updatedDept;
+          await saveDbState(nextDb);
+          setShowArenaModal(false);
+          alert(`سناریوی ${selected.strategy} با موفقیت به عنوان برنامه نهایی ذخیره شد.`);
+        }}
       />
 
       {showAddRequestModal && (

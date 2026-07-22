@@ -25,6 +25,9 @@ export interface PersonnelFormData {
   experienceYears: number | string;
   active: boolean;
   canBeShiftLeader: boolean;
+  isFixedRoutine: boolean;
+  routineType: 'none' | 'morning' | 'morning_evening' | 'evening_night' | 'night' | '24h' | 'rotating' | 'custom';
+  routinePattern: string;
 }
 
 const DEFAULT_FORM_DATA: PersonnelFormData = {
@@ -38,6 +41,9 @@ const DEFAULT_FORM_DATA: PersonnelFormData = {
   experienceYears: 1,
   active: true,
   canBeShiftLeader: true,
+  isFixedRoutine: false,
+  routineType: 'none',
+  routinePattern: '',
 };
 
 export interface UsePersonnelFormReturn {
@@ -59,6 +65,9 @@ export interface UsePersonnelFormReturn {
   setFormExperienceYears: (value: number | string) => void;
   setFormActive: (value: boolean) => void;
   setFormCanBeShiftLeader: (value: boolean) => void;
+  setFormIsFixedRoutine: (value: boolean) => void;
+  setFormRoutineType: (value: 'none' | 'morning' | 'morning_evening' | 'evening_night' | 'night' | '24h' | 'rotating' | 'custom' | undefined) => void;
+  setFormRoutinePattern: (value: string) => void;
 
   // Actions
   openAddModal: () => void;
@@ -82,6 +91,9 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
   const [experienceYears, setExperienceYears] = useState<number | string>(1);
   const [active, setActive] = useState(true);
   const [canBeShiftLeader, setCanBeShiftLeader] = useState(true);
+  const [isFixedRoutine, setIsFixedRoutine] = useState(false);
+  const [routineType, setRoutineType] = useState<'none' | 'morning' | 'morning_evening' | 'evening_night' | 'night' | '24h' | 'rotating' | 'custom'>('none');
+  const [routinePattern, setRoutinePattern] = useState('');
 
   // Reset form to defaults
   const resetForm = useCallback(() => {
@@ -95,6 +107,9 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     setExperienceYears(1);
     setActive(true);
     setCanBeShiftLeader(true);
+    setIsFixedRoutine(false);
+    setRoutineType('none');
+    setRoutinePattern('');
     setEditingPersonnel(null);
   }, []);
 
@@ -117,6 +132,9 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     setExperienceYears(personnel.experienceYears);
     setActive(personnel.active);
     setCanBeShiftLeader(personnel.canBeShiftLeader);
+    setIsFixedRoutine(personnel.isFixedRoutine ?? false);
+    setRoutineType((personnel.routineType as any) ?? 'none');
+    setRoutinePattern(personnel.routinePattern ?? '');
     setIsOpen(true);
   }, []);
 
@@ -137,7 +155,14 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     experienceYears,
     active,
     canBeShiftLeader,
+    isFixedRoutine,
+    routineType,
+    routinePattern,
   };
+
+  const handleSetRoutineType = useCallback((value: 'none' | 'morning' | 'morning_evening' | 'evening_night' | 'night' | '24h' | 'rotating' | 'custom' | undefined) => {
+    setRoutineType((value as any) ?? 'none');
+  }, []);
 
   return {
     isOpen,
@@ -153,6 +178,9 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     setFormExperienceYears: setExperienceYears,
     setFormActive: setActive,
     setFormCanBeShiftLeader: setCanBeShiftLeader,
+    setFormIsFixedRoutine: setIsFixedRoutine,
+    setFormRoutineType: handleSetRoutineType,
+    setFormRoutinePattern: setRoutinePattern,
     openAddModal,
     openEditModal,
     closeModal,

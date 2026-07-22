@@ -44,24 +44,44 @@ export function aggregateWarnings(
       warnings: warningsList,
       severity,
       isExpanded: false,
-      groupType: 'personnel'
+      groupType: 'personnel',
+      jobGroup: personnel?.jobGroup
     });
   }
 
   if (generalWarnings.length > 0) {
-    const severity: 'low' | 'medium' | 'high' =
-      generalWarnings.length >= 5 ? 'high' :
-      generalWarnings.length >= 3 ? 'medium' : 'low';
+    const nurseGeneral: string[] = [];
+    const assistantGeneral: string[] = [];
+    const otherGeneral: string[] = [];
 
-    result.push({
-      personnelId: 'general-alerts',
-      personnelName: 'هشدارهای عمومی برنامه',
-      warningCount: generalWarnings.length,
-      warnings: generalWarnings,
-      severity,
-      isExpanded: true,
-      groupType: 'general'
-    });
+    for (const w of generalWarnings) {
+      const lower = w.toLowerCase();
+      const isAssistant = w.includes('کمک بهیار') || w.includes('کمک‌بهیار') || w.includes('کمک_بهیار') || lower.includes('assistant');
+      const isNurse = (w.includes('پرستار') || lower.includes('nurse')) && !isAssistant;
+      if (isAssistant) assistantGeneral.push(w);
+      else if (isNurse) nurseGeneral.push(w);
+      else otherGeneral.push(w);
+    }
+
+    const makeGeneral = (id: string, name: string, list: string[], jobGroup?: 'nurse' | 'assistant') => {
+      if (list.length === 0) return;
+      const severity: 'low' | 'medium' | 'high' =
+        list.length >= 5 ? 'high' : list.length >= 3 ? 'medium' : 'low';
+      result.push({
+        personnelId: id,
+        personnelName: name,
+        warningCount: list.length,
+        warnings: list,
+        severity,
+        isExpanded: true,
+        groupType: 'general',
+        jobGroup,
+      });
+    };
+
+    makeGeneral('general-nurse', 'هشدارهای عمومی پرستاران', nurseGeneral, 'nurse');
+    makeGeneral('general-assistant', 'هشدارهای عمومی کمک‌بهیاران', assistantGeneral, 'assistant');
+    makeGeneral('general-other', 'هشدارهای عمومی برنامه', otherGeneral);
   }
   
   // مرتب‌سازی حذف شد تا ترتیب ثابت بماند و با dismiss کردن هشدار، پرش رخ ندهد

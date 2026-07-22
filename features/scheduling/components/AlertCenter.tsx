@@ -26,8 +26,8 @@ export interface AlertCenterProps {
   dismissedAlertWarnings: Record<string, boolean>;
 
   // UI state
-  expandedSections: { general: boolean; personnel: boolean };
-  onToggleSection: (section: 'general' | 'personnel') => void;
+  expandedSections: { general: boolean; nurses: boolean; assistants: boolean };
+  onToggleSection: (section: 'general' | 'nurses' | 'assistants') => void;
 
   // Handlers
   onDismissAlert: (warningText: string) => void;
@@ -53,9 +53,16 @@ export function AlertCenter(props: AlertCenterProps) {
 
   if (!isOpen) return null;
 
-  const generalAlerts = allAlerts.filter(a => a.groupType === 'general' && a.warnings.length > 0);
-  const personnelAlerts = allAlerts.filter(a => a.groupType !== 'general' && a.warnings.length > 0);
+  // Separate nurse vs assistant — per user request: 2 separate collapsible windows
+  // Includes both personnel alerts (by jobGroup) and general alerts that mention پرستار/کمک بهیار
+  const nurseAlerts = allAlerts.filter(a => a.jobGroup === 'nurse' && a.warnings.length > 0);
+  const assistantAlerts = allAlerts.filter(a => a.jobGroup === 'assistant' && a.warnings.length > 0);
+  const otherGeneral = allAlerts.filter(a => !a.jobGroup && a.warnings.length > 0);
   const hasAlerts = allAlerts.filter(a => a.warnings.length > 0).length > 0;
+
+  // For backward compat, if jobGroup missing in old data, treat unclassified personnel as nurse
+  const unclassified = allAlerts.filter(a => a.groupType !== 'general' && !a.jobGroup && a.warnings.length > 0);
+  const effectiveNurseAlerts = [...nurseAlerts, ...unclassified];
 
   return (
     <div
@@ -95,11 +102,43 @@ export function AlertCenter(props: AlertCenterProps) {
             </div>
           ) : (
             <>
-              {/* General Alerts Section */}
-              {generalAlerts.length > 0 && (
+              {/* Nurses Alerts — separate collapsible window */}
+              {(effectiveNurseAlerts.length > 0) && (
                 <AlertSection
-                  title="هشدارهای عمومی"
-                  alerts={generalAlerts}
+                  title="هشدارهای پرستاران — پنجره کرکره‌ای پرستاران"
+                  alerts={effectiveNurseAlerts}
+                  isExpanded={expandedSections.nurses}
+                  onToggle={() => onToggleSection('nurses')}
+                  dismissedAlertWarnings={dismissedAlertWarnings}
+                  onDismissAlert={onDismissAlert}
+                  onAlertClick={onAlertClick}
+                  extractWarningDay={extractWarningDay}
+                  colorScheme="amber"
+                  badgeText="پرستاران"
+                />
+              )}
+
+              {/* Assistants Alerts — separate collapsible window */}
+              {(assistantAlerts.length > 0) && (
+                <AlertSection
+                  title="هشدارهای کمک‌بهیاران — پنجره کرکره‌ای کمک‌بهیاران"
+                  alerts={assistantAlerts}
+                  isExpanded={expandedSections.assistants}
+                  onToggle={() => onToggleSection('assistants')}
+                  dismissedAlertWarnings={dismissedAlertWarnings}
+                  onDismissAlert={onDismissAlert}
+                  onAlertClick={onAlertClick}
+                  extractWarningDay={extractWarningDay}
+                  colorScheme="teal"
+                  badgeText="کمک‌بهیاران"
+                />
+              )}
+
+              {/* Other general alerts without jobGroup — shown as third collapsible if exists */}
+              {otherGeneral.length > 0 && (
+                <AlertSection
+                  title="سایر هشدارهای عمومی"
+                  alerts={otherGeneral}
                   isExpanded={expandedSections.general}
                   onToggle={() => onToggleSection('general')}
                   dismissedAlertWarnings={dismissedAlertWarnings}
@@ -108,22 +147,6 @@ export function AlertCenter(props: AlertCenterProps) {
                   extractWarningDay={extractWarningDay}
                   colorScheme="indigo"
                   badgeText="عمومی"
-                />
-              )}
-
-              {/* Personnel Alerts Section */}
-              {personnelAlerts.length > 0 && (
-                <AlertSection
-                  title="هشدارهای پرسنلی"
-                  alerts={personnelAlerts}
-                  isExpanded={expandedSections.personnel}
-                  onToggle={() => onToggleSection('personnel')}
-                  dismissedAlertWarnings={dismissedAlertWarnings}
-                  onDismissAlert={onDismissAlert}
-                  onAlertClick={onAlertClick}
-                  extractWarningDay={extractWarningDay}
-                  colorScheme="amber"
-                  badgeText="پرسنلی"
                 />
               )}
             </>
@@ -146,7 +169,7 @@ interface AlertSectionProps {
   onDismissAlert: (warningText: string) => void;
   onAlertClick: (personnelId: string, day: number) => void;
   extractWarningDay: (warningText: string) => number | null;
-  colorScheme: 'indigo' | 'amber';
+  colorScheme: 'indigo' | 'amber' | 'teal';
   badgeText: string;
 }
 
@@ -185,6 +208,14 @@ function AlertSection(props: AlertSectionProps) {
       badge: 'bg-amber-100 text-amber-700',
       chevron: 'text-amber-600',
       sectionBadge: 'bg-amber-100 border-amber-200 text-amber-700',
+    },
+    teal: {
+      button: 'bg-teal-50 hover:bg-teal-100 border-teal-200',
+      dot: 'bg-teal-500',
+      title: 'text-teal-800',
+      badge: 'bg-teal-100 text-teal-700',
+      chevron: 'text-teal-600',
+      sectionBadge: 'bg-teal-100 border-teal-200 text-teal-700',
     },
   };
 
