@@ -6,6 +6,14 @@ export type NursePosition = 'supervisor' | 'staff' | 'general' | 'none';
 
 export type EmploymentType = 'official' | 'contract' | 'conscript' | 'overtime';
 
+// ====== برچسب روتین کاری پرسنل ======
+export type RoutineTag =
+  | 'MORNING_ONLY'       // صبح کار
+  | 'LONG_SHIFT'         // لانگ کار: ME
+  | 'EVENING_NIGHT'      // عصر شب کار: EN
+  | 'FULL_ROTATION_MEN'  // صبح عصر شب کار: MEN
+  | 'ROTATING_GENERAL';  // چرخشی کار عمومی
+
 export interface Personnel {
   id: string;
   firstName: string;
@@ -21,9 +29,10 @@ export interface Personnel {
   username?: string;
   password?: string;
   locked?: boolean;
+  routineTag?: RoutineTag;
 }
 
-export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
+export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'UNFILLED' | string;
 
 export interface JalaliDateInfo {
   year: number;

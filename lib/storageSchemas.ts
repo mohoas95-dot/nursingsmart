@@ -39,6 +39,14 @@ export const PersonnelSchema = z.object({
   username: z.string().max(200).optional(),
   password: z.string().max(500).optional(),
   locked: z.boolean().optional(),
+  // برچسب روتین کاری — اختیاری با پیش‌فرض ROTATING_GENERAL (چرخشی کار عمومی)
+  routineTag: z.enum([
+    'MORNING_ONLY',      // صبح کار
+    'LONG_SHIFT',        // لانگ کار: ME
+    'EVENING_NIGHT',     // عصر شب کار: EN
+    'FULL_ROTATION_MEN', // صبح عصر شب کار: MEN
+    'ROTATING_GENERAL',  // چرخشی کار عمومی
+  ]).nullish().default('ROTATING_GENERAL'),
 }).strict();
 
 export const PersonnelListSchema = z.array(PersonnelSchema).superRefine((items, ctx) => {
