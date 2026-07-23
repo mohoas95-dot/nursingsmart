@@ -39,6 +39,10 @@ export const PersonnelSchema = z.object({
   username: z.string().max(200).optional(),
   password: z.string().max(500).optional(),
   locked: z.boolean().optional(),
+  routineTag: z.enum([
+    'day_even', 'day_odd', 'night_even', 'night_odd',
+    'circulating', 'fixed_morning', 'fixed_evening', 'fixed_night', 'none',
+  ]).optional(),
 }).strict();
 
 export const PersonnelListSchema = z.array(PersonnelSchema).superRefine((items, ctx) => {
