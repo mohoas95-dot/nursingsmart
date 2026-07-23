@@ -1,7 +1,9 @@
 // lib/solver.ts - نسخه کامل (۱۰۰۰+ خط)
 
-import { Personnel, SystemSettings, ShiftRequest, MonthlySchedule, ShiftType, JalaliDateInfo, PersonnelReportResult, OptimizationResult, AggregatedAlert } from './types';
+import { Personnel, SystemSettings, ShiftRequest, MonthlySchedule, ShiftType, JalaliDateInfo, PersonnelReportResult, OptimizationResult, AggregatedAlert, JobGroup } from './types';
 import { generateJalaliMonthCalendar, getJalaliMonthDays, getJalaliWeekday } from './jalali';
+import { reconcileStaffingCoverage, shiftCoversPeriod, type CoverageShift } from '../domain/scheduling/staffing-coverage';
+import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
 
 // Shift durations in hours
 export const SHIFT_HOURS: { [key in ShiftType]: number } = {
@@ -170,17 +172,21 @@ export function solveWithPriority(
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any
 ): OptimizationResult {
-  
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
   const activePersonnel = personnelList.filter(p => p.active && !p.locked);
-  
+
   const baseResult = solveNursingSchedule(
-    year, month, personnelList, requests, settings, 
+    year, month, personnelList, requests, settings,
     customHolidays, firstDayOfWeekIndex, monthlyDutyHours
   );
-  
-  const assignments = { ...baseResult.assignments };
+
+  // Deep-copy day maps. The priority pass must not mutate the base solver result.
+  const assignments: { [pId: string]: { [day: number]: ShiftType } } = {};
+  for (const [personnelId, dayAssignments] of Object.entries(baseResult.assignments)) {
+    assignments[personnelId] = { ...dayAssignments };
+  }
+
   const warnings: string[] = [];
   const coverageGaps: OptimizationResult['coverageGaps'] = [];
   const priorityUsed: OptimizationResult['priorityUsed'] = {
@@ -188,152 +194,126 @@ export function solveWithPriority(
     level2: [],
     level3: []
   };
-  
-  const nurses = activePersonnel.filter(p => p.jobGroup === 'nurse');
-  const assistants = activePersonnel.filter(p => p.jobGroup === 'assistant');
-  
+
+  const groups = [
+    {
+      jobGroup: 'nurse' as const,
+      title: 'پرستار',
+      personnel: activePersonnel.filter(p => p.jobGroup === 'nurse'),
+    },
+    {
+      jobGroup: 'assistant' as const,
+      title: 'کمک بهیار',
+      personnel: activePersonnel.filter(p => p.jobGroup === 'assistant'),
+    },
+  ];
+  const shifts: CoverageShift[] = ['M', 'E', 'N'];
+
+  const demandFor = (
+    demand: SystemSettings['demand']['weekday'],
+    jobGroup: JobGroup,
+    shift: CoverageShift
+  ): number => {
+    if (jobGroup === 'nurse') {
+      if (shift === 'M') return demand.morningNurse;
+      if (shift === 'E') return demand.afternoonNurse;
+      return demand.nightNurse;
+    }
+    if (shift === 'M') return demand.morningAssistant;
+    if (shift === 'E') return demand.afternoonAssistant;
+    return demand.nightAssistant;
+  };
+
   for (let d = 1; d <= totalDays; d++) {
-    const isHoliday = calendar[d - 1].isHoliday;
-    const demand = isHoliday ? settings.demand.holiday : settings.demand.weekday;
-    
-    const shifts: ('M' | 'E' | 'N')[] = ['M', 'E', 'N'];
-    
-    for (const shiftType of shifts) {
-      let nurseDemand = 0;
-      let assistantDemand = 0;
-      let nurseCount = 0;
-      let assistantCount = 0;
-      
-      if (shiftType === 'M') {
-        nurseDemand = demand.morningNurse;
-        assistantDemand = demand.morningAssistant;
-        nurseCount = nurses.filter(n => {
-          const s = assignments[n.id]?.[d];
-          return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-        }).length;
-        assistantCount = assistants.filter(a => {
-          const s = assignments[a.id]?.[d];
-          return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-        }).length;
-      } else if (shiftType === 'E') {
-        nurseDemand = demand.afternoonNurse;
-        assistantDemand = demand.afternoonAssistant;
-        nurseCount = nurses.filter(n => {
-          const s = assignments[n.id]?.[d];
-          return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
-        }).length;
-        assistantCount = assistants.filter(a => {
-          const s = assignments[a.id]?.[d];
-          return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
-        }).length;
-      } else {
-        nurseDemand = demand.nightNurse;
-        assistantDemand = demand.nightAssistant;
-        nurseCount = nurses.filter(n => {
-          const s = assignments[n.id]?.[d];
-          return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
-        }).length;
-        assistantCount = assistants.filter(a => {
-          const s = assignments[a.id]?.[d];
-          return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
-        }).length;
-      }
-      
-      const totalDemand = nurseDemand + assistantDemand;
-      const totalCount = nurseCount + assistantCount;
-      const shortage = totalDemand - totalCount;
-      
-      if (shortage > 0) {
-        const filledBy: string[] = [];
-        
-        const availablePersonnel = activePersonnel.filter(p => {
-          const currentShift = assignments[p.id]?.[d];
-          if (currentShift && currentShift !== 'OFF' && !currentShift.startsWith('L')) {
-            return false;
-          }
-          if (p.locked) return false;
-          
-          const req = requests.find(r => r.personnelId === p.id);
-          if (req && req.requestType === 'OFF' && req.scope === 'all') {
-            return false;
-          }
-          return true;
+    const demand = calendar[d - 1].isHoliday ? settings.demand.holiday : settings.demand.weekday;
+
+    for (const group of groups) {
+      for (const shiftType of shifts) {
+        const required = demandFor(demand, group.jobGroup, shiftType);
+        const currentCount = group.personnel.filter(person =>
+          shiftCoversPeriod(assignments[person.id]?.[d], shiftType)
+        ).length;
+        const shortage = required - currentCount;
+        if (shortage <= 0) continue;
+
+        // Coverage is group-specific: a nurse must never be used to satisfy an
+        // assistant shortage (or vice versa). Approved leave is also immutable.
+        const requestForDay = (personnelId: string) => requests.find(request =>
+          request.personnelId === personnelId &&
+          isDayInRequestScope(d, calendar[d - 1].dayOfWeek, request)
+        );
+
+        const availablePersonnel = group.personnel.filter(person => {
+          const currentShift = assignments[person.id]?.[d] || 'OFF';
+          if (currentShift !== 'OFF') return false;
+
+          const protectedRequest = requests.find(request =>
+            request.personnelId === person.id &&
+            (request.requestType === 'OFF' || request.requestType === 'leave') &&
+            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, request)
+          );
+          return !protectedRequest;
         });
-        
-        const priority1 = availablePersonnel.filter(p => {
-          const req = requests.find(r => r.personnelId === p.id);
-          if (!req) return true;
-          if (req.requestType === 'avoid_shift' && req.preferredShift === shiftType) {
-            return false;
-          }
-          return true;
+
+        const priority1 = availablePersonnel.filter(person => {
+          const request = requestForDay(person.id);
+          return !request || request.requestType !== 'avoid_shift' || request.preferredShift !== shiftType;
         });
-        
-        const priority2 = availablePersonnel.filter(p => {
-          if (d > 1) {
-            const prevShift = assignments[p.id]?.[d-1];
-            if (prevShift && ['ME', 'EN', 'MN', 'MEN', 'N'].includes(prevShift)) {
-              return true;
-            }
-          }
-          return false;
+
+        const priority2 = availablePersonnel.filter(person => {
+          if (d <= 1) return false;
+          const previousShift = assignments[person.id]?.[d - 1];
+          return !!previousShift && ['ME', 'EN', 'MN', 'MEN', 'N'].includes(previousShift);
         });
-        
-        const priority3 = availablePersonnel.filter(p => {
-          const req = requests.find(r => r.personnelId === p.id);
-          if (!req) return false;
-          if (req.requestType === 'avoid_shift' && req.preferredShift === shiftType) {
-            return true;
-          }
-          return false;
+
+        const priority3 = availablePersonnel.filter(person => {
+          const request = requestForDay(person.id);
+          return request?.requestType === 'avoid_shift' && request.preferredShift === shiftType;
         });
-        
+
         let remainingShortage = shortage;
-        
-        for (const p of priority1) {
-          if (remainingShortage <= 0) break;
-          if (!assignments[p.id]) assignments[p.id] = {};
-          assignments[p.id][d] = shiftType;
-          filledBy.push(p.id);
-          priorityUsed.level1.push(p.id);
-          remainingShortage--;
-        }
-        
-        for (const p of priority2) {
-          if (remainingShortage <= 0) break;
-          if (!assignments[p.id]) assignments[p.id] = {};
-          assignments[p.id][d] = shiftType;
-          filledBy.push(p.id);
-          priorityUsed.level2.push(p.id);
-          remainingShortage--;
-        }
-        
-        for (const p of priority3) {
-          if (remainingShortage <= 0) break;
-          if (!assignments[p.id]) assignments[p.id] = {};
-          assignments[p.id][d] = shiftType;
-          filledBy.push(p.id);
-          priorityUsed.level3.push(p.id);
-          remainingShortage--;
-        }
-        
+        const filledBy: string[] = [];
+        const alreadyConsidered = new Set<string>();
+
+        const applyPriority = (candidates: Personnel[], level: keyof OptimizationResult['priorityUsed']) => {
+          for (const person of candidates) {
+            if (remainingShortage <= 0) break;
+            if (alreadyConsidered.has(person.id)) continue;
+            alreadyConsidered.add(person.id);
+            // A prior priority/shift iteration may have changed this day already.
+            if ((assignments[person.id]?.[d] || 'OFF') !== 'OFF') continue;
+
+            if (!assignments[person.id]) assignments[person.id] = {};
+            assignments[person.id][d] = shiftType;
+            filledBy.push(person.id);
+            priorityUsed[level].push(person.id);
+            remainingShortage -= 1;
+          }
+        };
+
+        applyPriority(priority1, 'level1');
+        applyPriority(priority2, 'level2');
+        applyPriority(priority3, 'level3');
+
         if (remainingShortage > 0) {
-          warnings.push(`کمبود نیرو در روز ${d} شیفت ${shiftType} - ${remainingShortage} نفر باقی ماند`);
+          warnings.push(
+            `کمبود نیرو (${group.title}) در روز ${d} شیفت ${shiftType} - ${remainingShortage} نفر باقی ماند`
+          );
         }
-        
+
         coverageGaps.push({
           day: d,
           shift: shiftType,
-          shortage: shortage - remainingShortage,
+          shortage: remainingShortage,
           filledBy
         });
       }
     }
   }
-  
+
   return {
     assignments,
-    warnings: [...baseResult.warnings, ...warnings],
+    warnings: Array.from(new Set([...baseResult.warnings, ...warnings])),
     coverageGaps,
     priorityUsed
   };
@@ -1201,13 +1181,39 @@ export function solveNursingSchedule(
     }
   }
 
-  const verification = verifyCoverageAndLeaders(year, month, activePersonnel, assignments, settings, customHolidays, firstDayOfWeekIndex, requests);
-  const combinedWarnings = Array.from(new Set([...warnings, ...verification.warnings]));
+  // Coverage is a hard constraint. Some lower-priority post-processing rules above
+  // (for example, breaking a long OFF sequence) can change headcounts after the
+  // initial demand-filling pass. Reconcile once more before verification so the
+  // saved schedule always reflects the configured staffing numbers.
+  const staffingResult = reconcileStaffingCoverage(
+    assignments,
+    activePersonnel,
+    settings,
+    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday }))
+  );
+  const finalAssignments = staffingResult.assignments;
+
+  const verification = verifyCoverageAndLeaders(
+    year,
+    month,
+    activePersonnel,
+    finalAssignments,
+    settings,
+    customHolidays,
+    firstDayOfWeekIndex,
+    requests
+  );
+  // Coverage messages emitted before the final reconciliation are stale. The
+  // verifier is the single source of truth for any genuinely unresolved mismatch.
+  const nonCoverageWarnings = warnings.filter(warning =>
+    !warning.startsWith('Coverage Shortage:') && !warning.startsWith('Overstaffing:')
+  );
+  const combinedWarnings = Array.from(new Set([...nonCoverageWarnings, ...verification.warnings]));
 
   return {
     year,
     month,
-    assignments,
+    assignments: finalAssignments,
     shiftLeaders: verification.shiftLeaders,
     warnings: combinedWarnings
   };

@@ -1487,6 +1487,37 @@ export default function Home() {
   const handleRunOptimizer = async (jobGroup: JobGroup) => {
     const deptId = selectedDepartmentId || 'sepehr';
 
+    // Never start with the initial/default state while the department or calendar
+    // is still being loaded. Otherwise the delayed optimizer could capture old
+    // staffing numbers and persist a schedule that ignores the department rules.
+    if (
+      isLoadingDb ||
+      isSavingDb ||
+      !dbChecked ||
+      !isPersonnelLoaded ||
+      !isRequestsLoaded ||
+      storageLoadCountRef.current > 0 ||
+      officialCalendarState.status === 'loading'
+    ) {
+      alert('اطلاعات بخش و قوانین تعداد نیرو هنوز در حال همگام‌سازی است؛ چند لحظه بعد دوباره تلاش کنید.');
+      return;
+    }
+
+    if (storageWriteBlockedRef.current) {
+      alert('ارتباط ذخیره‌سازی نیاز به همگام‌سازی مجدد دارد؛ لطفاً صفحه را تازه‌سازی کنید.');
+      return;
+    }
+
+    // The committed department settings are the source of truth. Unsaved edits in
+    // the settings form must not silently change staffing rules during regeneration.
+    const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
+    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const optimizerPersonnel = personnelRef.current;
+    const optimizerRequests = requestsRef.current;
+    const optimizerHolidays = holidaysRef.current;
+    const optimizerFirstDay = firstDayRef.current;
+    const optimizerDutyHours = monthlyDutyHoursRef.current;
+
     // Persistence adapter: bridges Facade to legacy saveDbState
     const persistenceAdapter: SchedulePersistence = {
       saveSchedule: async (newSchedule: any) => {
@@ -1529,12 +1560,12 @@ export default function Home() {
         jobGroup,
         year: currentYear,
         month: currentMonth,
-        personnel,
-        requests,
-        settings,
-        holidays: customHolidays,
-        firstDayOfWeek: firstDayOfWeekIndex,
-        monthlyDutyHours,
+        personnel: optimizerPersonnel,
+        requests: optimizerRequests,
+        settings: optimizerSettings,
+        holidays: optimizerHolidays,
+        firstDayOfWeek: optimizerFirstDay,
+        monthlyDutyHours: optimizerDutyHours,
         currentSchedule: schedule,
         lockState: {
           finalizedNursesMonths,
@@ -3230,7 +3261,7 @@ export default function Home() {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => handleRunOptimizer('nurse')}
-                    disabled={solvingTarget !== null}
+                    disabled={solvingTarget !== null || isLoadingDb || isSavingDb || !dbChecked || !isPersonnelLoaded || !isRequestsLoaded || officialCalendarState.status === 'loading'}
                     className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-indigo-500/10 cursor-pointer"
                     id="btn-run-solver-nurse"
                   >
@@ -3239,7 +3270,7 @@ export default function Home() {
                   </button>
                   <button
                     onClick={() => handleRunOptimizer('assistant')}
-                    disabled={solvingTarget !== null}
+                    disabled={solvingTarget !== null || isLoadingDb || isSavingDb || !dbChecked || !isPersonnelLoaded || !isRequestsLoaded || officialCalendarState.status === 'loading'}
                     className="flex items-center gap-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-400 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg ring-4 ring-teal-500/10 cursor-pointer"
                     id="btn-run-solver-assistant"
                   >
