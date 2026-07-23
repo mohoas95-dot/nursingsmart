@@ -2,6 +2,9 @@
 
 import { Personnel, SystemSettings, ShiftRequest, MonthlySchedule, ShiftType, JalaliDateInfo, PersonnelReportResult, OptimizationResult, AggregatedAlert } from './types';
 import { generateJalaliMonthCalendar, getJalaliMonthDays, getJalaliWeekday } from './jalali';
+import { buildEffectiveRoutineTags, routineShiftScore } from './routineStrategy';
+import { computeLeaveHours } from './balanceChecker';
+import { checkBoundaryContinuity, extractPrevMonthTail } from './safetyConstraints';
 
 // Shift durations in hours
 export const SHIFT_HOURS: { [key in ShiftType]: number } = {
@@ -348,13 +351,18 @@ export function solveNursingSchedule(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  monthlyDutyHours?: any,
+  // Task 4: تخصیص‌های ماه قبل (از prevMonthKey در S3) برای بررسی پیوستگی مرز ماه.
+  prevMonthAssignments?: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>
 ): MonthlySchedule {
   
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
   const activePersonnel = personnelList.filter(p => p.active);
-  
+
+  // Task 1 & 2: نقشهٔ برچسب روتین مؤثر هر پرسنل (پرسنل بدون درخواست ← ROTATING_GENERAL).
+  const effectiveRoutineTags = buildEffectiveRoutineTags(activePersonnel, requests);
+
   // Initialize empty assignments
   const assignments: { [pId: string]: { [day: number]: ShiftType } } = {};
   activePersonnel.forEach(p => {
@@ -867,8 +875,13 @@ export function solveNursingSchedule(
         const getPenaltyScore = (p: Personnel) => {
           let score = 0;
           const curr = assignments[p.id][d];
-          
-          if (shiftChar === 'N' && curr === 'ME') {
+
+          // Task 1 & 2: راهنمای routineTag — اولویت جزئی برای نوبت‌های هم‌خوان با روتین پرسنل،
+          // پیش از پناه بردن به شیفت‌های سنگین. (تنها در صورت برابری جریمه‌ها تأثیرگذار است.)
+          if (routineShiftScore(effectiveRoutineTags[p.id] ?? 'ROTATING_GENERAL', shiftChar) > 0) {
+            score -= 1;
+          }
+                    if (shiftChar === 'N' && curr === 'ME') {
             const isExplicit = dailyRequests[p.id]?.[d]?.requestType === 'shift' && dailyRequests[p.id]?.[d]?.preferredShift === 'MEN';
             if (!isExplicit) {
               score += 200000;
@@ -1201,7 +1214,7 @@ export function solveNursingSchedule(
     }
   }
 
-  const verification = verifyCoverageAndLeaders(year, month, activePersonnel, assignments, settings, customHolidays, firstDayOfWeekIndex, requests);
+  const verification = verifyCoverageAndLeaders(year, month, activePersonnel, assignments, settings, customHolidays, firstDayOfWeekIndex, requests, prevMonthAssignments);
   const combinedWarnings = Array.from(new Set([...warnings, ...verification.warnings]));
 
   return {
@@ -1222,7 +1235,9 @@ export function verifyCoverageAndLeaders(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  requests: readonly ShiftRequest[] = []
+  requests: readonly ShiftRequest[] = [],
+  // Task 4: تخصیص‌های ماه قبل (از prevMonthKey در S3) برای بررسی پیوستگی مرز ماه.
+  prevMonthAssignments?: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>
 ): { warnings: string[], shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } } {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
@@ -1408,6 +1423,19 @@ export function verifyCoverageAndLeaders(
     }
   });
 
+  // Task 4: بررسی پیوستگی مرز ماه — تجمعی ۳۲ ساعت و استراحت بعد از شب‌کار.
+  if (prevMonthAssignments) {
+    for (const p of activePersonnel) {
+      const prevPerson = prevMonthAssignments[p.id];
+      if (!prevPerson) continue;
+      const tail = extractPrevMonthTail(prevPerson, 2);
+      if (tail.length === 0) continue;
+      const boundary = checkBoundaryContinuity(p.id, assignments[p.id] ?? {}, tail);
+      for (const v of boundary.cumulativeHourViolations) warnings.push(v.message);
+      for (const v of boundary.nightRecoveryViolations) warnings.push(v.message);
+    }
+  }
+
   return { warnings: Array.from(new Set(warnings)), shiftLeaders };
 }
 
@@ -1465,7 +1493,17 @@ export function generatePersonnelReports(
       menCount * SHIFT_HOURS.MEN;
 
     const leaveRate = getLeaveHours(p.employmentType);
-    const leaveHours = leaveCount * leaveRate;
+    // Task 3: مرخصی落在 تعطیلی رسمی دقیقاً ۷ ساعت اعتبار می‌گیرد.
+    let holidayLeaveDays = 0;
+    for (let d = 1; d <= totalDays; d++) {
+      const shift = pAssignments[d] || 'OFF';
+      if (shift.startsWith('L') && calendar[d - 1].isHoliday) holidayLeaveDays++;
+    }
+    const leaveHours = computeLeaveHours({
+      totalLeaveDays: leaveCount,
+      holidayLeaveDays,
+      baseLeaveRate: leaveRate,
+    });
     workedHours += leaveHours;
 
     const experienceHours = getSeniorityHours(p);

@@ -12,6 +12,35 @@ export interface SubstitutionResult {
   previousShift: ShiftType;
 }
 
+// ============================================================================
+// Holiday Leave Hours Crediting (Task 3)
+// ============================================================================
+
+/**
+ * ساعت اعتبار دقیق برای هر روز مرخصیِ落在 تعطیلی رسمی.
+ * طبق سیاست، یک روز مرخصی در تعطیلی دقیقاً ۷ ساعت کاری اعتبار می‌گیرد.
+ */
+export const HOLIDAY_LEAVE_CREDIT_HOURS = 7;
+
+/**
+ * محاسبهٔ مجموع ساعت‌های مرخصی با درنظرگرفتن اعتبار تعطیلی رسمی.
+ *
+ *   - روزهای مرخصی落在 تعطیلی: دقیقاً HOLIDAY_LEAVE_CREDIT_HOURS (۷) ساعت.
+ *   - سایر روزهای مرخصی: نرخ پایه بر اساس نوع استخدام.
+ *
+ * @pure
+ */
+export function computeLeaveHours(params: {
+  totalLeaveDays: number;
+  holidayLeaveDays: number;
+  baseLeaveRate: number;
+}): number {
+  const { totalLeaveDays, holidayLeaveDays, baseLeaveRate } = params;
+  const safeHoliday = Math.max(0, Math.min(holidayLeaveDays, totalLeaveDays));
+  const nonHolidayLeaveDays = totalLeaveDays - safeHoliday;
+  return safeHoliday * HOLIDAY_LEAVE_CREDIT_HOURS + nonHolidayLeaveDays * baseLeaveRate;
+}
+
 /**
  * محاسبه ساعات کاری یک پرسنل در یک روز بر اساس شیفت
  */

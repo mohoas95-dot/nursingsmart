@@ -33,6 +33,11 @@ import {
   updateScheduleCell,
 } from '../../../domain/scheduling/schedule-operations';
 import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
+import {
+  autoRepairAfterEdit,
+  evaluateForcedShiftSafety,
+  attachCriticalWarnings,
+} from '../../../lib/autoRepair';
 
 interface ShiftLeaderRecord {
   morning?: string;
@@ -281,11 +286,39 @@ export async function applyManualShiftChangeFacade(
 
   try {
     // Step 1: Update the cell (pure domain logic)
-    const updatedAssignments = updateScheduleCell(
+    const editedAssignments = updateScheduleCell(
       currentSchedule.assignments,
       personnelId,
       day,
       shift
+    );
+
+    // Step 1b (Phase 5): Localized auto-repair — preserve minimum staffing with
+    // one-hop micro-swaps, without cascading edits.
+    const repair = autoRepairAfterEdit(
+      editedAssignments,
+      { personnelId, day, newShift: shift },
+      {
+        personnel,
+        settings,
+        requests,
+        lockedRows: input.lockState.lockedRows,
+        holidayDays: Object.keys(holidays).map(Number),
+      }
+    );
+    const updatedAssignments = repair.assignments;
+
+    // Step 1c (Phase 5): Human veto — evaluate forced-shift safety. The override
+    // is NEVER blocked; critical (red) warnings are attached instead.
+    const veto = evaluateForcedShiftSafety(
+      currentSchedule.assignments,
+      { personnelId, day, newShift: shift },
+      {
+        personnel,
+        settings,
+        requests,
+        holidayDays: Object.keys(holidays).map(Number),
+      }
     );
 
     // Step 2: Verify coverage and leaders
@@ -311,12 +344,15 @@ export async function applyManualShiftChangeFacade(
       finalized: false,
     };
 
+    // Phase 5: attach critical (red) warnings resulting from the manual override.
+    const finalSchedule = attachCriticalWarnings(newSchedule, veto.criticalWarnings);
+
     // Step 4: Persist to S3
-    await persistence.saveSchedule(newSchedule, departmentId);
+    await persistence.saveSchedule(finalSchedule, departmentId);
 
     return {
       success: true,
-      schedule: newSchedule,
+      schedule: finalSchedule,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

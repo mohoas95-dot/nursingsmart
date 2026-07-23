@@ -6,6 +6,22 @@ export type NursePosition = 'supervisor' | 'staff' | 'general' | 'none';
 
 export type EmploymentType = 'official' | 'contract' | 'conscript' | 'overtime';
 
+/**
+ * برچسب روتین کاری پرسنل — تعیین‌کننده الگوی شیفت‌بندی پیش‌فرض فرد.
+ *
+ *   - MORNING_ONLY       : صبح کار
+ *   - LONG_SHIFT         : لانگ کار (ME)
+ *   - EVENING_NIGHT      : عصر شب کار (EN)
+ *   - FULL_ROTATION_MEN  : صبح عصر شب کار (MEN)
+ *   - ROTATING_GENERAL   : چرخشی کار عمومی (پیش‌فرض)
+ */
+export type RoutineTag =
+  | 'MORNING_ONLY'
+  | 'LONG_SHIFT'
+  | 'EVENING_NIGHT'
+  | 'FULL_ROTATION_MEN'
+  | 'ROTATING_GENERAL';
+
 export interface Personnel {
   id: string;
   firstName: string;
@@ -17,13 +33,15 @@ export interface Personnel {
   experienceYears: number;
   active: boolean;
   canBeShiftLeader: boolean;
+  // برچسب روتین کاری (اختیاری/nullable؛ مقدار پیش‌فرض ROTATING_GENERAL است).
+  routineTag?: RoutineTag | null;
   orderIndex?: number;
   username?: string;
   password?: string;
   locked?: boolean;
 }
 
-export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
+export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'UNFILLED' | string;
 
 export interface JalaliDateInfo {
   year: number;
@@ -100,6 +118,8 @@ export interface MonthlySchedule {
     };
   };
   warnings: string[];
+  // هشدارهای بحرانی (قرمز) ناشی از وتوی دستی سرپرستار که قانون ایمنی را می‌شکند.
+  criticalWarnings?: string[];
   finalized?: boolean;
   finalizedNurses?: boolean;
   finalizedAssistants?: boolean;
@@ -187,4 +207,57 @@ export interface OptimizationResult {
     level2: string[];
     level3: string[];
   };
+}
+
+// ====== انواع سناریو و امتیازدهی (Arena) ======
+
+/**
+ * ScenarioScore — امتیاز کیفی یک سناریوی زمان‌بندی برای مقایسه و انتخاب.
+ *
+ * همهٔ شاخص‌های درصدی بین ۰ تا ۱۰۰ هستند (مقدار بالاتر بهتر است).
+ */
+export interface ScenarioScore {
+  /** پوشش شیفت‌ها (۰ تا ۱۰۰): نسبت سلول‌های پرشده به کل تقاضا. */
+  coverage: number;
+  /** عدالت توزیع ساعت کاری + حفظ routineTag (۰ تا ۱۰۰). */
+  fairness: number;
+  /** رضایت از درخواست‌ها (۰ تا ۱۰۰): درصد درخواست‌های پرسنلی که رعایت شده‌اند. */
+  requestSatisfaction: number;
+  /** ایمنی و قیود سخت (۰ تا ۱۰۰): قانون تجمعی ۳۲ ساعت، استراحت بعد از شب‌کار، حداقل نیرو. */
+  ruleCompliance: number;
+  /** ثبات و کمترین ویرایش دستی نسبت به برنامهٔ پایه (۰ تا ۱۰۰). */
+  stability: number;
+  /** تعداد کل هشدارها/نقص‌های باقی‌مانده در این سناریو. */
+  warningCount: number;
+  /** تعداد سلول‌های پرنشده (شیفت UNFILLED). */
+  unfilledCount: number;
+  /** امتیاز کل وزنی (۰ تا ۱۰۰) محاسبه‌شده از شاخص‌های بالا. */
+  total: number;
+}
+
+/**
+ * ArenaScenario — یک سناریوی جایگزین زمان‌بندی تولیدشده برای مقایسه و انتخاب.
+ *
+ * موتور بهینه‌سازی می‌تواند چند سناریوی متفاوت تولید کند، هرکدام را با
+ * ScenarioScore ارزیابی نماید و بهترین گزینه را در اختیار کاربر قرار دهد.
+ */
+export interface ArenaScenario {
+  /** شناسه یکتای سناریو. */
+  id: string;
+  /** برچسب نمایشی فارسی سناریو (مثلاً «سناریوی متعادل»). */
+  label: string;
+  /** تخصیص شیفت‌ها در این سناریو: { personnelId: { day: shift } }. */
+  assignments: { [personnelId: string]: { [day: number]: ShiftType } };
+  /** امتیاز محاسبه‌شده برای این سناریو. */
+  score: ScenarioScore;
+  /** هشدارهای باقی‌مانده در این سناریو. */
+  warnings: string[];
+  /** شکاف‌های پوششی (روز/شیفت با کمبود نیرو). */
+  coverageGaps: { day: number; shift: 'M' | 'E' | 'N'; shortage: number }[];
+  /** منبع یا روش تولید سناریو (مثلاً «heuristic» یا «ai»). */
+  generatedBy?: string;
+  /** مهر زمانی تولید سناریو (ISO 8601). */
+  createdAt: string;
+  /** یادداشت اختیاری توضیحی. */
+  notes?: string;
 }

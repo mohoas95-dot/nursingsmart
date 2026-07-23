@@ -23,6 +23,20 @@ export const DepartmentsSchema = z.array(DepartmentSchema).superRefine((departme
   }
 });
 
+// مقادیر مجاز برچسب روتین کاری پرسنل (منبع واحد برای نوع و اسکیمای اعتبارسنجی).
+export const ROUTINE_TAG_VALUES = [
+  'MORNING_ONLY',
+  'LONG_SHIFT',
+  'EVENING_NIGHT',
+  'FULL_ROTATION_MEN',
+  'ROTATING_GENERAL',
+] as const;
+
+// مقدار پیش‌فرض برچسب روتین کاری هنگام فقدان یا null بودن فیلد.
+export const DEFAULT_ROUTINE_TAG = 'ROTATING_GENERAL' as const;
+
+export const RoutineTagSchema = z.enum(ROUTINE_TAG_VALUES);
+
 export const PersonnelSchema = z.object({
   id: nonEmptyId,
   firstName: z.string().trim().min(1).max(200),
@@ -35,6 +49,9 @@ export const PersonnelSchema = z.object({
   experienceYears: z.number().finite().min(0).max(100),
   active: z.boolean(),
   canBeShiftLeader: z.boolean(),
+  // برچسب روتین کاری: اختیاری/nullable است. مقدار پیش‌فرض هنگام فقدان یا null،
+  // DEFAULT_ROUTINE_TAG (ROTATING_GENERAL) است؛ این مقدار در محل ساخت/مصرف پرسنل اعمال می‌شود.
+  routineTag: RoutineTagSchema.nullish(),
   orderIndex: z.number().int().min(0).optional(),
   username: z.string().max(200).optional(),
   password: z.string().max(500).optional(),
@@ -138,6 +155,7 @@ export const MonthlyScheduleSchema = z.object({
     night: nonEmptyId.optional(),
   }).strict()),
   warnings: z.array(z.string().max(5000)),
+  criticalWarnings: z.array(z.string().max(5000)).optional(),
   finalized: z.boolean().optional(),
   finalizedNurses: z.boolean().optional(),
   finalizedAssistants: z.boolean().optional(),
