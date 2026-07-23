@@ -32,7 +32,9 @@ import {
   mergeOptimizerAssignments,
   updateScheduleCell,
 } from '../../../domain/scheduling/schedule-operations';
+import { reconcileStaffingCoverage } from '../../../domain/scheduling/staffing-coverage';
 import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
+import { generateJalaliMonthCalendar } from '../../../lib/jalali';
 
 interface ShiftLeaderRecord {
   morning?: string;
@@ -176,12 +178,32 @@ export async function runOptimizerFacade(
       lockState.lockedRows
     );
 
+    // Merging a single job group with the current schedule (especially when some
+    // rows are locked) can reintroduce a shortage or an excess that did not exist
+    // in the solver's full result. Reconcile the target group against the same
+    // persisted staffing settings before verification and storage.
+    const calendar = generateJalaliMonthCalendar(
+      year,
+      month,
+      holidays,
+      firstDayOfWeek
+    );
+    const staffingResult = reconcileStaffingCoverage(
+      mergedAssignments,
+      personnel,
+      settings,
+      calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+      [jobGroup],
+      lockState.lockedRows
+    );
+    const compliantAssignments = staffingResult.assignments;
+
     // Step 6: Verify coverage and leaders
     const verification = verifier(
       year,
       month,
       personnel,
-      mergedAssignments,
+      compliantAssignments,
       settings,
       holidays,
       firstDayOfWeek,
@@ -193,7 +215,7 @@ export async function runOptimizerFacade(
       ...(currentSchedule || { year, month, assignments: {}, shiftLeaders: {}, warnings: [] }),
       year,
       month,
-      assignments: mergedAssignments,
+      assignments: compliantAssignments,
       shiftLeaders: verification.shiftLeaders,
       warnings: verification.warnings,
       finalizedNurses: jobGroup === 'nurse' ? false : currentSchedule?.finalizedNurses,

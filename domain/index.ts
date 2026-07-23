@@ -74,3 +74,15 @@ export {
   buildPersonnelFromForm,
   validatePersonnelForm,
 } from './scheduling/schedule-operations';
+
+export {
+  reconcileStaffingCoverage,
+  shiftCoversPeriod,
+} from './scheduling/staffing-coverage';
+
+export type {
+  CoverageShift,
+  StaffingCalendarDay,
+  StaffingCoverageGap,
+  StaffingCoverageResult,
+} from './scheduling/staffing-coverage';
