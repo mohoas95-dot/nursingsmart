@@ -56,6 +56,7 @@ import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/sc
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
+import { AIArenaPanel } from '../features/scheduling/components/AIArenaPanel';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
@@ -281,6 +282,7 @@ export default function Home() {
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean}>({general: true, personnel: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
+  const [showAIArena, setShowAIArena] = useState<boolean>(false);
 
   const personnelRef = React.useRef(personnel);
   const requestsRef = React.useRef(requests);
@@ -1084,6 +1086,95 @@ export default function Home() {
     );
   }, [schedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
 
+  // ====== Phase 6: Coverage gap detection for unfilled/understaffed grid slots ======
+  const unfilledCoverageGaps = React.useMemo(() => {
+    if (!schedule) return new Set<string>();
+    const gaps = new Set<string>();
+    // Parse warnings: patterns like "Coverage Shortage: کمبود نیرو (پرستار) در روز X شیفت M" or "کمبود نیرو در روز X شیفت M"
+    for (const w of schedule.warnings) {
+      const dayMatch = w.match(/روز (\d+)/);
+      const shiftMatch = w.match(/شیفت ([MEN])/);
+      if (dayMatch && shiftMatch) {
+        gaps.add(`${dayMatch[1]}-${shiftMatch[1]}`);
+      }
+    }
+    return gaps;
+  }, [schedule]);
+
+  // ====== Phase 6: Personnel names map for AI Arena ======
+  const personnelNamesMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of personnel) {
+      map[p.id] = `${p.firstName} ${p.lastName}`;
+    }
+    return map;
+  }, [personnel]);
+
+  // ====== Phase 6: Handle applying AI Arena suggestion ======
+  const handleApplySuggestion = async (suggestion: SmartSuggestion) => {
+    if (!schedule) return;
+    try {
+      const deptId = selectedDepartmentId || 'sepehr';
+      const persistenceAdapter: SchedulePersistence = {
+        saveSchedule: async (newSchedule: any) => {
+          const nextDb = getFreshDbCopy();
+          if (!nextDb.deptData) nextDb.deptData = {};
+          const oldDept = nextDb.deptData[deptId] || {
+            personnel: [],
+            requests: [],
+            settings_system: INITIAL_SETTINGS,
+            settings_credentials: { username: 'headnurse', password: '123456' },
+            holidays: {},
+            firstDayOfWeek: {},
+            schedules: {},
+          };
+          const updatedDept = {
+            ...oldDept,
+            schedules: {
+              ...oldDept.schedules,
+              [`${currentYear}_${currentMonth}`]: {
+                ...newSchedule,
+                dismissedWarnings: dismissedWarnings,
+                lockedRows: lockedRows,
+              },
+            },
+          };
+          nextDb.deptData[deptId] = updatedDept;
+          await saveDbState(nextDb, { showBusyOverlay: false });
+        },
+      };
+
+      // Apply each change from the suggestion
+      let updatedAssignments = JSON.parse(JSON.stringify(schedule.assignments));
+      for (const change of suggestion.changes) {
+        if (!updatedAssignments[change.personnelId]) {
+          updatedAssignments[change.personnelId] = {};
+        }
+        updatedAssignments[change.personnelId][change.day] = change.toShift;
+      }
+
+      const verification = verifyCoverageAndLeaders(
+        currentYear, currentMonth, personnel, updatedAssignments,
+        settings, customHolidays, firstDayOfWeekIndex, requests
+      );
+
+      const newSchedule = {
+        ...schedule,
+        assignments: updatedAssignments,
+        shiftLeaders: verification.shiftLeaders,
+        warnings: verification.warnings,
+        changeLogs: [...(schedule.changeLogs || []), `اعمال سناریوی هوشمند: ${suggestion.description} در تاریخ ${new Date().toLocaleString('fa-IR')}`],
+      };
+
+      await persistenceAdapter.saveSchedule(newSchedule, deptId);
+      alert('سناریوی پیشنهادی با موفقیت اعمال شد. صفحه را برای مشاهده تغییرات بازنشانی کنید.');
+      window.location.reload();
+    } catch (error) {
+      console.error('Error applying AI suggestion:', error);
+      alert('خطا در اعمال سناریوی هوشمند: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
   // UI Tabs & Active View
   const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'profile'>('schedule');
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'personnel' | 'request'; label: string } | null>(null);
@@ -1119,6 +1210,8 @@ export default function Home() {
   const setFormActive = personnelForm.setFormActive;
   const formCanBeShiftLeader = personnelForm.formData.canBeShiftLeader;
   const setFormCanBeShiftLeader = personnelForm.setFormCanBeShiftLeader;
+  const formRoutineTag = personnelForm.formData.routineTag;
+  const setFormRoutineTag = personnelForm.setFormRoutineTag;
 
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
@@ -1777,7 +1870,8 @@ export default function Home() {
           employmentType: formEmploymentType,
           experienceYears: Number(formExperienceYears),
           active: formActive,
-          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader
+          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          routineTag: formRoutineTag,
         };
         updatedList = personnel.map(p => p.id === editingPersonnel.id ? pData : p);
       } else {
@@ -1794,6 +1888,7 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          routineTag: formRoutineTag,
           orderIndex: personnel.length
         };
         const accountResponse = await fetch('/api/users', {
@@ -3275,6 +3370,13 @@ export default function Home() {
                     onClick={() => setShowAlertCenter(true)}
                     className="text-xs bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm"
                   >
+                  <button
+                    onClick={() => setShowAIArena(true)}
+                    className="text-xs bg-indigo-500 hover:bg-indigo-600 text-white font-black px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm flex items-center gap-1.5"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    مقایسه سناریوهای هوش مصنوعی
+                  </button>
                     مشاهده هشدارها در پنجره
                   </button>
                   {dismissedWarnings.length > 0 && (
@@ -3575,16 +3677,30 @@ export default function Home() {
                     <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-20 shadow-sm">
                       <tr>
                         <th className="sticky right-0 top-0 bg-slate-50 z-30 px-4 py-3 text-xs font-extrabold text-slate-600 border-l border-b border-slate-200 w-44 text-center">پرسنل / روزهای ماه</th>
-                        {calendarDays.map(d => (
+                        {calendarDays.map(d => {
+                          const hasGap = unfilledCoverageGaps.has(`${d.day}-M`) || unfilledCoverageGaps.has(`${d.day}-E`) || unfilledCoverageGaps.has(`${d.day}-N`);
+                          return (
                           <th
                             key={d.day}
-                            className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b border-slate-200 min-w-[34px] ${d.isHoliday ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800' : 'bg-slate-50 text-slate-600'}`}
-                            title={d.holidayTitle || 'روز عادی'}
+                            className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b min-w-[34px] ${
+                              hasGap
+                                ? 'bg-gray-800 animate-pulse border-red-500 text-red-100 border-b-2 border-b-red-500'
+                                : d.isHoliday
+                                  ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800 border-slate-200'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200'
+                            }`}
+                            title={hasGap ? `کمبود نیرو در روز ${d.day} — بررسی شود` : (d.holidayTitle || 'روز عادی')}
                           >
                             <div>{d.day}</div>
                             <div className="font-medium text-[9px] mt-0.5">{WEEKDAYS[d.dayOfWeek].substring(0, 2)}</div>
+                            {hasGap && (
+                              <div className="mt-0.5">
+                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span>
+                              </div>
+                            )}
                           </th>
-                        ))}
+                          );
+                        })}
                       </tr>
                     </thead>
 
@@ -5666,6 +5782,7 @@ export default function Home() {
         formExperienceYears={formExperienceYears}
         formActive={formActive}
         formCanBeShiftLeader={formCanBeShiftLeader}
+        formRoutineTag={formRoutineTag}
         setFormFirstName={setFormFirstName}
         setFormLastName={setFormLastName}
         setFormPersonalCode={setFormPersonalCode}
@@ -5676,6 +5793,7 @@ export default function Home() {
         setFormExperienceYears={setFormExperienceYears}
         setFormActive={setFormActive}
         setFormCanBeShiftLeader={setFormCanBeShiftLeader}
+        setFormRoutineTag={setFormRoutineTag}
         onSubmit={handleSavePersonnel}
         parseNumberInput={parseNumberInput}
       />
@@ -5693,6 +5811,14 @@ export default function Home() {
         extractWarningDay={extractWarningDay}
       />
 
+
+      <AIArenaPanel
+        isOpen={showAIArena}
+        onClose={() => setShowAIArena(false)}
+        suggestions={smartSuggestions}
+        onApplySuggestion={handleApplySuggestion}
+        personnelNames={personnelNamesMap}
+      />
       {showAddRequestModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="request-modal">
           <div className="bg-white border rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl relative animate-scale-up scrollbar-thin">

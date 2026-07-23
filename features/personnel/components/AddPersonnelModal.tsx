@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import type { Personnel } from '../../../lib/types';
+import type { Personnel, RoutineTag } from '../../../lib/types';
+import { ROUTINE_TAG_LABELS } from '../../../lib/types';
 
 /**
  * AddPersonnelModal — Presentational Component
@@ -34,6 +35,7 @@ export interface AddPersonnelModalProps {
   formExperienceYears: number | string;
   formActive: boolean;
   formCanBeShiftLeader: boolean;
+  formRoutineTag: RoutineTag;
 
   // Form setters
   setFormFirstName: (value: string) => void;
@@ -46,6 +48,7 @@ export interface AddPersonnelModalProps {
   setFormExperienceYears: (value: number | string) => void;
   setFormActive: (value: boolean) => void;
   setFormCanBeShiftLeader: (value: boolean) => void;
+  setFormRoutineTag: (value: RoutineTag) => void;
 
   // Submit handler
   onSubmit: (e: React.FormEvent) => void;
@@ -70,6 +73,7 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     formExperienceYears,
     formActive,
     formCanBeShiftLeader,
+    formRoutineTag,
     setFormFirstName,
     setFormLastName,
     setFormPersonalCode,
@@ -80,6 +84,7 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     setFormExperienceYears,
     setFormActive,
     setFormCanBeShiftLeader,
+    setFormRoutineTag,
     onSubmit,
     parseNumberInput,
   } = props;
@@ -224,6 +229,30 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
           </div>
 
           <div className="pt-3 flex flex-col gap-2 border-t border-slate-100">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">برچسب روتین کاری (الگوی ثابت شیفت)</label>
+              <div className="flex items-center gap-2">
+                <select
+                  value={formRoutineTag}
+                  onChange={(e) => setFormRoutineTag(e.target.value as RoutineTag)}
+                  className="flex-1 text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
+                  id="select-form-routine-tag"
+                >
+                  {(Object.keys(ROUTINE_TAG_LABELS) as RoutineTag[]).map(tag => (
+                    <option key={tag} value={tag}>{ROUTINE_TAG_LABELS[tag]}</option>
+                  ))}
+                </select>
+                {formRoutineTag !== 'none' && (
+                  <span className="shrink-0 bg-indigo-100 text-indigo-700 border border-indigo-200 text-[10px] font-black px-2.5 py-1.5 rounded-full">
+                    {ROUTINE_TAG_LABELS[formRoutineTag]}
+                  </span>
+                )}
+              </div>
+              <p className="text-[9px] text-slate-400 mt-1 font-bold leading-relaxed">
+                برچسب‌گذاری برای دسته‌بندی سریع پرسنل در جدول شیفت‌بندی. الگوریتم زمان‌بندی این برچسب را در اولویت‌بندی تخصیص شیفت در نظر می‌گیرد.
+              </p>
+            </div>
+
             <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700">
               <input
                 type="checkbox"

@@ -464,6 +464,15 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
       cause: new StorageValidationError(state.error.issues),
     });
   }
+
+  // Fail-closed: an empty departments array signals either a corrupt index or a
+  // nascent system with zero departments; neither scenario is a valid read result.
+  if (state.data.departments.length === 0) {
+    throw new StorageUnavailableError(
+      'Department index is empty — refusing to serve an empty database state',
+    );
+  }
+
   return { state: state.data, versions, source: 's3-granular' };
 }
 
@@ -679,4 +688,181 @@ export function getCircuitBreakerStatus() {
       ? Math.max(0, CIRCUIT_RESET_TIMEOUT_MS - (Date.now() - circuit.openedAt))
       : 0,
   };
+}
+
+// ============================================================================
+// Phase 7: Atomic Multi-Resource Write
+// ============================================================================
+
+export interface WriteSpec {
+  resource: StorageResource;
+  data: unknown;
+  expectedETag: string | null;
+}
+
+export interface AtomicWriteOutcome {
+  success: true;
+  results: Array<{
+    resource: StorageResource;
+    etag: string;
+    versionId?: string;
+    resolvedFromConflict: boolean;
+    alreadyApplied: boolean;
+  }>;
+}
+
+export interface AtomicWriteFailure {
+  success: false;
+  error: string;
+  code: 'VALIDATION_FAILED' | 'CONFLICT' | 'UNAVAILABLE' | 'DELETED';
+  /** The resource (index into specs) that failed, if available. */
+  failedResourceIndex?: number;
+  /** Results for resources that were successfully written BEFORE the failure.
+   *  S3 has no multi-object transaction so earlier writes may already be durable. */
+  partialResults: Array<{
+    resource: StorageResource;
+    etag: string;
+    versionId?: string;
+    resolvedFromConflict: boolean;
+    alreadyApplied: boolean;
+  }>;
+}
+
+export type AtomicWriteResult = AtomicWriteOutcome | AtomicWriteFailure;
+
+/**
+ * Write multiple resources with strict ETag preconditions.
+ *
+ * Writes are performed sequentially in the given order. The departments index
+ * (resource type 'departments') is always deferred to last so a newly created
+ * department never appears in the index before all of its data files exist.
+ *
+ * All resources are schema-validated before the first write is attempted.
+ * On any failure, the function returns a failure result with partial-results
+ * details so the caller can decide on a recovery strategy.
+ *
+ * @param specs - Ordered array of { resource, data, expectedETag }
+ *                `expectedETag` of `null` means create-only (If-None-Match).
+ *                Non-null ETags are validated with If-Match (must be quoted).
+ * @returns AtomicWriteResult with full or partial outcome
+ */
+export async function atomicWriteResources(specs: WriteSpec[]): Promise<AtomicWriteResult> {
+  // ---- Phase 1: Validate ALL schemas before touching S3 ----
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i];
+    const schema = schemaForResource(spec.resource);
+    const parsed = schema.safeParse(spec.data);
+    if (!parsed.success) {
+      return {
+        success: false,
+        code: 'VALIDATION_FAILED',
+        error: `Schema validation failed for ${resourceVersionId(spec.resource)} (spec index ${i})`,
+        failedResourceIndex: i,
+        partialResults: [],
+      };
+    }
+    if (spec.resource.type === 'schedule') {
+      const schedule = parsed.data as { year: number; month: number };
+      if (`${schedule.year}_${schedule.month}` !== spec.resource.monthKey) {
+        return {
+          success: false,
+          code: 'VALIDATION_FAILED',
+          error: `Schedule key mismatch for ${resourceVersionId(spec.resource)} (spec index ${i})`,
+          failedResourceIndex: i,
+          partialResults: [],
+        };
+      }
+    }
+    if (spec.expectedETag !== null && !/^\"[^\"]+\"$/.test(spec.expectedETag)) {
+      return {
+        success: false,
+        code: 'VALIDATION_FAILED',
+        error: `Malformed ETag for ${resourceVersionId(spec.resource)} (spec index ${i})`,
+        failedResourceIndex: i,
+        partialResults: [],
+      };
+    }
+  }
+
+  // ---- Phase 2: Enforce write ordering — department index goes last ----
+  const orderedSpecs = orderWriteSpecs(specs);
+
+  // ---- Phase 3: Write sequentially, collecting results ----
+  const partialResults: AtomicWriteOutcome['results'] = [];
+
+  for (let i = 0; i < orderedSpecs.length; i++) {
+    const spec = orderedSpecs[i];
+
+    try {
+      const result = await writeResourceResolvingConflict(
+        spec.resource,
+        spec.data,
+        spec.expectedETag,
+      );
+      partialResults.push({
+        resource: spec.resource,
+        etag: result.etag,
+        versionId: result.versionId,
+        resolvedFromConflict: result.resolvedFromConflict,
+        alreadyApplied: result.alreadyApplied,
+      });
+    } catch (error) {
+      if (error instanceof StorageConflictError && error.message.includes('no longer exists')) {
+        return {
+          success: false,
+          code: 'DELETED',
+          error: `Write stopped: ${resourceVersionId(spec.resource)} was deleted since last read.`,
+          failedResourceIndex: i,
+          partialResults,
+        };
+      }
+      if (error instanceof StorageConflictError) {
+        // Unresolvable conflict (not even unconditional write succeeded)
+        return {
+          success: false,
+          code: 'CONFLICT',
+          error: `Unresolvable ETag conflict for ${resourceVersionId(spec.resource)} at write spec index ${i}`,
+          failedResourceIndex: i,
+          partialResults,
+        };
+      }
+      if (error instanceof StorageUnavailableError || error instanceof StorageConfigurationError) {
+        return {
+          success: false,
+          code: 'UNAVAILABLE',
+          error: `Storage unavailable during write of ${resourceVersionId(spec.resource)}: ${error.message}`,
+          failedResourceIndex: i,
+          partialResults,
+        };
+      }
+      // Unknown errors also fail closed
+      return {
+        success: false,
+        code: 'UNAVAILABLE',
+        error: `Unexpected error writing ${resourceVersionId(spec.resource)}: ${String(error)}`,
+        failedResourceIndex: i,
+        partialResults,
+      };
+    }
+  }
+
+  return { success: true, results: partialResults };
+}
+
+/**
+ * Reorder write specs so the departments index is written last.
+ * This ensures a new department never appears in the index before its
+ * data files (personnel, requests, settings, etc.) are committed.
+ */
+function orderWriteSpecs(specs: WriteSpec[]): WriteSpec[] {
+  const nonIndex: WriteSpec[] = [];
+  const indexSpecs: WriteSpec[] = [];
+  for (const spec of specs) {
+    if (spec.resource.type === 'departments') {
+      indexSpecs.push(spec);
+    } else {
+      nonIndex.push(spec);
+    }
+  }
+  return [...nonIndex, ...indexSpecs];
 }

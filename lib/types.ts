@@ -6,6 +6,20 @@ export type NursePosition = 'supervisor' | 'staff' | 'general' | 'none';
 
 export type EmploymentType = 'official' | 'contract' | 'conscript' | 'overtime';
 
+export type RoutineTag = 'day_even' | 'day_odd' | 'night_even' | 'night_odd' | 'circulating' | 'fixed_morning' | 'fixed_evening' | 'fixed_night' | 'none';
+
+export const ROUTINE_TAG_LABELS: Record<RoutineTag, string> = {
+  day_even: 'روزکار زوج',
+  day_odd: 'روزکار فرد',
+  night_even: 'شب‌کار زوج',
+  night_odd: 'شب‌کار فرد',
+  circulating: 'چرخشی (سیرکوله)',
+  fixed_morning: 'ثابت صبح',
+  fixed_evening: 'ثابت عصر',
+  fixed_night: 'ثابت شب',
+  none: 'بدون برچسب',
+};
+
 export interface Personnel {
   id: string;
   firstName: string;
@@ -21,6 +35,7 @@ export interface Personnel {
   username?: string;
   password?: string;
   locked?: boolean;
+  routineTag?: RoutineTag;
 }
 
 export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;
