@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
   try {
     assertSameOrigin(request);
     const credentials = LoginSchema.parse(await request.json());
-    const user = await prisma.user.findUnique({ where: { nationalId: credentials.nationalId } });
+    let user = await prisma.user.findUnique({ where: { nationalId: credentials.nationalId } });
 
     // Always run bcrypt, including for unknown users, to reduce account enumeration via timing.
     const passwordIsValid = await verifyPassword(credentials.password, user?.passwordHash);
@@ -37,6 +37,16 @@ export async function POST(request: NextRequest) {
         success: false,
         error: 'به‌دلیل تلاش‌های ناموفق، ورود موقتاً مسدود شده است. کمی بعد دوباره تلاش کنید.',
       }, { status: 429 });
+    }
+    // ====== اصلاح: انتساب خودکار departmentId ======
+    // اگر کاربر departmentId ندارد (null)، و کلاینت یک departmentId معتبر فرستاده،
+    // آن را به کاربر اختصاص می‌دهیم. این حالت وقتی رخ می‌دهد که پرسنل از طریق فراموشی
+    // رمز یا روش‌های دیگر حساب ساخته شده ولی به بخش متصل نشده.
+    if (credentials.departmentId && user.role !== 'ADMIN' && !user.departmentId) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { departmentId: credentials.departmentId },
+      });
     }
     if (credentials.departmentId && user.role !== 'ADMIN' && user.departmentId !== credentials.departmentId) {
       return authJson({ success: false, error: 'این حساب به بخش انتخاب‌شده تعلق ندارد.' }, { status: 403 });

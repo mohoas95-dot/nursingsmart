@@ -428,7 +428,7 @@ export default function Home() {
       const response = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nationalId: staffNationalIdInput }),
+        body: JSON.stringify({ nationalId: staffNationalIdInput, departmentId: selectedDepartmentId }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'ثبت درخواست انجام نشد.');

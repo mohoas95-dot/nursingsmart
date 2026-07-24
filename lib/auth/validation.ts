@@ -26,7 +26,7 @@ export const NationalIdSchema = z.string()
 export const PasswordInputSchema = z.string()
   .min(1, 'رمز عبور را وارد کنید.')
   .max(200)
-  .transform(value => /^[۰-۹٠-٩]+$/.test(value) ? toEnglishDigits(value) : value);
+  .transform(value => toEnglishDigits(value));
 
 export const LoginSchema = z.object({
   nationalId: NationalIdSchema,
@@ -35,7 +35,10 @@ export const LoginSchema = z.object({
   portal: z.enum(['staff', 'head-nurse']).optional(),
 }).strict();
 
-export const ForgotPasswordSchema = z.object({ nationalId: NationalIdSchema }).strict();
+export const ForgotPasswordSchema = z.object({
+  nationalId: NationalIdSchema,
+  departmentId: z.string().min(1).max(128).optional(),
+}).strict();
 
 export const ChangePasswordSchema = z.object({
   currentPassword: PasswordInputSchema,
