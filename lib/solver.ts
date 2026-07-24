@@ -4,6 +4,19 @@ import { Personnel, SystemSettings, ShiftRequest, MonthlySchedule, ShiftType, Ja
 import { generateJalaliMonthCalendar, getJalaliMonthDays, getJalaliWeekday } from './jalali';
 import { reconcileStaffingCoverage, shiftCoversPeriod, type CoverageShift } from '../domain/scheduling/staffing-coverage';
 import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
+import {
+  HOLIDAY_LEAVE_HOURS,
+  HOLIDAY_LEAVE_SHIFT,
+  endsMonthAtCapWithoutRest,
+  findConsecutiveCapViolations,
+  findIsolatedSingleShiftDays,
+  isIsolatedSingleShiftAt,
+  isRoutineAllowedSingleShift,
+  wouldCreateIsolatedShift,
+  routineAllowsPeriodAdd,
+  shiftMatchesRoutine,
+  wouldBreachConsecutiveCap,
+} from '../domain/scheduling/smart-rules';
 
 // Shift durations in hours
 export const SHIFT_HOURS: { [key in ShiftType]: number } = {
@@ -24,6 +37,10 @@ export const SHIFT_HOURS: { [key in ShiftType]: number } = {
 
 // Get dynamic shift hours considering personnel's employment type for leaves
 export function getShiftHours(shift: string, employmentType: string): number {
+  // قانون مرخصی روز تعطیل: دقیقاً ۷ ساعت اعتبار برای تمام انواع استخدام
+  if (shift === HOLIDAY_LEAVE_SHIFT) {
+    return HOLIDAY_LEAVE_HOURS;
+  }
   if (shift.startsWith('L')) {
     return getLeaveHours(employmentType);
   }
@@ -176,6 +193,15 @@ export function solveWithPriority(
   const totalDays = calendar.length;
   const activePersonnel = personnelList.filter(p => p.active && !p.locked);
 
+  // نفراتی که درخواست شیفت یا الگوی کاری ثبت کرده‌اند؛ سایر نفراتِ دارای تگ روتین،
+  // صرفاً بر اساس همان تگ در دوره‌های سازگار چیده می‌شوند.
+  const explicitShiftPlan = new Set<string>();
+  requests.forEach(request => {
+    if (request.requestType === 'shift' || request.requestType === 'pattern') {
+      explicitShiftPlan.add(request.personnelId);
+    }
+  });
+
   const baseResult = solveNursingSchedule(
     year, month, personnelList, requests, settings,
     customHolidays, firstDayOfWeekIndex, monthlyDutyHours
@@ -271,6 +297,23 @@ export function solveWithPriority(
           return request?.requestType === 'avoid_shift' && request.preferredShift === shiftType;
         });
 
+        // احترام به قوانین هوشمند در انتخاب نفر جایگزین: ابتدا نفراتی که شیفت تک‌تک
+        // نمی‌سازند، سپس نفراتی که تگ روتین کاری‌شان با این شیفت سازگار است.
+        const routineScore = (person: Personnel): number => {
+          if (!person.workRoutine) return 1;
+          // سازگاری در سطح دوره موردنیاز (قدم‌های M/E برای لانگ‌کار و E/N برای عصر و شب‌کار جایزه می‌گیرند)
+          return routineAllowsPeriodAdd(person.workRoutine, shiftType) ? 0 : 2;
+        };
+        const bySmartRules = (left: Personnel, right: Personnel): number => {
+          const isolatedLeft = wouldCreateIsolatedShift(assignments, left.id, d, totalDays, shiftType) ? 1 : 0;
+          const isolatedRight = wouldCreateIsolatedShift(assignments, right.id, d, totalDays, shiftType) ? 1 : 0;
+          if (isolatedLeft !== isolatedRight) return isolatedLeft - isolatedRight;
+          return routineScore(left) - routineScore(right);
+        };
+        priority1.sort(bySmartRules);
+        priority2.sort(bySmartRules);
+        priority3.sort(bySmartRules);
+
         let remainingShortage = shortage;
         const filledBy: string[] = [];
         const alreadyConsidered = new Set<string>();
@@ -282,6 +325,8 @@ export function solveWithPriority(
             alreadyConsidered.add(person.id);
             // A prior priority/shift iteration may have changed this day already.
             if ((assignments[person.id]?.[d] || 'OFF') !== 'OFF') continue;
+            // قانون سقف ۵ شیفت متوالی و استراحت اجباری در بازتولید هوشمند سخت است.
+            if (wouldBreachConsecutiveCap(assignments, person.id, d, shiftType, totalDays)) continue;
 
             if (!assignments[person.id]) assignments[person.id] = {};
             assignments[person.id][d] = shiftType;
@@ -291,9 +336,22 @@ export function solveWithPriority(
           }
         };
 
-        applyPriority(priority1, 'level1');
-        applyPriority(priority2, 'level2');
-        applyPriority(priority3, 'level3');
+        // قانون تگ روتین کاری: نفراتِ دارای تگ که هیچ درخواست شیفت نداده‌اند، ابتدا
+        // فقط در دوره‌های سازگار با تگشان چیده می‌شوند؛ اگر کمبود همچنان ماند، مسیر
+        // پشتیبانِ ناسازگار فعال می‌شود تا کاور کامل حفظ شود.
+        const routineCompatible = (person: Personnel) =>
+          !person.workRoutine ||
+          explicitShiftPlan.has(person.id) ||
+          routineAllowsPeriodAdd(person.workRoutine, shiftType);
+        const compatiblePool = (candidates: Personnel[]) => candidates.filter(routineCompatible);
+        const fallbackPool = (candidates: Personnel[]) => candidates.filter(person => !routineCompatible(person));
+
+        applyPriority(compatiblePool(priority1), 'level1');
+        applyPriority(compatiblePool(priority2), 'level2');
+        applyPriority(compatiblePool(priority3), 'level3');
+        applyPriority(fallbackPool(priority1), 'level1');
+        applyPriority(fallbackPool(priority2), 'level2');
+        applyPriority(fallbackPool(priority3), 'level3');
 
         if (remainingShortage > 0) {
           warnings.push(
@@ -451,6 +509,15 @@ export function solveNursingSchedule(
   const nurses = activePersonnel.filter(p => p.jobGroup === 'nurse');
   const assistants = activePersonnel.filter(p => p.jobGroup === 'assistant');
 
+  // نفراتی که درخواست شیفت یا الگوی کاری ثبت کرده‌اند؛ نفراتِ دارای تگ روتین کاری
+  // که هیچ درخواست شیفتی ندارند، چینش‌شان دقیقاً بر اساس تگ انجام می‌شود.
+  const explicitShiftPlan = new Set<string>();
+  requests.forEach(request => {
+    if (request.requestType === 'shift' || request.requestType === 'pattern') {
+      explicitShiftPlan.add(request.personnelId);
+    }
+  });
+
   // Pre-process Leaves
   activePersonnel.forEach(p => {
     let leaveDayCount = 0;
@@ -464,7 +531,9 @@ export function solveNursingSchedule(
       if (req && req.requestType === 'leave') {
         if (!isCurrentlyOnLeave) {
           if (isHoliday) {
-            assignments[p.id][d] = 'OFF';
+            // قانون مرخصی روز تعطیل: مرخصی ثبت‌شده روی تعطیل رسمی با مارکر LH
+            // ثبت می‌شود تا دقیقاً ۷ ساعت اعتبار در محاسبات ساعت موظفی لحاظ گردد.
+            assignments[p.id][d] = HOLIDAY_LEAVE_SHIFT;
             leaveStartShifted = true;
             continue;
           } else {
@@ -687,7 +756,13 @@ export function solveNursingSchedule(
 
       const available = group.filter(p => {
         if (assignments[p.id][d].startsWith('L')) return false;
-        
+
+        // قانون تگ روتین کاری: نفراتی که هیچ درخواست شیفت/الگویی ندارند، صرفاً در
+        // دوره‌های سازگار با تگ روتین‌شان چیده می‌شوند و مسیر اضطراری جداگانه فعال است.
+        if (p.workRoutine && !explicitShiftPlan.has(p.id) && !routineAllowsPeriodAdd(p.workRoutine, shiftChar)) {
+          return false;
+        }
+
         const currentShift = assignments[p.id][d];
         
         if (shiftChar === 'M' && (currentShift === 'M' || currentShift === 'ME' || currentShift === 'MN' || currentShift === 'MEN')) return false;
@@ -826,6 +901,12 @@ export function solveNursingSchedule(
           if (currentShift === 'ME' && shiftChar === 'N') prospectiveShift = 'MEN';
         }
 
+        // قانون سقف ۵ شیفت متوالی (M=١، E=١، N=٢) و استراحت اجباری پس از آن:
+        // هر تخصیصی که مجموع زنجیره متوالی را از ۵ واحد عبور دهد غیرمجاز است.
+        if (wouldBreachConsecutiveCap(assignments, p.id, d, prospectiveShift, totalDays)) {
+          return false;
+        }
+
         const isHeavy = (s: ShiftType) => s === 'MEN' || s === 'EN' || s === 'MN' || s === 'ME';
 
         if (isHeavy(prospectiveShift)) {
@@ -872,6 +953,46 @@ export function solveNursingSchedule(
                                requests.some(r => r.personnelId === p.id && r.requestType === 'pattern' && r.patternSteps?.includes('N'));
             if (!isExplicit) {
               score += 20000;
+            }
+          }
+
+          // ====== قوانین هوشمند: شیفت تک‌تک و تگ روتین کاری ======
+          const prospectiveShift = (() => {
+            if (curr === 'OFF') return shiftChar;
+            if (curr === 'M' && shiftChar === 'E') return 'ME';
+            if (curr === 'M' && shiftChar === 'N') return 'MN';
+            if (curr === 'E' && shiftChar === 'N') return 'EN';
+            if (curr === 'ME' && shiftChar === 'N') return 'MEN';
+            return curr;
+          })();
+
+          const explicitShiftToday =
+            dailyRequests[p.id]?.[d]?.requestType === 'shift' && !!dailyRequests[p.id]?.[d]?.preferredShift;
+
+          // قانون ممنوعیت شیفت تک‌تک (به‌ویژه عصر تنها در میان روزهای کاری):
+          // ایجاد شیفت تک‌مؤلفه ایزوله جریمه سنگین دارد، مگر درخواست صریح ثبت شده
+          // باشد یا تگ روتین کاری نفر آن را مجاز کند (مثل M تک برای صبح‌کارها).
+          if (prospectiveShift === 'M' || prospectiveShift === 'E' || prospectiveShift === 'N') {
+            if (
+              !explicitShiftToday &&
+              !isRoutineAllowedSingleShift(prospectiveShift, p.workRoutine) &&
+              wouldCreateIsolatedShift(assignments, p.id, d, totalDays, prospectiveShift)
+            ) {
+              score += prospectiveShift === 'E' ? 40000 : 25000;
+            }
+          }
+
+          // احترام به تگ روتین کاری (حرکت دائمی نفر):
+          // تکمیل الگوی نهایی روتین (مثل ساخت ME برای لانگ‌کار) بیشترین جایزه را
+          // دارد؛ قدم سازگار با روتین (مثل گرفتن M برای لانگ‌کار تا ME شود) هم جایزه
+          // می‌گیرد و هر دوره ناسازگار با روتین جریمه می‌شود.
+          if (p.workRoutine && !explicitShiftToday) {
+            if (shiftMatchesRoutine(prospectiveShift, p.workRoutine)) {
+              score -= 25000;
+            } else if (routineAllowsPeriodAdd(p.workRoutine, shiftChar)) {
+              score -= 10000;
+            } else {
+              score += 30000;
             }
           }
 
@@ -1002,6 +1123,32 @@ export function solveNursingSchedule(
         });
 
         forceAvailable.sort((x, y) => {
+           // تگ روتین کاری در مسیر اضطراری هم اولویت اول است: ابتدا نفراتی که شیفت
+           // با تگشان سازگار است (یا تگ ندارند/درخواست شیفت دارند) انتخاب می‌شوند.
+           const routineCompat = (person: Personnel) =>
+             !person.workRoutine ||
+             explicitShiftPlan.has(person.id) ||
+             routineAllowsPeriodAdd(person.workRoutine, shiftChar);
+           const compatX = routineCompat(x) ? 0 : 1;
+           const compatY = routineCompat(y) ? 0 : 1;
+           if (compatX !== compatY) return compatX - compatY;
+
+           // سقف ۵ شیفت متوالی حتی در مسیر اضطراری به‌عنوان آخرین ملاک رعایت می‌شود:
+           // نفراتی که تخصیص به آن‌ها زنجیره را از ۵ عبور می‌دهد به انتهای صف می‌روند.
+           const prospectiveBreach = (person: Personnel) => {
+             const cs = assignments[person.id][d];
+             let ps = cs;
+             if (cs === 'OFF') ps = shiftChar;
+             else if (cs === 'M' && shiftChar === 'E') ps = 'ME';
+             else if (cs === 'M' && shiftChar === 'N') ps = 'MN';
+             else if (cs === 'E' && shiftChar === 'N') ps = 'EN';
+             else if (cs === 'ME' && shiftChar === 'N') ps = 'MEN';
+             return wouldBreachConsecutiveCap(assignments, person.id, d, ps, totalDays) ? 1 : 0;
+           };
+           const breachX = prospectiveBreach(x);
+           const breachY = prospectiveBreach(y);
+           if (breachX !== breachY) return breachX - breachY;
+
            let hoursX = 0; let hoursY = 0;
            for (let day = 1; day <= totalDays; day++) {
              hoursX += getShiftHours(assignments[x.id][day], x.employmentType);
@@ -1056,20 +1203,70 @@ export function solveNursingSchedule(
     fillGroupGaps(nurses, 'N', nightNurseDemand, nAssignedNurse);
   }
 
+  // 5+. ترمیم شیفت‌های تک‌تک: شیفت تک‌مؤلفه (به‌ویژه عصر/E) که میان روزهای کاری با
+  // الگوی متفاوت گیر افتاده، به نفر دیگری از همان گروه منتقل می‌شود که الگوی پیوسته
+  // سازگاری دارد تا چیدمان، تگ روتین کاری و پیوستگی روزها حفظ شود.
+  activePersonnel.forEach(p => {
+    for (let d = 1; d <= totalDays; d++) {
+      const shift = assignments[p.id]?.[d];
+      if (shift !== 'M' && shift !== 'E' && shift !== 'N') continue;
+      if (isRoutineAllowedSingleShift(shift, p.workRoutine)) continue;
+
+      // درخواست صریح یا الگوی ثبت‌شده نفر دست‌نخورده می‌ماند.
+      const dailyReq = dailyRequests[p.id]?.[d];
+      if (dailyReq?.requestType === 'shift' && dailyReq.preferredShift === shift) continue;
+      if (requests.some(r => r.personnelId === p.id && r.requestType === 'pattern')) continue;
+
+      if (!isIsolatedSingleShiftAt(assignments, p.id, d, totalDays)) continue;
+
+      const replacementCandidates = activePersonnel.filter(q => {
+        if (q.id === p.id || q.jobGroup !== p.jobGroup || q.locked) return false;
+        if (assignments[q.id]?.[d] !== 'OFF') return false;
+        const qReq = dailyRequests[q.id]?.[d];
+        if (qReq && (qReq.requestType === 'OFF' || qReq.requestType === 'leave')) return false;
+        if (requests.some(r => r.personnelId === q.id && r.requestType === 'pattern')) return false;
+        if (avoidedShifts[q.id]?.[d]?.has(shift)) return false;
+        // تگ روتین کاری نفر بدون درخواست شیفت احترام می‌ماند.
+        if (q.workRoutine && !explicitShiftPlan.has(q.id) && !routineAllowsPeriodAdd(q.workRoutine, shift as 'M' | 'E' | 'N')) return false;
+        // جایگزین نباید سقف ۵ شیفت متوالی را نقض کند یا خودش شیفت تک‌تک بسازد.
+        if (wouldBreachConsecutiveCap(assignments, q.id, d, shift, totalDays)) return false;
+        if (isIsolatedSingleShiftAt(assignments, q.id, d, totalDays, shift)) return false;
+        return true;
+      });
+
+      // اولویت جایگزینی با نفراتی که شیفت با تگ روتین کاریشان سازگار است.
+      replacementCandidates.sort((a, b) => {
+        const matchA = shiftMatchesRoutine(shift, a.workRoutine) ? 0 : 1;
+        const matchB = shiftMatchesRoutine(shift, b.workRoutine) ? 0 : 1;
+        return matchA - matchB;
+      });
+
+      const replacement = replacementCandidates[0];
+      if (replacement) {
+        assignments[p.id][d] = 'OFF';
+        assignments[replacement.id][d] = shift;
+        warnings.push(`Isolated Shift Fixed: شیفت تک (${shift}) پرسنل ${p.firstName} ${p.lastName} در روز ${d} برای حفظ الگوی پیوسته به ${replacement.firstName} ${replacement.lastName} منتقل شد`);
+      }
+    }
+  });
+
   // 6. Post-process OFF and consecutive constraints
   activePersonnel.forEach(p => {
     for (let d = 2; d <= totalDays; d++) {
       const prevS = assignments[p.id][d-1];
       const currS = assignments[p.id][d];
       
-      if (prevS.startsWith('L') && currS === 'OFF') {
+      // مرخصی تعطیل (LH) در حکم خود روز تعطیل است؛ قانون «ممنوعیت آف بعد از مرخصی»
+      // فقط برای مرخصی‌های شماره‌دار اعمال می‌شود و تخصیص جایگزین نباید سقف ۵ شیفت
+      // متوالی را نقض کند.
+      if (prevS.startsWith('L') && prevS !== HOLIDAY_LEAVE_SHIFT && currS === 'OFF') {
         const shouldAvoidM = avoidedShifts[p.id]?.[d]?.has('M');
-        if (!shouldAvoidM) {
+        if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
           assignments[p.id][d] = 'M';
           warnings.push(`OFF Removed: حذف OFF ناخواسته پرسنل ${p.firstName} ${p.lastName} در روز ${d} به دلیل قانون ممنوعیت آف بعد از مرخصی`);
         } else {
           const shouldAvoidE = avoidedShifts[p.id]?.[d]?.has('E');
-          if (!shouldAvoidE) {
+          if (!shouldAvoidE && !wouldBreachConsecutiveCap(assignments, p.id, d, 'E', totalDays)) {
             assignments[p.id][d] = 'E';
             warnings.push(`OFF Removed: حذف OFF ناخواسته پرسنل ${p.firstName} ${p.lastName} در روز ${d} به دلیل قانون ممنوعیت آف بعد از مرخصی (تبدیل به عصر به دلیل محدودیت شیفت صبح)`);
           }
@@ -1083,13 +1280,13 @@ export function solveNursingSchedule(
         consecutiveOff++;
         if (consecutiveOff > 3) {
           const shouldAvoidM = avoidedShifts[p.id]?.[d]?.has('M');
-          if (!shouldAvoidM) {
+          if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
             assignments[p.id][d] = 'M';
             consecutiveOff = 0;
             warnings.push(`OFF Removed: لغو مرخصی آف یا آف متوالی ۴ روزه پرسنل ${p.firstName} ${p.lastName} در روز ${d} جهت رعایت سقف ۳ روز متوالی`);
           } else {
             const shouldAvoidE = avoidedShifts[p.id]?.[d]?.has('E');
-            if (!shouldAvoidE) {
+            if (!shouldAvoidE && !wouldBreachConsecutiveCap(assignments, p.id, d, 'E', totalDays)) {
               assignments[p.id][d] = 'E';
               consecutiveOff = 0;
               warnings.push(`OFF Removed: لغو مرخصی آف یا آف متوالی ۴ روزه پرسنل ${p.firstName} ${p.lastName} در روز ${d} جهت رعایت سقف ۳ روز متوالی (تبدیل به عصر به دلیل محدودیت صبح)`);
@@ -1189,7 +1386,10 @@ export function solveNursingSchedule(
     assignments,
     activePersonnel,
     settings,
-    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday }))
+    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+    ['nurse', 'assistant'],
+    [],
+    requests
   );
   const finalAssignments = staffingResult.assignments;
 
@@ -1414,6 +1614,35 @@ export function verifyCoverageAndLeaders(
     }
   });
 
+  // ====== قوانین هوشمند بازتولید: سقف ۵ شیفت متوالی، استراحت اجباری، شیفت تک‌تک ======
+  activePersonnel.forEach(p => {
+    const fullName = `${p.firstName} ${p.lastName}`;
+
+    // ۱) سقف کارکرد متوالی: مجموع واحدهای شیفت پشت‌سرهم (M=١، E=١، N=٢) نباید از ۵ بیشتر شود.
+    const capViolations = findConsecutiveCapViolations(assignments, p.id, totalDays);
+    capViolations.forEach(violation => {
+      warnings.push(
+        `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} تا روز ${violation.endDay} (مجموع ${violation.weight} واحد شیفت پشت‌سرهم؛ حداکثر مجاز ۵ واحد است)`
+      );
+    });
+
+    // ۲) استراحت اجباری: اگر زنجیره متوالی در پایان ماه به ۵ واحد رسیده، ابتدای ماه بعد آف اجباری است.
+    if (endsMonthAtCapWithoutRest(assignments, p.id, totalDays)) {
+      warnings.push(
+        `Mandatory Rest: پرسنل ${fullName} در پایان این ماه به سقف ۵ شیفت متوالی رسیده است؛ حداقل یک روز استراحت/آف اجباری در ابتدای ماه آینده برای ایشان لحاظ شود`
+      );
+    }
+
+    // ۳) ممنوعیت شیفت تک‌تک: چیدمان باید الگوی پیوسته داشته و به تگ روتین کاری احترام بگذارد.
+    const isolatedDays = findIsolatedSingleShiftDays(assignments, p.id, totalDays, p.workRoutine);
+    isolatedDays.forEach(d => {
+      const shift = assignments[p.id]?.[d];
+      warnings.push(
+        `Isolated Shift: شیفت تک (${shift}) برای ${fullName} در روز ${d} در میان روزهای کاری با الگوی متفاوت قرار گرفته است؛ چیدمان باید پیوسته و هم‌راستا با تگ روتین کاری نفر باشد`
+      );
+    });
+  });
+
   return { warnings: Array.from(new Set(warnings)), shiftLeaders };
 }
 
@@ -1442,6 +1671,7 @@ export function generatePersonnelReports(
     let menCount = 0;
     let offCount = 0;
     let leaveCount = 0;
+    let holidayLeaveCount = 0;
 
     const pAssignments = schedule.assignments[p.id] || {};
     const assignmentsList: ShiftType[] = [];
@@ -1458,6 +1688,7 @@ export function generatePersonnelReports(
       else if (shift === 'MN') mnCount++;
       else if (shift === 'MEN') menCount++;
       else if (shift === 'OFF') offCount++;
+      else if (shift === HOLIDAY_LEAVE_SHIFT) { leaveCount++; holidayLeaveCount++; }
       else if (shift.startsWith('L')) leaveCount++;
     }
 
@@ -1470,8 +1701,10 @@ export function generatePersonnelReports(
       mnCount * SHIFT_HOURS.MN +
       menCount * SHIFT_HOURS.MEN;
 
+    // قانون مرخصی روز تعطیل: مرخصی واقع در تعطیل رسمی دقیقاً ۷ ساعت اعتبار دارد؛
+    // سایر روزهای مرخصی با نرخ نوع استخدام محاسبه می‌شوند.
     const leaveRate = getLeaveHours(p.employmentType);
-    const leaveHours = leaveCount * leaveRate;
+    const leaveHours = (leaveCount - holidayLeaveCount) * leaveRate + holidayLeaveCount * HOLIDAY_LEAVE_HOURS;
     workedHours += leaveHours;
 
     const experienceHours = getSeniorityHours(p);

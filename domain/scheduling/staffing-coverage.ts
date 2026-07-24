@@ -1,4 +1,10 @@
-import type { JobGroup, Personnel, ShiftType, SystemSettings } from '../../lib/types';
+import type { JobGroup, Personnel, ShiftRequest, ShiftType, SystemSettings } from '../../lib/types';
+import {
+  routineAllowsPeriodAdd,
+  shiftMatchesRoutine,
+  wouldBreachConsecutiveCap,
+  wouldCreateIsolatedShift,
+} from './smart-rules';
 
 export type CoverageShift = 'M' | 'E' | 'N';
 
@@ -108,7 +114,8 @@ export function reconcileStaffingCoverage(
   settings: SystemSettings,
   calendarDays: readonly StaffingCalendarDay[],
   targetJobGroups: readonly JobGroup[] = ['nurse', 'assistant'],
-  lockedRows: readonly string[] = []
+  lockedRows: readonly string[] = [],
+  requests?: readonly ShiftRequest[]
 ): StaffingCoverageResult {
   const reconciled: Record<string, Record<number, ShiftType>> = {};
   for (const [personnelId, dayAssignments] of Object.entries(assignments)) {
@@ -117,6 +124,15 @@ export function reconcileStaffingCoverage(
 
   const lockedIds = new Set(lockedRows);
   const unresolvedGaps: StaffingCoverageGap[] = [];
+  const totalDays = calendarDays.reduce((max, calendarDay) => Math.max(max, calendarDay.day), 0);
+
+  // نفراتی که درخواست شیفت/الگوی کاری ثبت کرده‌اند؛ نفراتِ دارای تگ روتین که هیچ
+  // برنامه‌ای ندارند، ترجیحاً فقط در دوره‌های سازگار با تگشان چیده می‌شوند.
+  const explicitShiftPlan = new Set<string>(
+    (requests ?? [])
+      .filter(request => request.requestType === 'shift' || request.requestType === 'pattern')
+      .map(request => request.personnelId)
+  );
 
   for (const jobGroup of targetJobGroups) {
     const group = personnelList.filter(person => person.active && person.jobGroup === jobGroup);
@@ -149,6 +165,30 @@ export function reconcileStaffingCoverage(
             assigned -= 1;
           }
         } else if (assigned < required) {
+          // Staffing stays a hard constraint, but candidate ordering respects the
+          // smart regeneration rules first: breaching the 5-consecutive-shift cap
+          // or creating an isolated single shift pushes a candidate to the back of
+          // the queue; candidates whose work-routine tag matches the shift come first.
+          const candidatePriority = (person: Personnel): number => {
+            const nextShift = setShiftPeriod(reconciled[person.id]?.[day], shift, true);
+            let priority = componentCount(reconciled[person.id]?.[day]);
+            if (wouldBreachConsecutiveCap(reconciled, person.id, day, nextShift, totalDays)) {
+              priority += 100;
+            }
+            if (wouldCreateIsolatedShift(reconciled, person.id, day, totalDays, nextShift)) {
+              priority += 40;
+            }
+            if (person.workRoutine) {
+              priority += shiftMatchesRoutine(nextShift, person.workRoutine) ? -10 : 10;
+              // نفرات دارای تگ بدون هیچ درخواست شیفت، به‌جز در نبود جایگزین، فقط در
+              // دوره‌های سازگار با تگشان چیده می‌شوند.
+              if (requests && !explicitShiftPlan.has(person.id) && !routineAllowsPeriodAdd(person.workRoutine, shift)) {
+                priority += 60;
+              }
+            }
+            return priority;
+          };
+
           const available = group
             .filter(person => {
               if (lockedIds.has(person.id) || person.locked) return false;
@@ -157,9 +197,7 @@ export function reconcileStaffingCoverage(
               return !shiftCoversPeriod(currentShift, shift);
             })
             // Prefer a normal single shift over creating an avoidable double/triple shift.
-            .sort((left, right) =>
-              componentCount(reconciled[left.id]?.[day]) - componentCount(reconciled[right.id]?.[day])
-            );
+            .sort((left, right) => candidatePriority(left) - candidatePriority(right));
 
           for (const person of available) {
             if (assigned >= required) break;

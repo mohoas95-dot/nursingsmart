@@ -39,6 +39,8 @@ export const PersonnelSchema = z.object({
   username: z.string().max(200).optional(),
   password: z.string().max(500).optional(),
   locked: z.boolean().optional(),
+  // تگ روتین کاری: صبح‌کار / عصر و شب‌کار / لانگ‌کار
+  workRoutine: z.enum(['morning', 'evening_night', 'long']).optional(),
 }).strict();
 
 export const PersonnelListSchema = z.array(PersonnelSchema).superRefine((items, ctx) => {

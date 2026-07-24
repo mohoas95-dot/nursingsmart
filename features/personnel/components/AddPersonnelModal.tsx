@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import type { Personnel } from '../../../lib/types';
+import type { Personnel, WorkRoutineTag } from '../../../lib/types';
 
 /**
  * AddPersonnelModal — Presentational Component
@@ -34,6 +34,7 @@ export interface AddPersonnelModalProps {
   formExperienceYears: number | string;
   formActive: boolean;
   formCanBeShiftLeader: boolean;
+  formWorkRoutine: WorkRoutineTag | '';
 
   // Form setters
   setFormFirstName: (value: string) => void;
@@ -46,6 +47,7 @@ export interface AddPersonnelModalProps {
   setFormExperienceYears: (value: number | string) => void;
   setFormActive: (value: boolean) => void;
   setFormCanBeShiftLeader: (value: boolean) => void;
+  setFormWorkRoutine: (value: WorkRoutineTag | '') => void;
 
   // Submit handler
   onSubmit: (e: React.FormEvent) => void;
@@ -70,6 +72,7 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     formExperienceYears,
     formActive,
     formCanBeShiftLeader,
+    formWorkRoutine,
     setFormFirstName,
     setFormLastName,
     setFormPersonalCode,
@@ -80,6 +83,7 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
     setFormExperienceYears,
     setFormActive,
     setFormCanBeShiftLeader,
+    setFormWorkRoutine,
     onSubmit,
     parseNumberInput,
   } = props;
@@ -221,6 +225,21 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
                 id="input-form-years"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">تگ روتین کاری</label>
+            <select
+              value={formWorkRoutine}
+              onChange={(e) => setFormWorkRoutine(e.target.value as WorkRoutineTag | '')}
+              className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
+              id="select-form-work-routine"
+            >
+              <option value="">بدون تگ (چرخشی)</option>
+              <option value="morning">صبح‌کار — معمولاً M تک</option>
+              <option value="evening_night">عصر و شب‌کار — معمولاً EN / MEN / N / NM</option>
+              <option value="long">لانگ‌کار — معمولاً ME</option>
+            </select>
           </div>
 
           <div className="pt-3 flex flex-col gap-2 border-t border-slate-100">

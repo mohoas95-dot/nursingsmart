@@ -52,6 +52,7 @@ import {
 } from '../lib/balanceChecker';
 import { generateSmartSuggestions } from '../lib/smartSuggestion';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
+import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
 import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
@@ -1119,6 +1120,8 @@ export default function Home() {
   const setFormActive = personnelForm.setFormActive;
   const formCanBeShiftLeader = personnelForm.formData.canBeShiftLeader;
   const setFormCanBeShiftLeader = personnelForm.setFormCanBeShiftLeader;
+  const formWorkRoutine = personnelForm.formData.workRoutine;
+  const setFormWorkRoutine = personnelForm.setFormWorkRoutine;
 
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
@@ -1808,7 +1811,8 @@ export default function Home() {
           employmentType: formEmploymentType,
           experienceYears: Number(formExperienceYears),
           active: formActive,
-          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader
+          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          workRoutine: formWorkRoutine || undefined
         };
         updatedList = personnel.map(p => p.id === editingPersonnel.id ? pData : p);
       } else {
@@ -1825,6 +1829,7 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          workRoutine: formWorkRoutine || undefined,
           orderIndex: personnel.length
         };
         const accountResponse = await fetch('/api/users', {
@@ -2077,6 +2082,11 @@ export default function Home() {
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
     if (!schedule) return;
 
+    // گزینه یکپارچه «مرخصی» در منوی سلول: شماره روز مرخصی بر اساس روزهای پیاپی
+    // قبلی تعیین می‌شود تا در لیست، روز اول عدد ۱، روز دوم عدد ۲ و الی آخر بیاید.
+    const resolvedShift: ShiftType =
+      shift === 'L' ? resolveLeaveShiftAssignment(schedule.assignments, pId, day) : shift;
+
     try {
       const deptId = selectedDepartmentId || 'sepehr';
 
@@ -2118,7 +2128,7 @@ export default function Home() {
         {
           personnelId: pId,
           day,
-          shift,
+          shift: resolvedShift,
           year: currentYear,
           month: currentMonth,
           currentSchedule: schedule,
@@ -3753,7 +3763,7 @@ export default function Home() {
                                     {isEditingThis ? (
                                       <select
                                         autoFocus
-                                        value={currentShift}
+                                        value={currentShift.startsWith('L') ? 'L' : currentShift}
                                         onChange={(e) => handleManualShiftChange(p.id, d.day, e.target.value as ShiftType)}
                                         onBlur={() => setEditingCell(null)}
                                         className="absolute inset-0 z-20 w-full h-full text-xs font-bold border border-indigo-500 bg-white"
@@ -3767,11 +3777,7 @@ export default function Home() {
                                         <option value="EN">شب-عصر (EN)</option>
                                         <option value="MN">شب-صبح (MN)</option>
                                         <option value="MEN">ترکیبی (MEN)</option>
-                                        <option value="L1">مرخصی روز ۱</option>
-                                        <option value="L2">مرخصی روز ۲</option>
-                                        <option value="L3">مرخصی روز ۳</option>
-                                        <option value="L4">مرخصی روز ۴</option>
-                                        <option value="L5">مرخصی روز ۵</option>
+                                        <option value="L">مرخصی</option>
                                       </select>
                                     ) : (
                                       <button
@@ -3837,6 +3843,7 @@ export default function Home() {
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نام و نام خانوادگی</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">گروه شغلی / سمت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نوع استخدام</th>
+                        <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">روتین کاری</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">سابقهکار (سال)</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">قابلیت سرشیفت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">وضعیت کاربر</th>
@@ -3894,6 +3901,12 @@ export default function Home() {
                             {p.employmentType === 'contract' && <span className="bg-purple-50 text-purple-700 text-xs px-2 py-0.5 rounded font-bold">قراردادی</span>}
                             {p.employmentType === 'conscript' && <span className="bg-amber-50 text-amber-700 text-xs px-2 py-0.5 rounded font-bold">طرح / وظیفه</span>}
                             {p.employmentType === 'overtime' && <span className="bg-pink-50 text-pink-700 text-xs px-2 py-0.5 rounded font-bold">اضافه‌کار</span>}
+                          </td>
+                          <td className="px-6 py-3.5 text-center">
+                            {p.workRoutine === 'morning' && <span className="bg-amber-50 text-amber-700 text-[11px] px-2 py-0.5 rounded font-bold whitespace-nowrap">صبح‌کار</span>}
+                            {p.workRoutine === 'evening_night' && <span className="bg-violet-50 text-violet-700 text-[11px] px-2 py-0.5 rounded font-bold whitespace-nowrap">عصر و شب‌کار</span>}
+                            {p.workRoutine === 'long' && <span className="bg-teal-50 text-teal-700 text-[11px] px-2 py-0.5 rounded font-bold whitespace-nowrap">لانگ‌کار</span>}
+                            {!p.workRoutine && <span className="text-slate-300 text-[11px] font-bold">چرخشی</span>}
                           </td>
                           <td className="px-6 py-3.5 text-center font-mono text-slate-600">{p.experienceYears} سال</td>
                           <td className="px-6 py-3.5 text-center">
@@ -5707,6 +5720,8 @@ export default function Home() {
         setFormExperienceYears={setFormExperienceYears}
         setFormActive={setFormActive}
         setFormCanBeShiftLeader={setFormCanBeShiftLeader}
+        formWorkRoutine={formWorkRoutine}
+        setFormWorkRoutine={setFormWorkRoutine}
         onSubmit={handleSavePersonnel}
         parseNumberInput={parseNumberInput}
       />

@@ -14,7 +14,7 @@
  */
 
 import type { JobGroup, ShiftType, MonthlySchedule } from '../types';
-import type { Personnel, ShiftRequest, SystemSettings } from '../../lib/types';
+import type { Personnel, ShiftRequest, SystemSettings, WorkRoutineTag } from '../../lib/types';
 import { isPersonnelOptimizationTarget } from '../guards/shift-edit-guards';
 
 // ============================================================================
@@ -144,6 +144,7 @@ export function buildPersonnelFromForm(
     experienceYears: number;
     active: boolean;
     canBeShiftLeader: boolean;
+    workRoutine?: WorkRoutineTag | '';
   },
   pendingId: string | null,
   currentOrderIndex: number
@@ -151,6 +152,7 @@ export function buildPersonnelFromForm(
   // Apply business rules: assistants always have position='none' and canBeShiftLeader=false
   const position = formData.jobGroup === 'assistant' ? 'none' : formData.position;
   const canBeShiftLeader = formData.jobGroup === 'assistant' ? false : formData.canBeShiftLeader;
+  const workRoutine = formData.workRoutine || undefined;
 
   if (editingPersonnel) {
     // Update existing personnel
@@ -165,6 +167,7 @@ export function buildPersonnelFromForm(
       experienceYears: formData.experienceYears,
       active: formData.active,
       canBeShiftLeader,
+      workRoutine,
     };
   } else {
     // Create new personnel
@@ -180,6 +183,7 @@ export function buildPersonnelFromForm(
       experienceYears: formData.experienceYears,
       active: formData.active,
       canBeShiftLeader,
+      workRoutine,
       orderIndex: currentOrderIndex,
     };
   }

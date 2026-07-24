@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import type { Personnel } from '../../../lib/types';
+import type { Personnel, WorkRoutineTag } from '../../../lib/types';
 
 /**
  * usePersonnelForm — Custom Hook
@@ -25,6 +25,8 @@ export interface PersonnelFormData {
   experienceYears: number | string;
   active: boolean;
   canBeShiftLeader: boolean;
+  // تگ روتین کاری: صبح‌کار / عصر و شب‌کار / لانگ‌کار (رشته خالی = بدون تگ)
+  workRoutine: WorkRoutineTag | '';
 }
 
 const DEFAULT_FORM_DATA: PersonnelFormData = {
@@ -38,6 +40,7 @@ const DEFAULT_FORM_DATA: PersonnelFormData = {
   experienceYears: 1,
   active: true,
   canBeShiftLeader: true,
+  workRoutine: '',
 };
 
 export interface UsePersonnelFormReturn {
@@ -59,6 +62,7 @@ export interface UsePersonnelFormReturn {
   setFormExperienceYears: (value: number | string) => void;
   setFormActive: (value: boolean) => void;
   setFormCanBeShiftLeader: (value: boolean) => void;
+  setFormWorkRoutine: (value: WorkRoutineTag | '') => void;
 
   // Actions
   openAddModal: () => void;
@@ -82,6 +86,7 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
   const [experienceYears, setExperienceYears] = useState<number | string>(1);
   const [active, setActive] = useState(true);
   const [canBeShiftLeader, setCanBeShiftLeader] = useState(true);
+  const [workRoutine, setWorkRoutine] = useState<WorkRoutineTag | ''>('');
 
   // Reset form to defaults
   const resetForm = useCallback(() => {
@@ -95,6 +100,7 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     setExperienceYears(1);
     setActive(true);
     setCanBeShiftLeader(true);
+    setWorkRoutine('');
     setEditingPersonnel(null);
   }, []);
 
@@ -117,6 +123,7 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     setExperienceYears(personnel.experienceYears);
     setActive(personnel.active);
     setCanBeShiftLeader(personnel.canBeShiftLeader);
+    setWorkRoutine(personnel.workRoutine || '');
     setIsOpen(true);
   }, []);
 
@@ -137,6 +144,7 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     experienceYears,
     active,
     canBeShiftLeader,
+    workRoutine,
   };
 
   return {
@@ -153,6 +161,7 @@ export function usePersonnelForm(): UsePersonnelFormReturn {
     setFormExperienceYears: setExperienceYears,
     setFormActive: setActive,
     setFormCanBeShiftLeader: setCanBeShiftLeader,
+    setFormWorkRoutine: setWorkRoutine,
     openAddModal,
     openEditModal,
     closeModal,

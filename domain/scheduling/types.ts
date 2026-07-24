@@ -6,7 +6,7 @@
  */
 
 import type { JobGroup, ShiftType, MonthlySchedule, ScheduleLockState } from '../types';
-import type { Personnel, ShiftRequest, SystemSettings } from '../../lib/types';
+import type { Personnel, ShiftRequest, SystemSettings, WorkRoutineTag } from '../../lib/types';
 
 // ============================================================================
 // Optimizer Operation
@@ -84,6 +84,7 @@ export interface PersonnelSaveInput {
     experienceYears: number;
     active: boolean;
     canBeShiftLeader: boolean;
+    workRoutine?: WorkRoutineTag | '';
   };
   currentPersonnel: ReadonlyArray<Personnel>;
   pendingPersonnelId: string | null;
