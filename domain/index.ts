@@ -86,3 +86,31 @@ export type {
   StaffingCoverageGap,
   StaffingCoverageResult,
 } from './scheduling/staffing-coverage';
+
+// ============================================================================
+// Smart Regeneration Rules — قوانین هوشمند بازتولید (سقف متوالی، شیفت تک‌تک، روتین کاری)
+// ============================================================================
+
+export {
+  HOLIDAY_LEAVE_HOURS,
+  HOLIDAY_LEAVE_SHIFT,
+  MAX_CONSECUTIVE_SHIFT_UNITS,
+  ROUTINE_PREFERRED_SHIFTS,
+  SHIFT_SEQUENCE_WEIGHT,
+  endsMonthAtCapWithoutRest,
+  findConsecutiveCapViolations,
+  findConsecutiveRuns,
+  findIsolatedSingleShiftDays,
+  getRunWeightAroundDay,
+  getShiftWeight,
+  isHolidayLeaveShift,
+  isIsolatedSingleShiftAt,
+  isRoutineAllowedSingleShift,
+  isWorkShift,
+  shiftContainsComponent,
+  shiftMatchesRoutine,
+  wouldBreachConsecutiveCap,
+  wouldCreateIsolatedShift,
+} from './scheduling/smart-rules';
+
+export type { AssignmentMap, ConsecutiveRunSummary } from './scheduling/smart-rules';

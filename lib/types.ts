@@ -6,6 +6,14 @@ export type NursePosition = 'supervisor' | 'staff' | 'general' | 'none';
 
 export type EmploymentType = 'official' | 'contract' | 'conscript' | 'overtime';
 
+/**
+ * تگ روتین کاری هر پرسنل:
+ *  - morning: صبح‌کار (معمولاً M تک)
+ *  - evening_night: عصر و شب‌کار (معمولاً EN یا MEN یا N یا NM)
+ *  - long: لانگ‌کار (معمولاً ME)
+ */
+export type WorkRoutineTag = 'morning' | 'evening_night' | 'long';
+
 export interface Personnel {
   id: string;
   firstName: string;
@@ -21,6 +29,7 @@ export interface Personnel {
   username?: string;
   password?: string;
   locked?: boolean;
+  workRoutine?: WorkRoutineTag;
 }
 
 export type ShiftType = 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | string;

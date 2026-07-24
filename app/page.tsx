@@ -1119,6 +1119,8 @@ export default function Home() {
   const setFormActive = personnelForm.setFormActive;
   const formCanBeShiftLeader = personnelForm.formData.canBeShiftLeader;
   const setFormCanBeShiftLeader = personnelForm.setFormCanBeShiftLeader;
+  const formWorkRoutine = personnelForm.formData.workRoutine;
+  const setFormWorkRoutine = personnelForm.setFormWorkRoutine;
 
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
@@ -1808,7 +1810,8 @@ export default function Home() {
           employmentType: formEmploymentType,
           experienceYears: Number(formExperienceYears),
           active: formActive,
-          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader
+          canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          workRoutine: formWorkRoutine || undefined
         };
         updatedList = personnel.map(p => p.id === editingPersonnel.id ? pData : p);
       } else {
@@ -1825,6 +1828,7 @@ export default function Home() {
           experienceYears: Number(formExperienceYears),
           active: formActive,
           canBeShiftLeader: formJobGroup === 'assistant' ? false : formCanBeShiftLeader,
+          workRoutine: formWorkRoutine || undefined,
           orderIndex: personnel.length
         };
         const accountResponse = await fetch('/api/users', {
@@ -3804,6 +3808,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> کل روز (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">H</span> مرخصی روز تعطیل (۷ ساعت اعتبار)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
                 </div>
               </div>
@@ -3837,6 +3842,7 @@ export default function Home() {
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نام و نام خانوادگی</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">گروه شغلی / سمت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نوع استخدام</th>
+                        <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">روتین کاری</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">سابقهکار (سال)</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">قابلیت سرشیفت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">وضعیت کاربر</th>
@@ -3894,6 +3900,12 @@ export default function Home() {
                             {p.employmentType === 'contract' && <span className="bg-purple-50 text-purple-700 text-xs px-2 py-0.5 rounded font-bold">قراردادی</span>}
                             {p.employmentType === 'conscript' && <span className="bg-amber-50 text-amber-700 text-xs px-2 py-0.5 rounded font-bold">طرح / وظیفه</span>}
                             {p.employmentType === 'overtime' && <span className="bg-pink-50 text-pink-700 text-xs px-2 py-0.5 rounded font-bold">اضافه‌کار</span>}
+                          </td>
+                          <td className="px-6 py-3.5 text-center">
+                            {p.workRoutine === 'morning' && <span className="bg-amber-50 text-amber-700 text-[11px] px-2 py-0.5 rounded font-bold whitespace-nowrap">صبح‌کار</span>}
+                            {p.workRoutine === 'evening_night' && <span className="bg-violet-50 text-violet-700 text-[11px] px-2 py-0.5 rounded font-bold whitespace-nowrap">عصر و شب‌کار</span>}
+                            {p.workRoutine === 'long' && <span className="bg-teal-50 text-teal-700 text-[11px] px-2 py-0.5 rounded font-bold whitespace-nowrap">لانگ‌کار</span>}
+                            {!p.workRoutine && <span className="text-slate-300 text-[11px] font-bold">چرخشی</span>}
                           </td>
                           <td className="px-6 py-3.5 text-center font-mono text-slate-600">{p.experienceYears} سال</td>
                           <td className="px-6 py-3.5 text-center">
@@ -5707,6 +5719,8 @@ export default function Home() {
         setFormExperienceYears={setFormExperienceYears}
         setFormActive={setFormActive}
         setFormCanBeShiftLeader={setFormCanBeShiftLeader}
+        formWorkRoutine={formWorkRoutine}
+        setFormWorkRoutine={setFormWorkRoutine}
         onSubmit={handleSavePersonnel}
         parseNumberInput={parseNumberInput}
       />
