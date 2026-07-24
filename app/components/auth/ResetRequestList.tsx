@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { BellRing, KeyRound, Loader2, RefreshCw } from 'lucide-react';
+import { BellRing, KeyRound, Loader2, RefreshCw, UserPlus } from 'lucide-react';
 
 type ResetRequestUser = {
   id: string;
@@ -9,6 +9,8 @@ type ResetRequestUser = {
   firstName: string;
   lastName: string;
   departmentId: string | null;
+  personnelId: string | null;
+  active: boolean;
   resetRequestedAt: string | null;
 };
 
@@ -35,10 +37,14 @@ export function ResetRequestList() {
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
-    const refreshTimer = window.setInterval(() => void load(), 60_000);
+    // بازه کوتاه‌تر تازه‌سازی: درخواست پرسنل حداکثر ۲۰ ثانیه بعد در پنل دیده می‌شود.
+    const refreshTimer = window.setInterval(() => void load(), 20_000);
+    const refreshOnFocus = () => void load();
+    window.addEventListener('focus', refreshOnFocus);
     return () => {
       window.clearTimeout(initialLoad);
       window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', refreshOnFocus);
     };
   }, [load]);
 
@@ -92,6 +98,19 @@ export function ResetRequestList() {
               <p className="text-sm font-black text-slate-800">{user.firstName} {user.lastName}</p>
               <p className="mt-1 text-[11px] font-bold text-slate-500">کد ملی: <span className="font-mono" dir="ltr">{user.nationalId}</span></p>
               {user.resetRequestedAt && <p className="mt-1 text-[10px] text-slate-400">زمان درخواست: {new Date(user.resetRequestedAt).toLocaleString('fa-IR')}</p>}
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {!user.personnelId && (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2 py-0.5 text-[10px] font-black text-indigo-700">
+                    <UserPlus className="h-3 w-3" />
+                    بدون پروندهٔ پرسنلی — پس از بازنشانی، این کد ملی را در فرم پرسنل ثبت کنید
+                  </span>
+                )}
+                {!user.active && (
+                  <span className="inline-flex items-center rounded-lg bg-slate-200 px-2 py-0.5 text-[10px] font-black text-slate-600">
+                    حساب غیرفعال
+                  </span>
+                )}
+              </div>
             </div>
             <button type="button" onClick={() => void resetPassword(user)} disabled={resettingId !== null} className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60">
               {resettingId === user.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}

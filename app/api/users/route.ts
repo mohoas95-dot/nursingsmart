@@ -6,6 +6,11 @@ import { prisma } from '../../../lib/prisma';
 import { createUserWithDefaultPassword } from '../../../lib/auth/userService';
 import { DEFAULT_INITIAL_PASSWORD, hashPassword } from '../../../lib/auth/password';
 import { NationalIdSchema } from '../../../lib/auth/validation';
+import {
+  AccountLinkConflictError,
+  createOrAdoptPersonnelAccount,
+  isAdoptableAccount,
+} from '../../../lib/auth/accountLinking';
 
 const CreateUserSchema = z.object({
   nationalId: NationalIdSchema,
@@ -42,7 +47,50 @@ export async function POST(request: NextRequest) {
             hasResetRequest: false,
           },
         });
-        return authJson({ success: true, user: reactivated, message: 'حساب پرسنل با رمز اولیه ۱۲۳۴ دوباره فعال شد.' });
+        // فقط فیلدهای عمومی برگردانده می‌شود؛ ارسال کل رکورد، هشِ رمز عبور را لو می‌داد.
+        return authJson({
+          success: true,
+          user: {
+            id: reactivated.id,
+            nationalId: reactivated.nationalId,
+            firstName: reactivated.firstName,
+            lastName: reactivated.lastName,
+            role: reactivated.role,
+            mustChangePassword: reactivated.mustChangePassword,
+          },
+          message: 'حساب پرسنل با رمز اولیه ۱۲۳۴ دوباره فعال شد.',
+        });
+      }
+
+      // حساب «متصل‌نشده»: هنگام اولین ورود پرسنل یا ثبت درخواست بازیابی رمز، حسابی با
+      // همین کد ملی ساخته می‌شود که هنوز به هیچ پروندهٔ پرسنلی وصل نیست. اکنون که سرپرستار
+      // پرونده را ثبت می‌کند، همان حساب به پرونده وصل و نام واقعی روی آن ثبت می‌شود؛ در
+      // غیر این صورت کاربر با خطای «این کد ملی قبلاً ثبت شده است» روبه‌رو می‌شد.
+      if (input.personnelId &&
+          requestedDepartmentId &&
+          input.role === 'PERSONNEL' &&
+          isAdoptableAccount(existing, requestedDepartmentId)) {
+        const linked = await createOrAdoptPersonnelAccount({
+          nationalId: input.nationalId,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          departmentId: requestedDepartmentId,
+          personnelId: input.personnelId,
+        });
+        return authJson({
+          success: true,
+          user: {
+            id: linked.user.id,
+            nationalId: linked.user.nationalId,
+            firstName: linked.user.firstName,
+            lastName: linked.user.lastName,
+            role: linked.user.role,
+            mustChangePassword: linked.user.mustChangePassword,
+          },
+          message: linked.passwordReset
+            ? 'حساب ورود این کد ملی دوباره فعال و به پروندهٔ پرسنل متصل شد؛ رمز عبور به ۱۲۳۴ بازنشانی گردید.'
+            : 'حساب ورود موجود با این کد ملی به پروندهٔ این پرسنل متصل شد؛ رمز فعلی کاربر تغییر نکرد.',
+        });
       }
 
       // If the existing user is the head nurse (sarparastar) of this department, link their personnelId
@@ -100,6 +148,9 @@ export async function POST(request: NextRequest) {
       message: 'حساب کاربری با رمز اولیه ۱۲۳۴ ساخته شد.',
     }, { status: 201 });
   } catch (error) {
+    if (error instanceof AccountLinkConflictError) {
+      return authJson({ success: false, error: error.message }, { status: 409 });
+    }
     return authErrorResponse(error);
   }
 }
