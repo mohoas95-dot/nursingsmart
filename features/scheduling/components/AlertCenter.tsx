@@ -9,11 +9,23 @@ import type { AggregatedAlert } from '../../../lib/types';
  *
  * RESPONSIBILITY:
  *   Render the alert center modal with expandable sections for general and personnel alerts.
- *   This is a "dumb" component — it receives all state and handlers as props.
+ *   General alerts are further split into nurse and assistant sub-categories
+ *   with nested accordion sections.
  *
  * Extracted from: app/page.tsx (lines ~5745-5989)
  * Risk Score: 5/14 (read-only view, minimal state)
  */
+
+/** Classify a general warning as nurse, assistant, or other */
+function classifyGeneralWarning(warning: string): 'nurse' | 'assistant' | 'other' {
+  if (warning.includes('کمک‌بهیار') || warning.includes('کمک بهیار') || warning.includes('بهیار')) {
+    return 'assistant';
+  }
+  if (warning.includes('پرستار')) {
+    return 'nurse';
+  }
+  return 'other';
+}
 
 export interface AlertCenterProps {
   // Visibility
@@ -26,8 +38,14 @@ export interface AlertCenterProps {
   dismissedAlertWarnings: Record<string, boolean>;
 
   // UI state
-  expandedSections: { general: boolean; personnel: boolean };
-  onToggleSection: (section: 'general' | 'personnel') => void;
+  expandedSections: {
+    general: boolean;
+    personnel: boolean;
+    generalNurse: boolean;
+    generalAssistant: boolean;
+    generalOther: boolean;
+  };
+  onToggleSection: (section: 'general' | 'personnel' | 'generalNurse' | 'generalAssistant' | 'generalOther') => void;
 
   // Handlers
   onDismissAlert: (warningText: string) => void;
@@ -57,6 +75,29 @@ export function AlertCenter(props: AlertCenterProps) {
   const personnelAlerts = allAlerts.filter(a => a.groupType !== 'general' && a.warnings.length > 0);
   const hasAlerts = allAlerts.filter(a => a.warnings.length > 0).length > 0;
 
+  // Split general alerts into sub-categories
+  const generalNurseWarnings: string[] = [];
+  const generalAssistantWarnings: string[] = [];
+  const generalOtherWarnings: string[] = [];
+
+  generalAlerts.forEach(alert => {
+    alert.warnings.forEach(warning => {
+      const category = classifyGeneralWarning(warning);
+      if (category === 'nurse') {
+        generalNurseWarnings.push(warning);
+      } else if (category === 'assistant') {
+        generalAssistantWarnings.push(warning);
+      } else {
+        generalOtherWarnings.push(warning);
+      }
+    });
+  });
+
+  const activeNurseCount = generalNurseWarnings.filter(w => !dismissedAlertWarnings[w]).length;
+  const activeAssistantCount = generalAssistantWarnings.filter(w => !dismissedAlertWarnings[w]).length;
+  const activeOtherCount = generalOtherWarnings.filter(w => !dismissedAlertWarnings[w]).length;
+  const totalGeneralActiveCount = activeNurseCount + activeAssistantCount + activeOtherCount;
+
   return (
     <div
       className="fixed inset-0 bg-slate-900/45 backdrop-blur-xs flex items-center justify-center z-[60] p-4 print:hidden animate-fade-in"
@@ -64,6 +105,7 @@ export function AlertCenter(props: AlertCenterProps) {
       dir="rtl"
     >
       <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
         <div className="px-5 py-4 border-b border-slate-200 bg-amber-50/70 flex items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
@@ -88,6 +130,7 @@ export function AlertCenter(props: AlertCenterProps) {
           </div>
         </div>
 
+        {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 bg-slate-50 space-y-4">
           {!hasAlerts ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 text-emerald-800 text-sm font-black text-center">
@@ -97,18 +140,80 @@ export function AlertCenter(props: AlertCenterProps) {
             <>
               {/* General Alerts Section */}
               {generalAlerts.length > 0 && (
-                <AlertSection
-                  title="هشدارهای عمومی"
-                  alerts={generalAlerts}
-                  isExpanded={expandedSections.general}
-                  onToggle={() => onToggleSection('general')}
-                  dismissedAlertWarnings={dismissedAlertWarnings}
-                  onDismissAlert={onDismissAlert}
-                  onAlertClick={onAlertClick}
-                  extractWarningDay={extractWarningDay}
-                  colorScheme="indigo"
-                  badgeText="عمومی"
-                />
+                <div className="space-y-2">
+                  {/* Main general toggle */}
+                  <button
+                    type="button"
+                    onClick={() => onToggleSection('general')}
+                    className={`w-full flex items-center justify-between gap-2 px-4 py-3 border rounded-xl cursor-pointer transition-all bg-indigo-50 hover:bg-indigo-100 border-indigo-200`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-indigo-500"></div>
+                      <h4 className="text-sm font-black text-indigo-800">هشدارهای عمومی</h4>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                        {totalGeneralActiveCount} مورد
+                      </span>
+                    </div>
+                    <ChevronDown className={`w-5 h-5 transition-transform text-indigo-600 ${expandedSections.general ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {/* Nested sub-sections when general is expanded */}
+                  {expandedSections.general && (
+                    <div className="space-y-2 pl-3 border-l-3 border-indigo-200">
+
+                      {/* Nurse sub-section */}
+                      {generalNurseWarnings.length > 0 && (
+                        <GeneralSubSection
+                          title="هشدارهای مربوط به پرستاران"
+                          warnings={generalNurseWarnings}
+                          isExpanded={expandedSections.generalNurse}
+                          onToggle={() => onToggleSection('generalNurse')}
+                          dismissedAlertWarnings={dismissedAlertWarnings}
+                          onDismissAlert={onDismissAlert}
+                          extractWarningDay={extractWarningDay}
+                          activeCount={activeNurseCount}
+                          colorScheme="sky"
+                          badgeText="پرستار"
+                          iconEmoji="👩‍⚕️"
+                        />
+                      )}
+
+                      {/* Assistant sub-section */}
+                      {generalAssistantWarnings.length > 0 && (
+                        <GeneralSubSection
+                          title="هشدارهای مربوط به کمک‌بهیاران"
+                          warnings={generalAssistantWarnings}
+                          isExpanded={expandedSections.generalAssistant}
+                          onToggle={() => onToggleSection('generalAssistant')}
+                          dismissedAlertWarnings={dismissedAlertWarnings}
+                          onDismissAlert={onDismissAlert}
+                          extractWarningDay={extractWarningDay}
+                          activeCount={activeAssistantCount}
+                          colorScheme="teal"
+                          badgeText="کمک‌بهیار"
+                          iconEmoji="👨‍⚕️"
+                        />
+                      )}
+
+                      {/* Other general warnings sub-section */}
+                      {generalOtherWarnings.length > 0 && (
+                        <GeneralSubSection
+                          title="هشدارهای عمومی دیگر"
+                          warnings={generalOtherWarnings}
+                          isExpanded={expandedSections.generalOther}
+                          onToggle={() => onToggleSection('generalOther')}
+                          dismissedAlertWarnings={dismissedAlertWarnings}
+                          onDismissAlert={onDismissAlert}
+                          extractWarningDay={extractWarningDay}
+                          activeCount={activeOtherCount}
+                          colorScheme="slate"
+                          badgeText="عمومی"
+                          iconEmoji="📋"
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* Personnel Alerts Section */}
@@ -135,7 +240,151 @@ export function AlertCenter(props: AlertCenterProps) {
 }
 
 /**
- * AlertSection — Internal sub-component for expandable alert sections
+ * GeneralSubSection — Nested accordion for nurse/assistant sub-categories
+ */
+interface GeneralSubSectionProps {
+  title: string;
+  warnings: string[];
+  isExpanded: boolean;
+  onToggle: () => void;
+  dismissedAlertWarnings: Record<string, boolean>;
+  onDismissAlert: (warningText: string) => void;
+  extractWarningDay: (warningText: string) => number | null;
+  activeCount: number;
+  colorScheme: 'sky' | 'teal' | 'slate';
+  badgeText: string;
+  iconEmoji: string;
+}
+
+function GeneralSubSection(props: GeneralSubSectionProps) {
+  const {
+    title,
+    warnings,
+    isExpanded,
+    onToggle,
+    dismissedAlertWarnings,
+    onDismissAlert,
+    extractWarningDay,
+    activeCount,
+    colorScheme,
+    badgeText,
+    iconEmoji,
+  } = props;
+
+  const colorClasses = {
+    sky: {
+      button: 'bg-sky-50 hover:bg-sky-100 border-sky-200',
+      dot: 'bg-sky-500',
+      title: 'text-sky-800',
+      badge: 'bg-sky-100 text-sky-700',
+      chevron: 'text-sky-600',
+      warningBadge: 'bg-sky-100 border-sky-200 text-sky-700',
+    },
+    teal: {
+      button: 'bg-teal-50 hover:bg-teal-100 border-teal-200',
+      dot: 'bg-teal-500',
+      title: 'text-teal-800',
+      badge: 'bg-teal-100 text-teal-700',
+      chevron: 'text-teal-600',
+      warningBadge: 'bg-teal-100 border-teal-200 text-teal-700',
+    },
+    slate: {
+      button: 'bg-slate-50 hover:bg-slate-100 border-slate-200',
+      dot: 'bg-slate-500',
+      title: 'text-slate-800',
+      badge: 'bg-slate-100 text-slate-700',
+      chevron: 'text-slate-600',
+      warningBadge: 'bg-slate-100 border-slate-200 text-slate-700',
+    },
+  };
+
+  const colors = colorClasses[colorScheme];
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`w-full flex items-center justify-between gap-2 px-4 py-2.5 border rounded-xl cursor-pointer transition-all ${colors.button}`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-sm">{iconEmoji}</span>
+          <h5 className={`text-sm font-black ${colors.title}`}>{title}</h5>
+          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${colors.badge}`}>
+            {activeCount} مورد
+          </span>
+        </div>
+        <ChevronDown className={`w-4 h-4 transition-transform ${colors.chevron} ${isExpanded ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isExpanded && (
+        <div className="border rounded-2xl p-4 bg-white/60 border-slate-200">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${colors.warningBadge}`}>
+              {badgeText}
+            </span>
+            <span className="text-[10px] font-bold text-slate-500">
+              {activeCount} هشدار فعال از {warnings.length} مورد
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {warnings.map((warn, idx) => {
+              const day = extractWarningDay(warn);
+              const isDismissed = !!dismissedAlertWarnings[warn];
+
+              return (
+                <div
+                  key={`general-${idx}`}
+                  className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${
+                    isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'
+                  }`}
+                >
+                  <div className="flex items-start gap-2 flex-1">
+                    <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                    <div className="space-y-1">
+                      <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                        {warn}
+                      </div>
+                      {day !== null && (
+                        <span className="inline-flex text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          روز {day}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {!isDismissed ? (
+                      <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
+                        فاقد سلول مستقیم
+                      </span>
+                    ) : null}
+
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDismissAlert(warn); }}
+                      className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
+                        isDismissed
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                      }`}
+                      title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
+                    >
+                      {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * AlertSection — Internal sub-component for expandable alert sections (personnel)
  */
 interface AlertSectionProps {
   title: string;

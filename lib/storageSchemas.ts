@@ -58,6 +58,7 @@ export const ShiftRequestSchema = z.object({
   preferredShift: z.enum(['M', 'E', 'N', 'ME', 'EN', 'MN', 'MEN', 'OFF', 'L']).optional(),
   patternSteps: z.array(z.string().min(1).max(20)).max(366).optional(),
   isEssential: z.boolean(),
+  offHardness: z.enum(['hard', 'soft']).optional(),
   scope: z.enum([
     'all', 'even', 'odd', 'saturdays', 'sundays', 'mondays', 'tuesdays',
     'wednesdays', 'thursdays', 'fridays', 'range', 'weekly_even',

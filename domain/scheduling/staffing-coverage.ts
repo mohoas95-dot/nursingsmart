@@ -6,6 +6,31 @@ import {
   wouldCreateIsolatedShift,
 } from './smart-rules';
 
+/**
+ * Simplified scope matcher for reconcile context where dayOfWeek is not available.
+ * Only checks scopes that can be determined from day number alone:
+ *   all, even, odd, custom_days, range.
+ * Weekday-specific scopes (saturdays–fridays, weekly_even, weekly_odd) always match
+ * here to avoid accidentally respecting Soft OFF on those days without full calendar info.
+ */
+function matchRequestScopeSimple(day: number, request: ShiftRequest): boolean {
+  switch (request.scope) {
+    case 'all': return true;
+    case 'even': return day % 2 === 0;
+    case 'odd': return day % 2 === 1;
+    case 'custom_days': return !!request.selectedDays && request.selectedDays.includes(day);
+    case 'range':
+      if (!request.startDate || !request.endDate) return false;
+      // Simple day-of-month range matching
+      const startDay = parseInt(request.startDate.split('/').pop() || '0', 10);
+      const endDay = parseInt(request.endDate.split('/').pop() || '0', 10);
+      return day >= startDay && day <= endDay;
+    // Weekday-specific scopes: we can't determine dayOfWeek here, so conservatively
+    // return true (Soft OFF on these scopes won't get the penalty boost)
+    default: return false;
+  }
+}
+
 export type CoverageShift = 'M' | 'E' | 'N';
 
 export interface StaffingCalendarDay {
@@ -196,8 +221,41 @@ export function reconcileStaffingCoverage(
               if (currentShift.startsWith('L')) return false;
               return !shiftCoversPeriod(currentShift, shift);
             })
-            // Prefer a normal single shift over creating an avoidable double/triple shift.
-            .sort((left, right) => candidatePriority(left) - candidatePriority(right));
+            // ====== قانون اولویت‌بندی بن‌بست ======
+            // Hard OFF (سطح B بالا): solver حق ندارد نقض کند.
+            // Soft OFF (سطح B): در بن‌بست قابل نقض، اما در اولویت آخر.
+            .sort((left, right) => {
+              const candidatePriority = (person: Personnel): number => {
+                const nextShift = setShiftPeriod(reconciled[person.id]?.[day], shift, true);
+                let priority = componentCount(reconciled[person.id]?.[day]);
+                // ====== سطح A: سقف ۵ شیفت متوالی (خط قرمز مطلق) ======
+                if (wouldBreachConsecutiveCap(reconciled, person.id, day, nextShift, totalDays)) {
+                  priority += 100;
+                }
+                // ====== سطح ۳: شیفت تک‌تک ======
+                if (wouldCreateIsolatedShift(reconciled, person.id, day, totalDays, nextShift)) {
+                  priority += 40;
+                }
+                // ====== سطح B: تگ روتین کاری ======
+                if (person.workRoutine) {
+                  priority += shiftMatchesRoutine(nextShift, person.workRoutine) ? -10 : 10;
+                  if (requests && !explicitShiftPlan.has(person.id) && !routineAllowsPeriodAdd(person.workRoutine, shift)) {
+                    priority += 60;
+                  }
+                }
+                // ====== سطح B: Soft OFF در مسیر اضطراری اولویت آخر ======
+                const softOffReq = (requests ?? []).find(r =>
+                  r.personnelId === person.id &&
+                  r.requestType === 'OFF' &&
+                  r.offHardness === 'soft' &&
+                  // Scope matching for reconcile: simplified check for all/custom_days/even/odd/range
+                  matchRequestScopeSimple(day, r)
+                );
+                if (softOffReq) priority += 80;
+                return priority;
+              };
+              return candidatePriority(left) - candidatePriority(right);
+            });
 
           for (const person of available) {
             if (assigned >= required) break;

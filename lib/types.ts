@@ -85,6 +85,8 @@ export interface ShiftRequest {
   preferredShift?: 'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L';
   patternSteps?: string[];
   isEssential: boolean;
+  /** آف سخت یا نرم: hard = solver حق نقض ندارد؛ soft = solver می‌تواند در بن‌بست نقض کند. */
+  offHardness?: 'hard' | 'soft';
   scope: 'all' | 'even' | 'odd' | 'saturdays' | 'sundays' | 'mondays' | 'tuesdays' | 'wednesdays' | 'thursdays' | 'fridays' | 'range' | 'weekly_even' | 'weekly_odd' | 'custom_days';
   startDate?: string;
   endDate?: string;

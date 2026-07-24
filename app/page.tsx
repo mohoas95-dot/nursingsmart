@@ -280,7 +280,7 @@ export default function Home() {
 
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
-  const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean}>({general: true, personnel: true});
+  const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean, generalNurse: boolean, generalAssistant: boolean, generalOther: boolean}>({general: true, personnel: true, generalNurse: true, generalAssistant: true, generalOther: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
 
   const personnelRef = React.useRef(personnel);
@@ -428,7 +428,7 @@ export default function Home() {
       const response = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nationalId: staffNationalIdInput }),
+        body: JSON.stringify({ nationalId: staffNationalIdInput, departmentId: selectedDepartmentId }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'ثبت درخواست انجام نشد.');
@@ -1132,6 +1132,7 @@ export default function Home() {
   const [reqPreferredShift, setReqPreferredShift] = useState<'M' | 'E' | 'N' | 'ME' | 'EN' | 'MN' | 'MEN' | 'OFF' | 'L'>('M');
   const [reqPatternInput, setReqPatternInput] = useState<string>('EN OFF OFF');
   const [reqIsEssential, setReqIsEssential] = useState<boolean>(false);
+  const [reqOffHardness, setReqOffHardness] = useState<'hard' | 'soft' | undefined>(undefined);
   const [reqScope, setReqScope] = useState<'all' | 'even' | 'odd' | 'saturdays' | 'sundays' | 'mondays' | 'tuesdays' | 'wednesdays' | 'thursdays' | 'fridays' | 'range' | 'weekly_even' | 'weekly_odd' | 'custom_days'>('all');
   const [reqStartDate, setReqStartDate] = useState<string>('1405/03/01');
   const [reqEndDate, setReqEndDate] = useState<string>('1405/03/31');
@@ -1181,7 +1182,8 @@ export default function Home() {
     if (r.requestType === 'avoid_shift') {
       return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
     } else if (r.requestType === 'OFF') {
-      return `🟡 آف [${timeLabel}]`;
+      const hardnessLabel = r.offHardness === 'hard' ? '🔴 آف سخت' : r.offHardness === 'soft' ? '🟡 آف نرم' : '🔴 آف قطعی';
+      return `${hardnessLabel} [${timeLabel}]`;
     } else if (r.requestType === 'leave') {
       return `🟢 مرخصی [${timeLabel}]`;
     } else {
@@ -1894,6 +1896,7 @@ export default function Home() {
       preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
       patternSteps: steps,
       isEssential: role === 'personnel' ? false : reqIsEssential,
+      offHardness: reqType === 'OFF' ? reqOffHardness : undefined,
       scope: reqScope,
       startDate: reqScope === 'range' ? reqStartDate : undefined,
       endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -1921,6 +1924,7 @@ export default function Home() {
         preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
         patternSteps: steps,
         isEssential: role === 'personnel' ? false : reqIsEssential,
+        offHardness: reqType === 'OFF' ? reqOffHardness : undefined,
         scope: reqScope,
         startDate: reqScope === 'range' ? reqStartDate : undefined,
         endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -2000,6 +2004,7 @@ export default function Home() {
           preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
           patternSteps: steps,
           isEssential: role === 'personnel' ? false : reqIsEssential,
+          offHardness: reqType === 'OFF' ? reqOffHardness : undefined,
           scope: reqScope,
           startDate: reqScope === 'range' ? reqStartDate : undefined,
           endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -4346,7 +4351,9 @@ export default function Home() {
                                 <td className="px-6 py-3.5 text-slate-600">
                                   {r.requestType === 'shift' && <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded text-xs">تعیین شیفت</span>}
                                   {r.requestType === 'avoid_shift' && <span className="bg-rose-50 text-rose-700 border border-rose-100 font-bold px-2 py-0.5 rounded text-xs">نبودن در شیفت</span>}
-                                  {r.requestType === 'OFF' && <span className="bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>}
+                                  {r.requestType === 'OFF' && r.offHardness === 'hard' && <span className="bg-red-50 text-red-700 border border-red-200 font-black px-2 py-0.5 rounded text-xs">🔴 آف سخت (Hard OFF)</span>}
+                                  {r.requestType === 'OFF' && r.offHardness === 'soft' && <span className="bg-amber-50 text-amber-700 border border-amber-200 font-black px-2 py-0.5 rounded text-xs">🟡 آف نرم (Soft OFF)</span>}
+                                  {r.requestType === 'OFF' && !r.offHardness && <span className="bg-red-50 text-red-700 border border-red-200 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>}
                                   {r.requestType === 'leave' && <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded text-xs">درخواست مرخصی</span>}
                                 </td>
                                 <td className="px-6 py-3.5 font-semibold text-slate-700">
@@ -4422,6 +4429,7 @@ export default function Home() {
                                       }
                                       setReqPatternInput(r.patternSteps ? r.patternSteps.join(' ') : 'EN OFF OFF');
                                       setReqIsEssential(r.isEssential || false);
+                                      setReqOffHardness(r.offHardness);
                                       setReqScope(r.scope || 'all');
                                       if (r.startDate) setReqStartDate(r.startDate);
                                       if (r.endDate) setReqEndDate(r.endDate);
@@ -5790,6 +5798,12 @@ export default function Home() {
                       if (val === 'avoid_shift') {
                         setReqPreferredShift('M');
                       }
+                      // ====== ریست offHardness هنگام تغییر نوع درخواست ======
+                      if (val !== 'OFF') {
+                        setReqOffHardness(undefined);
+                      } else {
+                        setReqOffHardness('hard'); // پیش‌فرض: Hard OFF
+                      }
                     }}
                     className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
                     id="select-req-type"
@@ -5935,6 +5949,50 @@ export default function Home() {
                     />
                     درخواست ضروری (اولویت بسیار بالا در موتور زمان‌بندی)
                   </label>
+                </div>
+              )}
+
+              {/* ====== انتخاب نوع آف: Hard OFF / Soft OFF ====== */}
+              {(role === 'admin' || role === 'headnurse') && reqType === 'OFF' && (
+                <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-3 space-y-2">
+                  <div className="text-xs font-black text-amber-800">
+                    🔒 نوع آف قطعی: سرپرستار تعیین می‌کند که آف سخت (Hard OFF) یا نرم (Soft OFF) باشد.
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReqOffHardness('hard')}
+                      className={`flex-1 text-xs font-black px-4 py-2.5 rounded-xl border-2 transition-all cursor-pointer ${
+                        reqOffHardness === 'hard'
+                          ? 'bg-red-500 text-white border-red-600 shadow-md'
+                          : 'bg-white text-red-600 border-red-200 hover:bg-red-50'
+                      }`}
+                    >
+                      🔴 آف سخت (Hard OFF)
+                      <div className={`text-[10px] mt-1 ${reqOffHardness === 'hard' ? 'text-white/80' : 'text-red-400'}`}>
+                        Solver حق نقض ندارد — قطعی و غیرقابل تغییر
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReqOffHardness('soft')}
+                      className={`flex-1 text-xs font-black px-4 py-2.5 rounded-xl border-2 transition-all cursor-pointer ${
+                        reqOffHardness === 'soft'
+                          ? 'bg-amber-500 text-white border-amber-600 shadow-md'
+                          : 'bg-white text-amber-600 border-amber-200 hover:bg-amber-50'
+                      }`}
+                    >
+                      🟡 آف نرم (Soft OFF)
+                      <div className={`text-[10px] mt-1 ${reqOffHardness === 'soft' ? 'text-white/80' : 'text-amber-400'}`}>
+                        Solver می‌تواند در بن‌بست نقض کند — ترجیحی ولی قابل تغییر
+                      </div>
+                    </button>
+                  </div>
+                  {!reqOffHardness && (
+                    <div className="text-[10px] font-bold text-amber-600 bg-amber-100 px-3 py-1.5 rounded-lg">
+                      ⚠️ لطفاً نوع آف را انتخاب کنید. بدون انتخاب، آف به‌صورت پیش‌فرض سخت (Hard OFF) تلقی می‌شود.
+                    </div>
+                  )}
                 </div>
               )}
 

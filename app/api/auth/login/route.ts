@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '../../../../lib/prisma';
-import { verifyPassword } from '../../../../lib/auth/password';
+import { verifyPassword, hashPassword, DEFAULT_INITIAL_PASSWORD } from '../../../../lib/auth/password';
 import { createSession } from '../../../../lib/auth/session';
 import { LoginSchema } from '../../../../lib/auth/validation';
 import { assertSameOrigin, authErrorResponse, authJson } from '../../../../lib/auth/http';
@@ -12,10 +12,42 @@ export async function POST(request: NextRequest) {
   try {
     assertSameOrigin(request);
     const credentials = LoginSchema.parse(await request.json());
-    const user = await prisma.user.findUnique({ where: { nationalId: credentials.nationalId } });
+    let user = await prisma.user.findUnique({ where: { nationalId: credentials.nationalId } });
 
     // Always run bcrypt, including for unknown users, to reduce account enumeration via timing.
     const passwordIsValid = await verifyPassword(credentials.password, user?.passwordHash);
+
+    // ====== اصلاح: Auto-provisioning پرسنل ======
+    // اگر کاربر با این nationalId در Prisma وجود ندارد ولی:
+    // ۱) departmentId معتبر فرستاده شده
+    // ۲) رمز عبور = رمز اولیه ۱۲۳۴
+    // ۳) portal = 'staff'
+    // → حساب PERSONNEL جدید با رمز اولیه می‌سازیم.
+    // این حالت وقتی رخ می‌دهد که پرسنل‌های قدیمی (قبل از Prisma auth)
+    // بدون حساب ورود هستند.
+    if (!user && credentials.departmentId && credentials.portal === 'staff') {
+      // بررسی: رمز ورود = رمز اولیه؟
+      // verifyPassword با DUMMY_HASH مقایسه کرد (کاربر وجود نداشت) → همیشه false
+      // باید مستقیماً با hash رمز اولیه مقایسه کنیم.
+      const defaultPasswordHash = await hashPassword(DEFAULT_INITIAL_PASSWORD);
+      const defaultPasswordValid = await verifyPassword(credentials.password, defaultPasswordHash);
+      if (defaultPasswordValid) {
+        user = await prisma.user.create({
+          data: {
+            nationalId: credentials.nationalId,
+            passwordHash: defaultPasswordHash,
+            firstName: 'پرسنل',
+            lastName: `(${credentials.nationalId})`,
+            role: 'PERSONNEL',
+            departmentId: credentials.departmentId,
+            active: true,
+            mustChangePassword: true,
+            hasResetRequest: false,
+          },
+        });
+      }
+    }
+
     if (!user || !passwordIsValid || !user.active) {
       if (user) {
         const attempts = user.failedLoginAttempts + 1;
@@ -37,6 +69,16 @@ export async function POST(request: NextRequest) {
         success: false,
         error: 'به‌دلیل تلاش‌های ناموفق، ورود موقتاً مسدود شده است. کمی بعد دوباره تلاش کنید.',
       }, { status: 429 });
+    }
+    // ====== اصلاح: انتساب خودکار departmentId ======
+    // اگر کاربر departmentId ندارد (null)، و کلاینت یک departmentId معتبر فرستاده،
+    // آن را به کاربر اختصاص می‌دهیم. این حالت وقتی رخ می‌دهد که پرسنل از طریق فراموشی
+    // رمز یا روش‌های دیگر حساب ساخته شده ولی به بخش متصل نشده.
+    if (credentials.departmentId && user.role !== 'ADMIN' && !user.departmentId) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { departmentId: credentials.departmentId },
+      });
     }
     if (credentials.departmentId && user.role !== 'ADMIN' && user.departmentId !== credentials.departmentId) {
       return authJson({ success: false, error: 'این حساب به بخش انتخاب‌شده تعلق ندارد.' }, { status: 403 });
