@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '../../../../lib/prisma';
-import { verifyPassword } from '../../../../lib/auth/password';
+import { verifyPassword, hashPassword, DEFAULT_INITIAL_PASSWORD } from '../../../../lib/auth/password';
 import { createSession } from '../../../../lib/auth/session';
 import { LoginSchema } from '../../../../lib/auth/validation';
 import { assertSameOrigin, authErrorResponse, authJson } from '../../../../lib/auth/http';
@@ -16,6 +16,38 @@ export async function POST(request: NextRequest) {
 
     // Always run bcrypt, including for unknown users, to reduce account enumeration via timing.
     const passwordIsValid = await verifyPassword(credentials.password, user?.passwordHash);
+
+    // ====== اصلاح: Auto-provisioning پرسنل ======
+    // اگر کاربر با این nationalId در Prisma وجود ندارد ولی:
+    // ۱) departmentId معتبر فرستاده شده
+    // ۲) رمز عبور = رمز اولیه ۱۲۳۴
+    // ۳) portal = 'staff'
+    // → حساب PERSONNEL جدید با رمز اولیه می‌سازیم.
+    // این حالت وقتی رخ می‌دهد که پرسنل‌های قدیمی (قبل از Prisma auth)
+    // بدون حساب ورود هستند.
+    if (!user && credentials.departmentId && credentials.portal === 'staff') {
+      // بررسی: رمز ورود = رمز اولیه؟
+      // verifyPassword با DUMMY_HASH مقایسه کرد (کاربر وجود نداشت) → همیشه false
+      // باید مستقیماً با hash رمز اولیه مقایسه کنیم.
+      const defaultPasswordHash = await hashPassword(DEFAULT_INITIAL_PASSWORD);
+      const defaultPasswordValid = await verifyPassword(credentials.password, defaultPasswordHash);
+      if (defaultPasswordValid) {
+        user = await prisma.user.create({
+          data: {
+            nationalId: credentials.nationalId,
+            passwordHash: defaultPasswordHash,
+            firstName: 'پرسنل',
+            lastName: `(${credentials.nationalId})`,
+            role: 'PERSONNEL',
+            departmentId: credentials.departmentId,
+            active: true,
+            mustChangePassword: true,
+            hasResetRequest: false,
+          },
+        });
+      }
+    }
+
     if (!user || !passwordIsValid || !user.active) {
       if (user) {
         const attempts = user.failedLoginAttempts + 1;
