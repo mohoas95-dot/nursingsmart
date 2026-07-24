@@ -4,8 +4,10 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import TehranDateTime from './components/TehranDateTime';
 import { ResetRequestList } from './components/auth/ResetRequestList';
+import { useResetRequestCount } from './components/auth/useResetRequestCount';
 import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
 import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
+import { isValidIranianNationalId, toEnglishDigits } from '../lib/auth/validation';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
 import type { AppDatabaseState, StorageResource } from '../lib/storageSchemas';
 import {
@@ -325,6 +327,8 @@ export default function Home() {
     return personnel.find(person => person.id === authenticatedUser.personnelId) || null;
   }, [authenticatedUser, personnel]);
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>('');
+  // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
+  const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
   useEffect(() => {
     let cancelled = false;
@@ -397,10 +401,20 @@ export default function Home() {
       setAuthError('ابتدا یک بخش را انتخاب کنید یا به‌عنوان سرپرستار بخش جدید بسازید.');
       return;
     }
+    // ارقام فارسی/عربی و فاصله‌های اضافی پیش از ارسال نرمال می‌شوند تا کاربری که با
+    // صفحه‌کلید فارسی «۱۲۳۴» تایپ می‌کند، خطای «کد ملی یا رمز عبور نادرست» نگیرد.
+    const nationalId = toEnglishDigits(portal === 'staff' ? staffNationalIdInput : headnurseUsernameInput).trim();
+    const password = toEnglishDigits(portal === 'staff' ? staffPasswordInput : headnursePasswordInput).trim();
+    if (!isValidIranianNationalId(nationalId)) {
+      setAuthError('کد ملی معتبر نیست؛ لطفاً هر ۱۰ رقم کد ملی خود را درست وارد کنید.');
+      return;
+    }
+    if (!password) {
+      setAuthError('رمز عبور را وارد کنید. رمز اولیه برای حساب‌های جدید ۱۲۳۴ است.');
+      return;
+    }
     setIsPortalSubmitting(true);
     try {
-      const nationalId = portal === 'staff' ? staffNationalIdInput : headnurseUsernameInput;
-      const password = portal === 'staff' ? staffPasswordInput : headnursePasswordInput;
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -419,8 +433,15 @@ export default function Home() {
   const handleStaffForgotPassword = async () => {
     setAuthError('');
     setStaffAuthNotice('');
-    if (!staffNationalIdInput.trim()) {
-      setAuthError('ابتدا کد ملی خود را وارد کنید.');
+    const nationalId = toEnglishDigits(staffNationalIdInput).trim();
+    if (!isValidIranianNationalId(nationalId)) {
+      setAuthError('برای ثبت درخواست بازیابی، ابتدا کد ملی معتبر خود را وارد کنید.');
+      return;
+    }
+    // درخواست بازیابی باید به بخش انتخاب‌شده گره بخورد، وگرنه در پنل سرپرستار آن بخش
+    // دیده نمی‌شود. بدون بخشِ معتبر اصلاً درخواستی ارسال نمی‌کنیم.
+    if (!departments.some(department => department.id === selectedDepartmentId)) {
+      setAuthError('ابتدا بخش خود را از فهرست بالا انتخاب کنید تا درخواست برای سرپرستار همان بخش ارسال شود.');
       return;
     }
     setIsResetRequestSubmitting(true);
@@ -428,11 +449,11 @@ export default function Home() {
       const response = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nationalId: staffNationalIdInput, departmentId: selectedDepartmentId }),
+        body: JSON.stringify({ nationalId, departmentId: selectedDepartmentId }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'ثبت درخواست انجام نشد.');
-      setStaffAuthNotice('رمز عبور جدید به زودی برات ارسال میشه!');
+      setStaffAuthNotice(result.message || 'درخواست شما ثبت شد؛ سرپرستار بخش رمز عبور شما را بازنشانی می‌کند.');
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'خطا در ثبت درخواست بازیابی.');
     } finally {
@@ -1764,12 +1785,14 @@ export default function Home() {
     personnelForm.openEditModal(p);
     setIsLoadingPersonnelNationalId(true);
     try {
-      const response = await fetch(`/api/users/personnel/${encodeURIComponent(p.id)}`);
+      const response = await fetch(`/api/users/personnel/${encodeURIComponent(p.id)}`, { cache: 'no-store' });
       const result = await response.json();
       if (!response.ok || !result.success) {
         throw new Error(result.error || 'دریافت کد ملی پرسنل انجام نشد.');
       }
-      setFormNationalId(result.nationalId);
+      // پرسنل قدیمی ممکن است هنوز حساب ورود نداشته باشد؛ در این حالت فیلد کد ملی خالی
+      // می‌ماند و با ثبت آن، حساب ورود همان‌جا ساخته می‌شود.
+      setFormNationalId(result.nationalId || '');
     } catch (error) {
       console.error('Error loading personnel national ID:', error);
       alert('کد ملی این پرسنل دریافت نشد: ' + (error instanceof Error ? error.message : String(error)));
@@ -1796,7 +1819,12 @@ export default function Home() {
         const accountResponse = await fetch(`/api/users/personnel/${encodeURIComponent(editingPersonnel.id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nationalId: formNationalId }),
+          body: JSON.stringify({
+            nationalId: formNationalId,
+            firstName: formFirstName.trim(),
+            lastName: formLastName.trim(),
+            departmentId: selectedDepartmentId,
+          }),
         });
         const accountResult = await accountResponse.json();
         if (!accountResponse.ok || !accountResult.success) {
@@ -3034,6 +3062,14 @@ export default function Home() {
                 >
                   <span className="text-lg leading-none">👥</span>
                   <span>مدیریت پرسنل</span>
+                  {resetRequestCount > 0 && (
+                    <span
+                      className="mr-auto min-w-5 rounded-full bg-rose-600 px-1.5 text-center text-[10px] font-black leading-5 text-white"
+                      title={`${resetRequestCount} درخواست بازیابی رمز عبور در انتظار بررسی`}
+                    >
+                      {resetRequestCount}
+                    </span>
+                  )}
                 </button>
               )}
 

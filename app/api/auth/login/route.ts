@@ -4,6 +4,8 @@ import { verifyPassword, hashPassword, DEFAULT_INITIAL_PASSWORD } from '../../..
 import { createSession } from '../../../../lib/auth/session';
 import { LoginSchema } from '../../../../lib/auth/validation';
 import { assertSameOrigin, authErrorResponse, authJson } from '../../../../lib/auth/http';
+import { evaluateLoginAttempt, LOGIN_ERROR_MESSAGES } from '../../../../lib/auth/loginPolicy';
+import { createUnlinkedStaffAccount } from '../../../../lib/auth/accountLinking';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
@@ -14,86 +16,71 @@ export async function POST(request: NextRequest) {
     const credentials = LoginSchema.parse(await request.json());
     let user = await prisma.user.findUnique({ where: { nationalId: credentials.nationalId } });
 
-    // Always run bcrypt, including for unknown users, to reduce account enumeration via timing.
-    const passwordIsValid = await verifyPassword(credentials.password, user?.passwordHash);
+    // مقایسهٔ bcrypt همیشه اجرا می‌شود (حتی برای کد ملی ناموجود) تا زمان پاسخ لو ندهد
+    // که این کد ملی در سامانه ثبت شده است یا نه.
+    let passwordIsValid = await verifyPassword(credentials.password, user?.passwordHash);
 
-    // ====== اصلاح: Auto-provisioning پرسنل ======
-    // اگر کاربر با این nationalId در Prisma وجود ندارد ولی:
-    // ۱) departmentId معتبر فرستاده شده
-    // ۲) رمز عبور = رمز اولیه ۱۲۳۴
-    // ۳) portal = 'staff'
-    // → حساب PERSONNEL جدید با رمز اولیه می‌سازیم.
-    // این حالت وقتی رخ می‌دهد که پرسنل‌های قدیمی (قبل از Prisma auth)
-    // بدون حساب ورود هستند.
+    // ورود نخستین‌بار پرسنلِ بدون حساب:
+    // پرسنلی که پیش از راه‌اندازی احراز هویت در فهرست بخش ثبت شده رکورد User ندارد.
+    // اگر با رمز اولیهٔ ۱۲۳۴ و از پرتال کادر درمان وارد شود، حساب او همان‌جا ساخته می‌شود.
+    // نکته‌ی کلیدی: نتیجهٔ رمز باید هم‌زمان به true تغییر کند، وگرنه همان درخواست با
+    // «کد ملی یا رمز عبور نادرست است» رد می‌شد — دقیقاً باگی که کاربران گزارش کرده بودند.
     if (!user && credentials.departmentId && credentials.portal === 'staff') {
-      // بررسی: رمز ورود = رمز اولیه؟
-      // verifyPassword با DUMMY_HASH مقایسه کرد (کاربر وجود نداشت) → همیشه false
-      // باید مستقیماً با hash رمز اولیه مقایسه کنیم.
-      const defaultPasswordHash = await hashPassword(DEFAULT_INITIAL_PASSWORD);
-      const defaultPasswordValid = await verifyPassword(credentials.password, defaultPasswordHash);
-      if (defaultPasswordValid) {
-        user = await prisma.user.create({
-          data: {
-            nationalId: credentials.nationalId,
-            passwordHash: defaultPasswordHash,
-            firstName: 'پرسنل',
-            lastName: `(${credentials.nationalId})`,
-            role: 'PERSONNEL',
-            departmentId: credentials.departmentId,
-            active: true,
-            mustChangePassword: true,
-            hasResetRequest: false,
-          },
+      const usesInitialPassword = credentials.password === DEFAULT_INITIAL_PASSWORD;
+      if (usesInitialPassword) {
+        user = await createUnlinkedStaffAccount({
+          nationalId: credentials.nationalId,
+          departmentId: credentials.departmentId,
+          passwordHash: await hashPassword(DEFAULT_INITIAL_PASSWORD),
         });
+        // در حالت رقابتی ممکن است حساب هم‌زمان توسط درخواست دیگری ساخته شده باشد؛
+        // بنابراین رمز دوباره با هشِ واقعیِ همان رکورد سنجیده می‌شود.
+        passwordIsValid = await verifyPassword(credentials.password, user.passwordHash);
       }
     }
 
-    if (!user || !passwordIsValid || !user.active) {
-      if (user) {
+    const decision = evaluateLoginAttempt({
+      user,
+      passwordIsValid,
+      departmentId: credentials.departmentId,
+      portal: credentials.portal,
+    });
+
+    if (decision.outcome === 'locked') {
+      return authJson({
+        success: false,
+        error: `به‌دلیل تلاش‌های ناموفق، ورود موقتاً مسدود شده است. حدود ${decision.retryAfterMinutes} دقیقهٔ دیگر دوباره تلاش کنید.`,
+      }, { status: 429 });
+    }
+
+    if (decision.outcome === 'rejected') {
+      if (decision.countFailedAttempt && user) {
         const attempts = user.failedLoginAttempts + 1;
+        const reachedLimit = attempts >= MAX_FAILED_ATTEMPTS;
         await prisma.user.update({
           where: { id: user.id },
           data: {
-            failedLoginAttempts: attempts >= MAX_FAILED_ATTEMPTS ? 0 : attempts,
-            lockedUntil: attempts >= MAX_FAILED_ATTEMPTS
-              ? new Date(Date.now() + LOCK_MINUTES * 60_000)
-              : user.lockedUntil,
+            failedLoginAttempts: reachedLimit ? 0 : attempts,
+            lockedUntil: reachedLimit ? new Date(Date.now() + LOCK_MINUTES * 60_000) : user.lockedUntil,
           },
         });
       }
-      return authJson({ success: false, error: 'کد ملی یا رمز عبور نادرست است.' }, { status: 401 });
-    }
-
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
       return authJson({
         success: false,
-        error: 'به‌دلیل تلاش‌های ناموفق، ورود موقتاً مسدود شده است. کمی بعد دوباره تلاش کنید.',
-      }, { status: 429 });
-    }
-    // ====== اصلاح: انتساب خودکار departmentId ======
-    // اگر کاربر departmentId ندارد (null)، و کلاینت یک departmentId معتبر فرستاده،
-    // آن را به کاربر اختصاص می‌دهیم. این حالت وقتی رخ می‌دهد که پرسنل از طریق فراموشی
-    // رمز یا روش‌های دیگر حساب ساخته شده ولی به بخش متصل نشده.
-    if (credentials.departmentId && user.role !== 'ADMIN' && !user.departmentId) {
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { departmentId: credentials.departmentId },
-      });
-    }
-    if (credentials.departmentId && user.role !== 'ADMIN' && user.departmentId !== credentials.departmentId) {
-      return authJson({ success: false, error: 'این حساب به بخش انتخاب‌شده تعلق ندارد.' }, { status: 403 });
-    }
-    if (credentials.portal === 'staff' && user.role !== 'PERSONNEL') {
-      return authJson({ success: false, error: 'این حساب متعلق به کادر درمان نیست.' }, { status: 403 });
-    }
-    if (credentials.portal === 'head-nurse' && user.role !== 'HEAD_NURSE' && user.role !== 'ADMIN') {
-      return authJson({ success: false, error: 'این حساب دسترسی سرپرستار ندارد.' }, { status: 403 });
+        error: LOGIN_ERROR_MESSAGES[decision.reason],
+      }, { status: decision.reason === 'credentials' ? 401 : 403 });
     }
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginAttempts: 0, lockedUntil: null },
+    // ورود موفق: اتصال حساب بی‌بخش به بخش انتخاب‌شده + پاک‌سازی شمارندهٔ تلاش‌ها.
+    user = await prisma.user.update({
+      where: { id: user!.id },
+      data: {
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        ...(decision.assignDepartmentId ? { departmentId: decision.assignDepartmentId } : {}),
+      },
     });
+
     await createSession(user.id, {
       userAgent: request.headers.get('user-agent'),
       ipAddress: request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null,

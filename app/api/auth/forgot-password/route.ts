@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '../../../../lib/prisma';
 import { ForgotPasswordSchema } from '../../../../lib/auth/validation';
-import { DEFAULT_INITIAL_PASSWORD, hashPassword } from '../../../../lib/auth/password';
 import { assertSameOrigin, authErrorResponse, authJson } from '../../../../lib/auth/http';
+import { createUnlinkedStaffAccount } from '../../../../lib/auth/accountLinking';
 
-const CONFIRMATION_MESSAGE = 'رمز عبور جدید به زودی برات ارسال میشه!';
+const CONFIRMATION_MESSAGE = 'درخواست شما ثبت شد؛ سرپرستار بخش رمز عبور شما را بازنشانی می‌کند.';
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,58 +12,31 @@ export async function POST(request: NextRequest) {
     const parsed = ForgotPasswordSchema.parse(await request.json());
     const { nationalId, departmentId } = parsed;
 
-    // ====== اصلاح: بررسی وجود کاربر و ایجاد خودکار ======
-    // اگر کاربر با این nationalId در Prisma وجود ندارد، ولی departmentId مشخص شده،
-    // یک حساب PERSONNEL جدید با رمز اولیه ۱۲۳۴ می‌سازیم تا:
-    // ۱) فراموشی رمز در پنل سرپرستار همان بخش نمایش داده شود
-    // ۲) ورود با portal='staff' و departmentId به‌درستی کار کند
-    // ۳) پرسنل‌های قدیمی (قبل از اتصال Prisma) هم بتوانند وارد شوند
     const existingUser = await prisma.user.findUnique({ where: { nationalId } });
 
-    if (!existingUser && departmentId) {
-      // ====== Auto-provision: ایجاد حساب خودکار ======
-      // کاربر وجود ندارد → حساب PERSONNEL جدید با رمز ۱۲۳۴ ایجاد می‌کنیم
-      // نام اولیه از کد ملی استخراج می‌شود؛ سرپرستار می‌تواند بعداً اصلاح کند
-      await prisma.user.create({
-        data: {
-          nationalId,
-          passwordHash: await hashPassword(DEFAULT_INITIAL_PASSWORD),
-          firstName: 'پرسنل',
-          lastName: `(${nationalId})`,
-          role: 'PERSONNEL',
-          departmentId,
-          active: true,
-          mustChangePassword: true,
-          hasResetRequest: true,
-          resetRequestedAt: new Date(),
-        },
-      });
+    if (!existingUser) {
+      // پرسنلی که هنوز حساب ورود ندارد: یک حساب «متصل‌نشده» با پرچم درخواست بازیابی
+      // ساخته می‌شود تا درخواست او بلافاصله در پنل سرپرستار همان بخش دیده شود.
+      // بدون این کار، درخواست در هیچ جدولی ثبت نمی‌شد و پنل سرپرستار خالی می‌ماند.
+      if (departmentId) {
+        await createUnlinkedStaffAccount({ nationalId, departmentId, withResetRequest: true });
+      }
+      // پاسخ برای کد ملی موجود و ناموجود عمداً یکسان است تا امکان شناسایی پرسنل نباشد.
       return authJson({ success: true, message: CONFIRMATION_MESSAGE });
     }
 
-    if (existingUser) {
-      // ====== اصلاح: انتساب departmentId به کاربر ======
-      // اگر کاربر با این nationalId وجود دارد اما departmentId ندارد یا نادرست است،
-      // آن را به بخش مشخص‌شده متصل می‌کند تا:
-      // ۱) فراموشی رمز در پنل سرپرستار همان بخش نمایش داده شود
-      // ۲) ورود با portal='staff' و departmentId به‌درستی کار کند
-      const updateData: { hasResetRequest: true; resetRequestedAt: Date; departmentId?: string } = {
+    await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
         hasResetRequest: true,
         resetRequestedAt: new Date(),
-      };
-      if (departmentId) {
-        updateData.departmentId = departmentId;
-      }
+        // حساب غیرفعال‌شده به‌طور خودکار فعال نمی‌شود؛ تصمیم با سرپرستار است.
+        // بخشِ حساب هم بازنویسی نمی‌شود مگر اینکه اصلاً بخشی نداشته باشد، تا انتخاب
+        // اشتباه بخش در صفحهٔ ورود، پرسنل را از بخش خودش جدا نکند.
+        ...(existingUser.departmentId || !departmentId ? {} : { departmentId }),
+      },
+    });
 
-      await prisma.user.update({
-        where: { id: existingUser.id },
-        data: updateData,
-      });
-    }
-    // updateMany avoids throwing for an unknown ID. The response intentionally stays
-    // identical so the endpoint cannot be used to enumerate hospital personnel.
-    // Note: if !existingUser && !departmentId, we can't auto-provision, so the
-    // reset request silently does nothing (same as before for security).
     return authJson({ success: true, message: CONFIRMATION_MESSAGE });
   } catch (error) {
     return authErrorResponse(error);
