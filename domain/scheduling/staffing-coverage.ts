@@ -1,5 +1,6 @@
-import type { JobGroup, Personnel, ShiftType, SystemSettings } from '../../lib/types';
+import type { JobGroup, Personnel, ShiftRequest, ShiftType, SystemSettings } from '../../lib/types';
 import {
+  routineAllowsPeriodAdd,
   shiftMatchesRoutine,
   wouldBreachConsecutiveCap,
   wouldCreateIsolatedShift,
@@ -113,7 +114,8 @@ export function reconcileStaffingCoverage(
   settings: SystemSettings,
   calendarDays: readonly StaffingCalendarDay[],
   targetJobGroups: readonly JobGroup[] = ['nurse', 'assistant'],
-  lockedRows: readonly string[] = []
+  lockedRows: readonly string[] = [],
+  requests?: readonly ShiftRequest[]
 ): StaffingCoverageResult {
   const reconciled: Record<string, Record<number, ShiftType>> = {};
   for (const [personnelId, dayAssignments] of Object.entries(assignments)) {
@@ -123,6 +125,14 @@ export function reconcileStaffingCoverage(
   const lockedIds = new Set(lockedRows);
   const unresolvedGaps: StaffingCoverageGap[] = [];
   const totalDays = calendarDays.reduce((max, calendarDay) => Math.max(max, calendarDay.day), 0);
+
+  // نفراتی که درخواست شیفت/الگوی کاری ثبت کرده‌اند؛ نفراتِ دارای تگ روتین که هیچ
+  // برنامه‌ای ندارند، ترجیحاً فقط در دوره‌های سازگار با تگشان چیده می‌شوند.
+  const explicitShiftPlan = new Set<string>(
+    (requests ?? [])
+      .filter(request => request.requestType === 'shift' || request.requestType === 'pattern')
+      .map(request => request.personnelId)
+  );
 
   for (const jobGroup of targetJobGroups) {
     const group = personnelList.filter(person => person.active && person.jobGroup === jobGroup);
@@ -170,6 +180,11 @@ export function reconcileStaffingCoverage(
             }
             if (person.workRoutine) {
               priority += shiftMatchesRoutine(nextShift, person.workRoutine) ? -10 : 10;
+              // نفرات دارای تگ بدون هیچ درخواست شیفت، به‌جز در نبود جایگزین، فقط در
+              // دوره‌های سازگار با تگشان چیده می‌شوند.
+              if (requests && !explicitShiftPlan.has(person.id) && !routineAllowsPeriodAdd(person.workRoutine, shift)) {
+                priority += 60;
+              }
             }
             return priority;
           };

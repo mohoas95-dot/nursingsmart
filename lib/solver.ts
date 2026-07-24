@@ -13,6 +13,7 @@ import {
   isIsolatedSingleShiftAt,
   isRoutineAllowedSingleShift,
   wouldCreateIsolatedShift,
+  routineAllowsPeriodAdd,
   shiftMatchesRoutine,
   wouldBreachConsecutiveCap,
 } from '../domain/scheduling/smart-rules';
@@ -192,6 +193,15 @@ export function solveWithPriority(
   const totalDays = calendar.length;
   const activePersonnel = personnelList.filter(p => p.active && !p.locked);
 
+  // نفراتی که درخواست شیفت یا الگوی کاری ثبت کرده‌اند؛ سایر نفراتِ دارای تگ روتین،
+  // صرفاً بر اساس همان تگ در دوره‌های سازگار چیده می‌شوند.
+  const explicitShiftPlan = new Set<string>();
+  requests.forEach(request => {
+    if (request.requestType === 'shift' || request.requestType === 'pattern') {
+      explicitShiftPlan.add(request.personnelId);
+    }
+  });
+
   const baseResult = solveNursingSchedule(
     year, month, personnelList, requests, settings,
     customHolidays, firstDayOfWeekIndex, monthlyDutyHours
@@ -291,7 +301,8 @@ export function solveWithPriority(
         // نمی‌سازند، سپس نفراتی که تگ روتین کاری‌شان با این شیفت سازگار است.
         const routineScore = (person: Personnel): number => {
           if (!person.workRoutine) return 1;
-          return shiftMatchesRoutine(shiftType, person.workRoutine) ? 0 : 2;
+          // سازگاری در سطح دوره موردنیاز (قدم‌های M/E برای لانگ‌کار و E/N برای عصر و شب‌کار جایزه می‌گیرند)
+          return routineAllowsPeriodAdd(person.workRoutine, shiftType) ? 0 : 2;
         };
         const bySmartRules = (left: Personnel, right: Personnel): number => {
           const isolatedLeft = wouldCreateIsolatedShift(assignments, left.id, d, totalDays, shiftType) ? 1 : 0;
@@ -325,9 +336,22 @@ export function solveWithPriority(
           }
         };
 
-        applyPriority(priority1, 'level1');
-        applyPriority(priority2, 'level2');
-        applyPriority(priority3, 'level3');
+        // قانون تگ روتین کاری: نفراتِ دارای تگ که هیچ درخواست شیفت نداده‌اند، ابتدا
+        // فقط در دوره‌های سازگار با تگشان چیده می‌شوند؛ اگر کمبود همچنان ماند، مسیر
+        // پشتیبانِ ناسازگار فعال می‌شود تا کاور کامل حفظ شود.
+        const routineCompatible = (person: Personnel) =>
+          !person.workRoutine ||
+          explicitShiftPlan.has(person.id) ||
+          routineAllowsPeriodAdd(person.workRoutine, shiftType);
+        const compatiblePool = (candidates: Personnel[]) => candidates.filter(routineCompatible);
+        const fallbackPool = (candidates: Personnel[]) => candidates.filter(person => !routineCompatible(person));
+
+        applyPriority(compatiblePool(priority1), 'level1');
+        applyPriority(compatiblePool(priority2), 'level2');
+        applyPriority(compatiblePool(priority3), 'level3');
+        applyPriority(fallbackPool(priority1), 'level1');
+        applyPriority(fallbackPool(priority2), 'level2');
+        applyPriority(fallbackPool(priority3), 'level3');
 
         if (remainingShortage > 0) {
           warnings.push(
@@ -484,6 +508,15 @@ export function solveNursingSchedule(
 
   const nurses = activePersonnel.filter(p => p.jobGroup === 'nurse');
   const assistants = activePersonnel.filter(p => p.jobGroup === 'assistant');
+
+  // نفراتی که درخواست شیفت یا الگوی کاری ثبت کرده‌اند؛ نفراتِ دارای تگ روتین کاری
+  // که هیچ درخواست شیفتی ندارند، چینش‌شان دقیقاً بر اساس تگ انجام می‌شود.
+  const explicitShiftPlan = new Set<string>();
+  requests.forEach(request => {
+    if (request.requestType === 'shift' || request.requestType === 'pattern') {
+      explicitShiftPlan.add(request.personnelId);
+    }
+  });
 
   // Pre-process Leaves
   activePersonnel.forEach(p => {
@@ -723,7 +756,13 @@ export function solveNursingSchedule(
 
       const available = group.filter(p => {
         if (assignments[p.id][d].startsWith('L')) return false;
-        
+
+        // قانون تگ روتین کاری: نفراتی که هیچ درخواست شیفت/الگویی ندارند، صرفاً در
+        // دوره‌های سازگار با تگ روتین‌شان چیده می‌شوند و مسیر اضطراری جداگانه فعال است.
+        if (p.workRoutine && !explicitShiftPlan.has(p.id) && !routineAllowsPeriodAdd(p.workRoutine, shiftChar)) {
+          return false;
+        }
+
         const currentShift = assignments[p.id][d];
         
         if (shiftChar === 'M' && (currentShift === 'M' || currentShift === 'ME' || currentShift === 'MN' || currentShift === 'MEN')) return false;
@@ -944,10 +983,14 @@ export function solveNursingSchedule(
           }
 
           // احترام به تگ روتین کاری (حرکت دائمی نفر):
-          // شیفت هم‌خوان با روتین جایزه می‌گیرد و انحراف از روتین جریمه.
+          // تکمیل الگوی نهایی روتین (مثل ساخت ME برای لانگ‌کار) بیشترین جایزه را
+          // دارد؛ قدم سازگار با روتین (مثل گرفتن M برای لانگ‌کار تا ME شود) هم جایزه
+          // می‌گیرد و هر دوره ناسازگار با روتین جریمه می‌شود.
           if (p.workRoutine && !explicitShiftToday) {
             if (shiftMatchesRoutine(prospectiveShift, p.workRoutine)) {
               score -= 25000;
+            } else if (routineAllowsPeriodAdd(p.workRoutine, shiftChar)) {
+              score -= 10000;
             } else {
               score += 30000;
             }
@@ -1080,6 +1123,16 @@ export function solveNursingSchedule(
         });
 
         forceAvailable.sort((x, y) => {
+           // تگ روتین کاری در مسیر اضطراری هم اولویت اول است: ابتدا نفراتی که شیفت
+           // با تگشان سازگار است (یا تگ ندارند/درخواست شیفت دارند) انتخاب می‌شوند.
+           const routineCompat = (person: Personnel) =>
+             !person.workRoutine ||
+             explicitShiftPlan.has(person.id) ||
+             routineAllowsPeriodAdd(person.workRoutine, shiftChar);
+           const compatX = routineCompat(x) ? 0 : 1;
+           const compatY = routineCompat(y) ? 0 : 1;
+           if (compatX !== compatY) return compatX - compatY;
+
            // سقف ۵ شیفت متوالی حتی در مسیر اضطراری به‌عنوان آخرین ملاک رعایت می‌شود:
            // نفراتی که تخصیص به آن‌ها زنجیره را از ۵ عبور می‌دهد به انتهای صف می‌روند.
            const prospectiveBreach = (person: Personnel) => {
@@ -1173,6 +1226,8 @@ export function solveNursingSchedule(
         if (qReq && (qReq.requestType === 'OFF' || qReq.requestType === 'leave')) return false;
         if (requests.some(r => r.personnelId === q.id && r.requestType === 'pattern')) return false;
         if (avoidedShifts[q.id]?.[d]?.has(shift)) return false;
+        // تگ روتین کاری نفر بدون درخواست شیفت احترام می‌ماند.
+        if (q.workRoutine && !explicitShiftPlan.has(q.id) && !routineAllowsPeriodAdd(q.workRoutine, shift as 'M' | 'E' | 'N')) return false;
         // جایگزین نباید سقف ۵ شیفت متوالی را نقض کند یا خودش شیفت تک‌تک بسازد.
         if (wouldBreachConsecutiveCap(assignments, q.id, d, shift, totalDays)) return false;
         if (isIsolatedSingleShiftAt(assignments, q.id, d, totalDays, shift)) return false;
@@ -1331,7 +1386,10 @@ export function solveNursingSchedule(
     assignments,
     activePersonnel,
     settings,
-    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday }))
+    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+    ['nurse', 'assistant'],
+    [],
+    requests
   );
   const finalAssignments = staffingResult.assignments;
 

@@ -10,6 +10,8 @@ import {
   getShiftWeight,
   isIsolatedSingleShiftAt,
   isRoutineAllowedSingleShift,
+  resolveLeaveShiftAssignment,
+  routineAllowsPeriodAdd,
   shiftMatchesRoutine,
   wouldBreachConsecutiveCap,
 } from '../domain/scheduling/smart-rules';
@@ -358,4 +360,113 @@ test('regeneration prefers the candidate whose work-routine tag matches the gap'
     n2Nights > n1Nights,
     `night gaps should mainly go to the evening/night-tagged worker (n2=${n2Nights}, n1=${n1Nights})`
   );
+});
+
+// ============================================================================
+// تگ روتین کاری برای نفرات بدون درخواست شیفت + شماره‌گذاری خودکار مرخصی در منوی سلول
+// ============================================================================
+
+test('routine period access maps each tag to its allowed staffing periods', () => {
+  // صبح‌کار فقط صبح می‌آید
+  assert.equal(routineAllowsPeriodAdd('morning', 'M'), true);
+  assert.equal(routineAllowsPeriodAdd('morning', 'E'), false);
+  assert.equal(routineAllowsPeriodAdd('morning', 'N'), false);
+  // لانگ‌کار صبح و عصر می‌آید (ME)
+  assert.equal(routineAllowsPeriodAdd('long', 'M'), true);
+  assert.equal(routineAllowsPeriodAdd('long', 'E'), true);
+  assert.equal(routineAllowsPeriodAdd('long', 'N'), false);
+  // عصر و شب‌کار عصر و شب می‌آید (EN یا N)
+  assert.equal(routineAllowsPeriodAdd('evening_night', 'M'), false);
+  assert.equal(routineAllowsPeriodAdd('evening_night', 'E'), true);
+  assert.equal(routineAllowsPeriodAdd('evening_night', 'N'), true);
+  // بدون تگ همه دوره‌ها آزاد است
+  assert.equal(routineAllowsPeriodAdd(undefined, 'M'), true);
+});
+
+test('regeneration arranges request-less personnel strictly by their routine tag', () => {
+  const morningWorker = person('n1', 'nurse', { workRoutine: 'morning' });
+  const nightWorker = person('n2', 'nurse', { workRoutine: 'evening_night' });
+  const flexibleWorker = person('n3', 'nurse');
+  const result = solveWithPriority(
+    1404, 2, [morningWorker, nightWorker, flexibleWorker], [],
+    settingsWithDemand({ morningNurse: 1, afternoonNurse: 1, nightNurse: 1 }, {}),
+    {}, undefined, null
+  );
+
+  const covers = (shift: string | undefined, component: 'M' | 'E' | 'N') =>
+    !!shift && !shift.startsWith('L') && shift.includes(component);
+
+  for (let d = 1; d <= TOTAL_DAYS; d++) {
+    const morningShift = result.assignments.n1?.[d];
+    assert.ok(
+      !covers(morningShift, 'E') && !covers(morningShift, 'N'),
+      `morning-tagged worker must never receive E/N (day ${d}: ${morningShift})`
+    );
+    const nightShift = result.assignments.n2?.[d];
+    assert.ok(
+      !covers(nightShift, 'M'),
+      `evening/night-tagged worker must never receive M (day ${d}: ${nightShift})`
+    );
+  }
+});
+
+test('routine tag of a request-less worker yields to coverage only as a last resort', () => {
+  // هر دو پرستار صبح‌کار هستند اما تقاضای شب وجود دارد → مسیر پشتیبان باید کاور کند
+  const personnel = [
+    person('n1', 'nurse', { workRoutine: 'morning' }),
+    person('n2', 'nurse', { workRoutine: 'morning' }),
+  ];
+  const result = solveWithPriority(
+    1404, 2, personnel, [],
+    settingsWithDemand({ nightNurse: 1 }, {}),
+    {}, undefined, null
+  );
+
+  let nightCoverage = 0;
+  for (let d = 1; d <= TOTAL_DAYS; d++) {
+    for (const p of personnel) {
+      const shift = result.assignments[p.id]?.[d];
+      if (shift && !shift.startsWith('L') && shift.includes('N')) {
+        nightCoverage++;
+      }
+    }
+  }
+  assert.ok(nightCoverage > 10, `night demand must still be covered as a last resort (got ${nightCoverage})`);
+});
+
+test('an explicit shift request is still honored for tagged personnel with their own request', () => {
+  const requests: ShiftRequest[] = [
+    {
+      id: 'req-n1-night',
+      personnelId: 'n1',
+      requestType: 'shift',
+      preferredShift: 'N',
+      isEssential: true,
+      scope: 'custom_days',
+      selectedDays: [2],
+    },
+  ];
+  const result = solveWithPriority(
+    1404, 2, [person('n1', 'nurse', { workRoutine: 'morning' }), person('n2', 'nurse'), person('n3', 'nurse')],
+    requests,
+    settingsWithDemand({ morningNurse: 1, nightNurse: 1 }, {}),
+    {}, undefined, null
+  );
+  const shift = result.assignments.n1?.[2];
+  assert.ok(
+    !!shift && shift.includes('N'),
+    `the explicit N request of the tagged nurse must be honored (got ${shift})`
+  );
+});
+
+test('manual leave from the cell menu auto-numbers consecutive leave days', () => {
+  const assignments = { p1: { 3: 'L1', 4: 'L2', 8: HOLIDAY_LEAVE_SHIFT, 12: 'OFF' } };
+  // ادامه زنجیره مرخصی: روز ۵ سومین روز پیاپی است
+  assert.equal(resolveLeaveShiftAssignment(assignments, 'p1', 5), 'L3');
+  // مرخصی تعطیل (LH) شماره‌دار نیست و زنجیره را قطع می‌کند
+  assert.equal(resolveLeaveShiftAssignment(assignments, 'p1', 9), 'L1');
+  // بعد از روز آف، شمارش از ۱ شروع می‌شود
+  assert.equal(resolveLeaveShiftAssignment(assignments, 'p1', 13), 'L1');
+  // روز اول ماه
+  assert.equal(resolveLeaveShiftAssignment(assignments, 'p1', 1), 'L1');
 });

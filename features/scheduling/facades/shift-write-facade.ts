@@ -194,7 +194,8 @@ export async function runOptimizerFacade(
       settings,
       calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
       [jobGroup],
-      lockState.lockedRows
+      lockState.lockedRows,
+      requests
     );
     const compliantAssignments = staffingResult.assignments;
 

@@ -52,6 +52,7 @@ import {
 } from '../lib/balanceChecker';
 import { generateSmartSuggestions } from '../lib/smartSuggestion';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
+import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
 import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
@@ -2081,6 +2082,11 @@ export default function Home() {
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
     if (!schedule) return;
 
+    // گزینه یکپارچه «مرخصی» در منوی سلول: شماره روز مرخصی بر اساس روزهای پیاپی
+    // قبلی تعیین می‌شود تا در لیست، روز اول عدد ۱، روز دوم عدد ۲ و الی آخر بیاید.
+    const resolvedShift: ShiftType =
+      shift === 'L' ? resolveLeaveShiftAssignment(schedule.assignments, pId, day) : shift;
+
     try {
       const deptId = selectedDepartmentId || 'sepehr';
 
@@ -2122,7 +2128,7 @@ export default function Home() {
         {
           personnelId: pId,
           day,
-          shift,
+          shift: resolvedShift,
           year: currentYear,
           month: currentMonth,
           currentSchedule: schedule,
@@ -3757,7 +3763,7 @@ export default function Home() {
                                     {isEditingThis ? (
                                       <select
                                         autoFocus
-                                        value={currentShift}
+                                        value={currentShift.startsWith('L') ? 'L' : currentShift}
                                         onChange={(e) => handleManualShiftChange(p.id, d.day, e.target.value as ShiftType)}
                                         onBlur={() => setEditingCell(null)}
                                         className="absolute inset-0 z-20 w-full h-full text-xs font-bold border border-indigo-500 bg-white"
@@ -3771,11 +3777,7 @@ export default function Home() {
                                         <option value="EN">شب-عصر (EN)</option>
                                         <option value="MN">شب-صبح (MN)</option>
                                         <option value="MEN">ترکیبی (MEN)</option>
-                                        <option value="L1">مرخصی روز ۱</option>
-                                        <option value="L2">مرخصی روز ۲</option>
-                                        <option value="L3">مرخصی روز ۳</option>
-                                        <option value="L4">مرخصی روز ۴</option>
-                                        <option value="L5">مرخصی روز ۵</option>
+                                        <option value="L">مرخصی</option>
                                       </select>
                                     ) : (
                                       <button
@@ -3808,7 +3810,6 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> کل روز (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">H</span> مرخصی روز تعطیل (۷ ساعت اعتبار)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
                 </div>
               </div>

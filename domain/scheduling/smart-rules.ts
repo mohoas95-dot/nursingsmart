@@ -168,6 +168,26 @@ export const ROUTINE_PREFERRED_SHIFTS: Readonly<Record<WorkRoutineTag, readonly 
   long: ['ME'],
 };
 
+/**
+ * دوره‌های زمانی مجاز برای هر تگ روتین کاری هنگام تخصیص تدریجی solver.
+ * نفراتی که تگ روتین دارند و هیچ درخواست شیفت/الگویی ثبت نکرده‌اند، فقط در
+ * همین دوره‌ها چیده می‌شوند تا چینش دقیقاً بر اساس تگشان انجام شود:
+ *  - صبح‌کار: فقط صبح (نتیجه نهایی M)
+ *  - لانگ‌کار: صبح و عصر (نتیجه نهایی ME)
+ *  - عصر و شب‌کار: عصر و شب (نتیجه نهایی EN یا N)
+ */
+export const ROUTINE_PERIOD_ACCESS: Readonly<Record<WorkRoutineTag, readonly ('M' | 'E' | 'N')[]>> = {
+  morning: ['M'],
+  long: ['M', 'E'],
+  evening_night: ['E', 'N'],
+};
+
+/** آیا دوره زمانی موردنظر برای تگ روتین کاری مجاز است؟ */
+export function routineAllowsPeriodAdd(routine: WorkRoutineTag | undefined, period: 'M' | 'E' | 'N'): boolean {
+  if (!routine) return true;
+  return (ROUTINE_PERIOD_ACCESS[routine] as readonly string[]).includes(period);
+}
+
 /** آیا شیفت با تگ روتین کاری پرسنل سازگار است؟ */
 export function shiftMatchesRoutine(shift: ShiftType | undefined, routine: WorkRoutineTag | undefined): boolean {
   if (!routine || !shift) return false;
@@ -309,4 +329,27 @@ export const HOLIDAY_LEAVE_HOURS = 7.0;
 
 export function isHolidayLeaveShift(shift: ShiftType | undefined): boolean {
   return shift === HOLIDAY_LEAVE_SHIFT;
+}
+
+/**
+ * برای تخصیص دستی «مرخصی» از منوی سلول شیفت: شماره روز مرخصی بر اساس تعداد
+ * روزهای پیاپی مرخصیِ بلافاصله قبل تعیین می‌شود تا در لیست، روز اول عدد ۱، روز
+ * دوم عدد ۲ و الی آخر نمایش داده شود. مرخصی تعطیل (LH) شماره‌دار نیست و زنجیره
+ * شمارش را قطع می‌کند (بعد از آن دوباره از ۱ شروع می‌شود).
+ */
+export function resolveLeaveShiftAssignment(
+  assignments: AssignmentMap,
+  personnelId: string,
+  day: number
+): ShiftType {
+  let streak = 0;
+  for (let d = day - 1; d >= 1; d--) {
+    const previous = assignments[personnelId]?.[d];
+    if (previous && /^L\d+$/.test(previous)) {
+      streak += 1;
+    } else {
+      break;
+    }
+  }
+  return `L${streak + 1}`;
 }
