@@ -273,28 +273,88 @@ export function solveWithPriority(
           const currentShift = assignments[person.id]?.[d] || 'OFF';
           if (currentShift !== 'OFF') return false;
 
-          const protectedRequest = requests.find(request =>
+  const protectedRequest = requests.find(request =>
             request.personnelId === person.id &&
             (request.requestType === 'OFF' || request.requestType === 'leave') &&
             isDayInRequestScope(d, calendar[d - 1].dayOfWeek, request)
           );
-          return !protectedRequest;
+          // ====== قانون اولویت‌بندی بن‌بست (سطح A و B) ======
+          // Hard OFF (سطح B بالا): solver حق ندارد نقض کند.
+          // Soft OFF (سطح B): solver می‌تواند در بن‌بست نقض کند (در availablePersonnel نگه می‌شود).
+          // Leave (سطح B): solver می‌تواند در بن‌بست نقض کند، اما پیوستگی مرخصی نباید شکسته شود.
+          if (protectedRequest) {
+            if (protectedRequest.requestType === 'OFF' && protectedRequest.offHardness === 'hard') {
+              return false;
+            }
+            if (protectedRequest.requestType === 'leave') {
+              // مرخصی قابل نقض است در بن‌بست، اما فقط اگر نقض پیوستگی مرخصی را شکسته نکند.
+              // در این مرحله (solveWithPriority) ما مرخصی‌ها را در available نگه می‌داریم تا
+              // در مسیر اضطراری (priority3 fallback) قابل استفاده شوند.
+              // مرخصی‌های Hard OFF (isEssential) در هیچ شرایطی نقض نمی‌شوند.
+              if (protectedRequest.isEssential) return false;
+              // در اینجا فرد در مرخصی است، شیفت کاری به او تخصیص نمی‌دهیم:
+              // استراتژی بن‌بست برای leave = کاهش یا جابجایی روزهای مرخصی، نه تخصیص شیفت روی روز مرخصی.
+              // بنابراین مرخصی‌ها در این availablePersonnel حذف می‌شوند.
+              return false;
+            }
+            // Soft OFF: نگه می‌شود تا در مسیر fallback قابل استفاده باشد.
+            if (protectedRequest.requestType === 'OFF' && protectedRequest.offHardness === 'soft') {
+              // Soft OFF نفر در availablePersonnel نگه می‌دارد تا در بن‌بست نقض شود.
+              // اما در اولویت‌های اول (priority1) حذف می‌شود.
+            }
+            // OFF بدون تعیین hardness: default = hard (سخت)
+            if (protectedRequest.requestType === 'OFF' && !protectedRequest.offHardness) {
+              return false;
+            }
+          }
+          return true;
         });
 
         const priority1 = availablePersonnel.filter(person => {
+          // ====== سطح B: نفرات بدون درخواست Soft OFF ======
+          // Soft OFF فقط در مسیر fallback (priority3SoftOff) نقض می‌شود.
           const request = requestForDay(person.id);
+          // حذف نفرات با Soft OFF از اولویت‌های اول
+          const softOffRequest = requests.find(r =>
+            r.personnelId === person.id &&
+            r.requestType === 'OFF' &&
+            r.offHardness === 'soft' &&
+            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+          );
+          if (softOffRequest) return false;
           return !request || request.requestType !== 'avoid_shift' || request.preferredShift !== shiftType;
         });
 
         const priority2 = availablePersonnel.filter(person => {
           if (d <= 1) return false;
           const previousShift = assignments[person.id]?.[d - 1];
-          return !!previousShift && ['ME', 'EN', 'MN', 'MEN', 'N'].includes(previousShift);
+          if (!previousShift || !['ME', 'EN', 'MN', 'MEN', 'N'].includes(previousShift)) return false;
+          // حذف نفرات با Soft OFF از اولویت‌های دوم
+          const softOffRequest = requests.find(r =>
+            r.personnelId === person.id &&
+            r.requestType === 'OFF' &&
+            r.offHardness === 'soft' &&
+            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+          );
+          if (softOffRequest) return false;
+          return true;
         });
 
         const priority3 = availablePersonnel.filter(person => {
           const request = requestForDay(person.id);
           return request?.requestType === 'avoid_shift' && request.preferredShift === shiftType;
+        });
+
+        // ====== سطح B (fallback بن‌بست): نقض Soft OFF ======
+        // نفراتی که Soft OFF دارند اما در صورت بن‌بست شیفت می‌گیرند.
+        const priority3SoftOff = availablePersonnel.filter(person => {
+          const softOffRequest = requests.find(r =>
+            r.personnelId === person.id &&
+            r.requestType === 'OFF' &&
+            r.offHardness === 'soft' &&
+            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+          );
+          return !!softOffRequest;
         });
 
         // احترام به قوانین هوشمند در انتخاب نفر جایگزین: ابتدا نفراتی که شیفت تک‌تک
@@ -313,6 +373,7 @@ export function solveWithPriority(
         priority1.sort(bySmartRules);
         priority2.sort(bySmartRules);
         priority3.sort(bySmartRules);
+        priority3SoftOff.sort(bySmartRules);
 
         let remainingShortage = shortage;
         const filledBy: string[] = [];
@@ -325,7 +386,7 @@ export function solveWithPriority(
             alreadyConsidered.add(person.id);
             // A prior priority/shift iteration may have changed this day already.
             if ((assignments[person.id]?.[d] || 'OFF') !== 'OFF') continue;
-            // قانون سقف ۵ شیفت متوالی و استراحت اجباری در بازتولید هوشمند سخت است.
+            // ====== سطح A: سقف ۵ شیفت متوالی خط قرمز مطلق ======
             if (wouldBreachConsecutiveCap(assignments, person.id, d, shiftType, totalDays)) continue;
 
             if (!assignments[person.id]) assignments[person.id] = {};
@@ -336,9 +397,11 @@ export function solveWithPriority(
           }
         };
 
-        // قانون تگ روتین کاری: نفراتِ دارای تگ که هیچ درخواست شیفت نداده‌اند، ابتدا
-        // فقط در دوره‌های سازگار با تگشان چیده می‌شوند؛ اگر کمبود همچنان ماند، مسیر
-        // پشتیبانِ ناسازگار فعال می‌شود تا کاور کامل حفظ شود.
+        // ====== قانون اولویت‌بندی سه‌سطحی ======
+        // قانون تگ روتین کاری (سطح B تبصره): نفراتِ دارای تگ که هیچ درخواست شیفت نداره‌اند،
+        // ابتدا فقط در دوره‌های سازگار با تگشان چیده می‌شوند؛ اگر کمبود همچنان ماند،
+        // مسیر پشتیبان ناسازگار فعال می‌شود.
+        // سطح B: رعایت درخواست‌ها و تگ روتین > سطح C: کاور و تعادل.
         const routineCompatible = (person: Personnel) =>
           !person.workRoutine ||
           explicitShiftPlan.has(person.id) ||
@@ -346,12 +409,18 @@ export function solveWithPriority(
         const compatiblePool = (candidates: Personnel[]) => candidates.filter(routineCompatible);
         const fallbackPool = (candidates: Personnel[]) => candidates.filter(person => !routineCompatible(person));
 
+        // ====== اولویت‌های اصلی (سطح B: درخواست‌ها و تگ روتین) ======
         applyPriority(compatiblePool(priority1), 'level1');
         applyPriority(compatiblePool(priority2), 'level2');
         applyPriority(compatiblePool(priority3), 'level3');
         applyPriority(fallbackPool(priority1), 'level1');
         applyPriority(fallbackPool(priority2), 'level2');
         applyPriority(fallbackPool(priority3), 'level3');
+
+        // ====== بن‌بست (سطح A برتر): نقض Soft OFF (سطح B) ======
+        // اگر بعد از همه اولویت‌ها کمبود دارد، Soft OFF قابل نقض است.
+        applyPriority(compatiblePool(priority3SoftOff), 'level3');
+        applyPriority(fallbackPool(priority3SoftOff), 'level3');
 
         if (remainingShortage > 0) {
           warnings.push(
@@ -841,8 +910,20 @@ export function solveNursingSchedule(
 
         const req = dailyRequests[p.id]?.[d];
         if (req) {
-          if (req.requestType === 'OFF' || req.requestType === 'leave') {
-            return false;
+          // ====== قانون اولویت‌بندی بن‌بست ======
+          // Hard OFF (سطح B بالا): solver حق ندارد نقض کند.
+          // Soft OFF (سطح B): solver می‌تواند در بن‌بست نقض کند، اما در مسیر عادی حذف می‌شود.
+          // Leave (سطح B): solver می‌تواند در بن‌بست کاهش یا جابجا کند، اما پیوستگی نباید شکسته شود.
+          // در fillGroupGaps (مسیر عادی) Soft OFF و Leave حذف می‌شوند؛
+          // در forceAvailable (مسیر اضطراری) Soft OFF قابل نقض است.
+          if (req.requestType === 'OFF') {
+            if (req.offHardness === 'hard') return false;
+            if (!req.offHardness) return false; // default = hard
+            // Soft OFF: در مسیر عادی حذف، در مسیر اضطراری قابل نقض
+            if (req.offHardness === 'soft') return false;
+          }
+          if (req.requestType === 'leave') {
+            return false; // مرخصی در مسیر عادی حذف، پیوستگی مرخصی نباید شکسته شود
           }
           if (req.requestType === 'shift' && req.preferredShift) {
             const pref = req.preferredShift;
@@ -1113,16 +1194,63 @@ export function solveNursingSchedule(
       }
 
       if (gap > 0) {
+        // ====== مسیر اضطراری (بن‌بست) ======
+        // در این مسیر، Hard OFF همچنان نقض نمی‌شود (سطح A/B).
+        // Soft OFF قابل نقض است (سطح B).
+        // Leave با isEssential نقض نمی‌شود؛ بدون isEssential پیوستگی باید حفظ شود.
         let forceAvailable = group.filter(p => {
           if (assignments[p.id][d].startsWith('L')) return false;
           const currentShift = assignments[p.id][d];
           if (shiftChar === 'M' && (currentShift === 'M' || currentShift === 'ME' || currentShift === 'MN' || currentShift === 'MEN')) return false;
           if (shiftChar === 'E' && (currentShift === 'E' || currentShift === 'ME' || currentShift === 'EN' || currentShift === 'MEN')) return false;
           if (shiftChar === 'N' && (currentShift === 'N' || currentShift === 'EN' || currentShift === 'MN' || currentShift === 'MEN')) return false;
+
+          // ====== قانون اولویت‌بندی بن‌بست ======
+          // Hard OFF (سطح B بالا): solver حق ندارد نقض کند حتی در مسیر اضطراری.
+          const hardOffRequest = requests.find(r =>
+            r.personnelId === p.id &&
+            r.requestType === 'OFF' &&
+            (r.offHardness === 'hard' || !r.offHardness) &&
+            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+          );
+          if (hardOffRequest) return false;
+
+          // Leave با isEssential: نقض نمی‌شود.
+          const essentialLeaveRequest = requests.find(r =>
+            r.personnelId === p.id &&
+            r.requestType === 'leave' &&
+            r.isEssential &&
+            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+          );
+          if (essentialLeaveRequest) return false;
+
           return true;
         });
 
         forceAvailable.sort((x, y) => {
+           // ====== قانون اولویت‌بندی سه‌سطحی در مسیر اضطراری ======
+           // اولویت ۱: نفرات بدون Soft OFF (سطح B درخواست‌ها)
+           // اولویت ۲: نفرات با Soft OFF (بن‌بست، نقض سطح B)
+           // اولویت ۳: تگ روتین کاری
+           // اولویت ۴: سقف ۵ شیفت متوالی (سطح A - خط قرمز)
+           // اولویت ۵: ساعت موظفی و تعادل (سطح C)
+
+           const softOffX = requests.find(r =>
+             r.personnelId === x.id &&
+             r.requestType === 'OFF' &&
+             r.offHardness === 'soft' &&
+             isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+           );
+           const softOffY = requests.find(r =>
+             r.personnelId === y.id &&
+             r.requestType === 'OFF' &&
+             r.offHardness === 'soft' &&
+             isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+           );
+           // نفرات بدون Soft OFF اولویت بالاتر دارند
+           if (!softOffX && softOffY) return -1;
+           if (softOffX && !softOffY) return 1;
+
            // تگ روتین کاری در مسیر اضطراری هم اولویت اول است: ابتدا نفراتی که شیفت
            // با تگشان سازگار است (یا تگ ندارند/درخواست شیفت دارند) انتخاب می‌شوند.
            const routineCompat = (person: Personnel) =>
@@ -1133,7 +1261,7 @@ export function solveNursingSchedule(
            const compatY = routineCompat(y) ? 0 : 1;
            if (compatX !== compatY) return compatX - compatY;
 
-           // سقف ۵ شیفت متوالی حتی در مسیر اضطراری به‌عنوان آخرین ملاک رعایت می‌شود:
+           // ====== سطح A: سقف ۵ شیفت متوالی (خط قرمز مطلق) ======
            // نفراتی که تخصیص به آن‌ها زنجیره را از ۵ عبور می‌دهد به انتهای صف می‌روند.
            const prospectiveBreach = (person: Personnel) => {
              const cs = assignments[person.id][d];
@@ -1149,6 +1277,7 @@ export function solveNursingSchedule(
            const breachY = prospectiveBreach(y);
            if (breachX !== breachY) return breachX - breachY;
 
+           // ====== سطح C: ساعت موظفی و تعادل ======
            let hoursX = 0; let hoursY = 0;
            for (let day = 1; day <= totalDays; day++) {
              hoursX += getShiftHours(assignments[x.id][day], x.employmentType);
@@ -1611,6 +1740,27 @@ export function verifyCoverageAndLeaders(
       warnings.push(
         `Consecutive OFFs: عدم رعایت سقف آف متوالی (بیش از ۳ روز متوالی) برای ${p.firstName} ${p.lastName} از روز ${consecutiveOffDays[0]} تا روز ${consecutiveOffDays[consecutiveOffDays.length - 1]} به مدت ${consecutiveOffDays.length} روز متوالی`
       );
+    }
+  });
+
+  // ====== قانون پیوستگی مرخصی (سطح B): ======
+  // اگر پرسنل در وسط مرخصی بود، پیوستگی مرخصی نباید نقض شود.
+  // یعنی بین روزهای مرخصی متوالی نباید شیفت کاری غیرمرخصی قرار گیرد.
+  activePersonnel.forEach(p => {
+    const fullName = `${p.firstName} ${p.lastName}`;
+    for (let d = 2; d <= totalDays - 1; d++) {
+      const prev = assignments[p.id]?.[d - 1];
+      const curr = assignments[p.id]?.[d];
+      const next = assignments[p.id]?.[d + 1];
+      // اگر روز قبل و بعد مرخصی است و روز فعلی مرخصی نیست (پیوستگی شکسته شده)
+      const isPrevLeave = prev && /^L\d+$/.test(prev);
+      const isCurrLeave = curr && /^L\d+$/.test(curr);
+      const isNextLeave = next && /^L\d+$/.test(next);
+      if (isPrevLeave && !isCurrLeave && isNextLeave && curr !== HOLIDAY_LEAVE_SHIFT) {
+        warnings.push(
+          `Leave Continuity: نقض پیوستگی مرخصی ${fullName} — روز ${d} (${curr}) بین روزهای مرخصی قرار گرفته (روز ${d-1}: ${prev}، روز ${d+1}: ${next})`
+        );
+      }
     }
   });
 
