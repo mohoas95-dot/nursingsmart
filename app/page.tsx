@@ -3892,23 +3892,30 @@ export default function Home() {
                   <div className="w-full mt-4 pt-4 border-t border-amber-200 flex items-center justify-between">
                     <button 
                       onClick={() => setViewingScenarioIndex(prev => (prev < 2 ? prev + 1 : 0))}
-                      className="px-4 py-2 flex items-center gap-2 bg-white rounded-lg shadow-sm hover:bg-amber-100 text-amber-700 font-black border border-amber-300 transition-colors"
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-amber-700 text-xs font-bold border border-amber-300 transition-all"
                     >
-                      <ChevronRight className="w-5 h-5" />
+                      <ChevronRight className="w-4 h-4" />
                       برنامه بعدی
                     </button>
-                    <div className="text-center">
-                      <h4 className="text-amber-900 font-black text-base">
-                        در حال نمایش: برنامه شماره {currentScenario.id} ({currentScenario.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenario.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'})
-                      </h4>
-                      <p className="text-amber-700 text-xs font-bold mt-1">امتیاز کلی سیستم: {currentScenario.totalScore.toFixed(0)} از ۱۰۰ | برای تایید و ثبت رای روی دکمه نارنجی کلیک کنید</p>
+                    <div className="text-center flex flex-col items-center">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-amber-900 font-black text-sm">
+                          در حال نمایش: {currentScenario.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenario.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
+                        </h4>
+                        {currentScenario.type === 'MIXED' && (
+                          <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">
+                            پیشنهادی
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-amber-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-amber-900" dir="ltr">{currentScenario.totalScore.toFixed(0)}/100</span> | برای تایید و ثبت رای روی دکمه نارنجی کلیک کنید</p>
                     </div>
                     <button 
                       onClick={() => setViewingScenarioIndex(prev => (prev > 0 ? prev - 1 : 2))}
-                      className="px-4 py-2 flex items-center gap-2 bg-white rounded-lg shadow-sm hover:bg-amber-100 text-amber-700 font-black border border-amber-300 transition-colors"
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-amber-700 text-xs font-bold border border-amber-300 transition-all"
                     >
                       برنامه قبلی
-                      <ChevronLeft className="w-5 h-5" />
+                      <ChevronLeft className="w-4 h-4" />
                     </button>
                   </div>
                 </div>

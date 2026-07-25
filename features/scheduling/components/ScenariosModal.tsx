@@ -78,8 +78,8 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
               return (
               <div key={scenario.id} className="bg-white border-2 border-slate-100 hover:border-emerald-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex flex-col relative group">
                 {scenario.type === 'MIXED' && (
-                  <div className="absolute -top-3 -left-3 bg-amber-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-sm">
-                    🏆 پیشنهاد ویژه
+                  <div className="absolute -top-3 -left-3 bg-emerald-500 text-white text-[10px] font-black px-3 py-1 rounded-full shadow-sm ring-2 ring-white">
+                    ✨ پیشنهادی
                   </div>
                 )}
                 
@@ -105,7 +105,7 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
                   <div className="bg-slate-50 p-3 rounded-xl">
                     <div className="flex justify-between items-center mb-1">
                       <span className="text-xs font-bold text-slate-600">امتیاز کل سیستم</span>
-                      <span className="font-black text-lg text-emerald-600">{scenario.totalScore.toFixed(0)}</span>
+                      <span className="font-black text-lg text-emerald-600" dir="ltr">{scenario.totalScore.toFixed(0)}/100</span>
                     </div>
                     <div className="w-full bg-slate-200 rounded-full h-1.5">
                       <div className="bg-emerald-500 h-1.5 rounded-full" style={{ width: `${scenario.totalScore}%` }}></div>
@@ -115,15 +115,15 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
                   <div className="grid grid-cols-3 gap-2">
                     <div className="bg-blue-50 p-2 rounded-lg text-center">
                       <div className="text-[10px] font-bold text-blue-600 mb-1">رعایت قوانین کلی</div>
-                      <div className="font-black text-sm text-blue-700">{scenario.scoreA.toFixed(0)}</div>
+                      <div className="font-black text-sm text-blue-700" dir="ltr">{scenario.scoreA.toFixed(0)}/100</div>
                     </div>
                     <div className="bg-purple-50 p-2 rounded-lg text-center">
                       <div className="text-[10px] font-bold text-purple-600 mb-1">رعایت درخواست‌های پرسنل</div>
-                      <div className="font-black text-sm text-purple-700">{scenario.scoreB.toFixed(0)}</div>
+                      <div className="font-black text-sm text-purple-700" dir="ltr">{scenario.scoreB.toFixed(0)}/100</div>
                     </div>
                     <div className="bg-amber-50 p-2 rounded-lg text-center">
                       <div className="text-[10px] font-bold text-amber-600 mb-1">رعایت عدالت در چینش</div>
-                      <div className="font-black text-sm text-amber-700">{scenario.scoreC.toFixed(0)}</div>
+                      <div className="font-black text-sm text-amber-700" dir="ltr">{scenario.scoreC.toFixed(0)}/100</div>
                     </div>
                   </div>
 
