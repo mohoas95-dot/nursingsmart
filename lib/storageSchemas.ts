@@ -168,6 +168,10 @@ export const DepartmentDataSchema = z.object({
   activeScenariosAssistants: z.any().optional(),
   scenarioVotesNurses: z.any().optional(),
   scenarioVotesAssistants: z.any().optional(),
+  activeScenariosNurses: z.any().optional(),
+  activeScenariosAssistants: z.any().optional(),
+  scenarioVotesNurses: z.any().optional(),
+  scenarioVotesAssistants: z.any().optional(),
 }).strict();
 
 export const AppDatabaseStateSchema = z.object({

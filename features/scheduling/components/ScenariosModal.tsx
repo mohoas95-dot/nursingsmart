@@ -8,6 +8,7 @@ interface ScenariosModalProps {
   votes: Record<number, Record<string, number>>; // { scenarioId: { personnelId: rating } }
   currentUserId: string | null;
   userRole: 'admin' | 'headnurse' | 'personnel' | 'guest';
+  groupTitle?: string;
   onApply: (scenario: ScoredSchedule) => void;
   onVote: (scenarioId: number, rating: number) => void;
   onClose: () => void;
@@ -44,7 +45,7 @@ function StarRating({ value, onVote }: { value: number; onVote?: (rating: number
   return <div className="flex flex-row gap-1" dir="ltr">{stars}</div>;
 }
 
-export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRole, onApply, onVote, onClose }: ScenariosModalProps) {
+export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRole, groupTitle, onApply, onVote, onClose }: ScenariosModalProps) {
   if (!isOpen || !scenarios) return null;
 
   const canFinalize = userRole === 'headnurse' || userRole === 'admin';
@@ -58,7 +59,7 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
               <ShieldCheck className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h2 className="text-white font-black text-lg">پیشنهادات هوشمند سیستم (۳ برنامه برتر)</h2>
+              <h2 className="text-white font-black text-lg">پیشنهادات هوشمند سیستم {groupTitle ? `(${groupTitle})` : ''} (۳ برنامه برتر)</h2>
               <p className="text-emerald-100 text-xs font-bold mt-0.5">همکاران می‌توانند با ثبت ستاره (۱ تا ۵) در انتخاب برنامه نهایی مشارکت کنند</p>
             </div>
           </div>
