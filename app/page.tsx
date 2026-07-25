@@ -205,7 +205,8 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(() => typeof window === 'undefined');
 
-  const [, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
+  const [storedFirstDayOfWeekIndex, setStoredFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
+  const setFirstDayOfWeekIndex = setStoredFirstDayOfWeekIndex;
   // تعطیلات رسمی کشور فقط‌خواندنی هستند و هرگز بازنویسی نمی‌شوند؛ تغییرات سرپرستار
   // به‌صورت یک لایه‌ی override جداگانه (روز → عنوان یا نگهبان روز کاری) ذخیره می‌شود
   // تا با هر بار همگام‌سازی مجدد تقویم رسمی از بین نرود.
@@ -220,13 +221,16 @@ export default function Home() {
     () => mergeHolidayOverrides(officialHolidays, holidayOverrides),
     [officialHolidays, holidayOverrides]
   );
-  const firstDayOfWeekIndex = officialCalendarState.calendar?.firstDayOfWeek;
+  // Requirement 4: روز اول هفته قابل تنظیم توسط سرپرستار است و باید در کل سیستم ذخیره شود
+  // اگر سرپرستار مقداری ذخیره کرده باشد (storedFirstDayOfWeekIndex) از آن استفاده می‌کنیم،
+  // در غیر این صورت از تقویم رسمی استفاده می‌شود.
+  const firstDayOfWeekIndex = storedFirstDayOfWeekIndex ?? officialCalendarState.calendar?.firstDayOfWeek;
   const [calendarOccasions, setCalendarOccasions] = useState<{ [day: number]: string[] }>({});
   const [calendarSyncedAt, setCalendarSyncedAt] = useState<string | null>(null);
   const [calendarOnline, setCalendarOnline] = useState(false);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<number | null>(null);
 
-  // انتشار ماه رسمی در سازگارساز قدیمی solver؛ هیچ داده محلی اجازه بازنویسی تقویم رسمی را ندارد.
+  // انتشار ماه رسمی در سازگارساز قدیمی solver؛ تغییرات سرپرستار نباید بازنویسی شود (Requirement 4)
   useEffect(() => {
     const official = officialCalendarState.calendar;
     if (!official) {
@@ -235,7 +239,8 @@ export default function Home() {
       return;
     }
     setCalendarOccasions(official.occasions);
-    setFirstDayOfWeekIndex(official.firstDayOfWeek);
+    // firstDayOfWeekIndex از storedFirstDayOfWeekIndex ?? official.firstDayOfWeek تامین می‌شود،
+    // اینجا آن را بازنویسی نمی‌کنیم تا override سرپرستار حفظ شود.
     setCalendarSyncedAt(official.syncedAt);
     setCalendarOnline(true);
   }, [officialCalendarState.calendar]);
@@ -260,29 +265,46 @@ export default function Home() {
 
   // State for monthly approved duty hours
   const [monthlyDutyHours, setMonthlyDutyHours] = useState<any>(null);
-  const effectiveDutyHours = {
-    ...(monthlyDutyHours || settings.dutyHours),
-    official: settings.dutyHours.official,
-    contract: settings.dutyHours.contract
-  };
-
   // ساعت موظفی رسمی و قراردادی دیگر قابل ویرایش دستی نیست و همیشه به‌صورت پویا از روی
-  // تنظیمات تقویم (تعطیلات و روز اول هفته) با ماژول محاسبه موظفی ماهانه به‌دست می‌آید.
+  // تنظیمات تقویم (تعطیلات انتخابی بخش + تعطیلات رسمی) و روز اول هفته با ماژول محاسبه موظفی ماهانه به‌دست می‌آید.
+  // Requirement 4: تغییر تقویم باید در کل سیستم و نمایش ساعت موظفی پرسنل بروز شود.
   const autoDutyHours = React.useMemo(() => {
-    const officialMonth = officialCalendarState.calendar;
-    if (settings.autoCalculateDutyHours === false || !officialMonth) {
-      // تا قبل از آماده‌شدن تقویم رسمی (یا در حالت محاسبه غیرخودکار) آخرین مقدار همگام‌شده نمایش داده می‌شود.
+    if (settings.autoCalculateDutyHours === false) {
+      // در حالت غیرخودکار آخرین مقدار همگام‌شده نمایش داده می‌شود.
       return { official: settings.dutyHours.official, contract: settings.dutyHours.contract };
     }
-    return calculateAutoDutyHours(currentYear, currentMonth, officialMonth.holidays, officialMonth.firstDayOfWeek);
+    // از تقویم یکپارچه (customHolidays + firstDayOfWeekIndex) استفاده می‌کنیم تا هر تغییر
+    // سرپرستار در تعطیلات و روز آغاز هفته بلافاصله در محاسبه موظفی منعکس شود.
+    return calculateAutoDutyHours(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
   }, [
     settings.autoCalculateDutyHours,
     settings.dutyHours.official,
     settings.dutyHours.contract,
     currentYear,
     currentMonth,
-    officialCalendarState.calendar,
+    customHolidays,
+    firstDayOfWeekIndex,
   ]);
+
+  // Requirement 4: ساعت موظفی باید در کل سیستم ذخیره و در همه پنل‌ها به‌روز شود.
+  // اگر ماه جاری تصویب شده باشد (monthlyDutyHours)، از همان استفاده می‌کنیم؛
+  // در غیر این صورت از autoDutyHours (محاسبه از تقویم یکپارچه) + conscript/overtime تنظیمات.
+  const effectiveDutyHours = React.useMemo(() => {
+    if (monthlyDutyHours) {
+      return {
+        official: Number(monthlyDutyHours.official) || autoDutyHours.official,
+        contract: Number(monthlyDutyHours.contract) || autoDutyHours.contract,
+        conscript: Number(monthlyDutyHours.conscript ?? settings.dutyHours.conscript) || 0,
+        overtime: Number(monthlyDutyHours.overtime ?? settings.dutyHours.overtime) || 0,
+      };
+    }
+    return {
+      official: autoDutyHours.official,
+      contract: autoDutyHours.contract,
+      conscript: Number(settings.dutyHours.conscript) || 0,
+      overtime: Number(settings.dutyHours.overtime) || 0,
+    };
+  }, [monthlyDutyHours, autoDutyHours, settings.dutyHours]);
 
   // Schedule state management (extracted to custom hook in Phase 4)
   const {
@@ -351,14 +373,103 @@ export default function Home() {
   const canManageHolidays = role === 'headnurse' || role === 'admin';
   
   const monthKey = `${currentYear}_${currentMonth}`;
-  const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'];
-  const activeScenariosData = deptData?.activeScenarios?.[monthKey];
-  const scenarioVotes = deptData?.scenarioVotes?.[monthKey] || {};
+  const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'] as any;
+
+  // --- Requirement 1: جداسازی سناریوهای پرستاران و کمک‌بهیاران ---
+  // ساختار جدید: activeScenarios[monthKey] = { nurse?: {scenarios, targetJobGroup}, assistant?: {...} }
+  // برای سازگاری با داده قدیمی (تکی) آن را به ساختار جدید نگاشت می‌کنیم.
+  const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
+  const normalizedActiveScenarios = React.useMemo(() => {
+    const empty = { nurse: null as any, assistant: null as any };
+    if (!rawActiveScenariosForMonth) return empty;
+    // قدیمی: {scenarios, targetJobGroup}
+    if (rawActiveScenariosForMonth.scenarios && Array.isArray(rawActiveScenariosForMonth.scenarios)) {
+      const tg = rawActiveScenariosForMonth.targetJobGroup;
+      if (tg === 'nurse') return { nurse: rawActiveScenariosForMonth, assistant: null };
+      if (tg === 'assistant') return { nurse: null, assistant: rawActiveScenariosForMonth };
+      // اگر target مشخص نیست، فرض بر پرستار
+      return { nurse: rawActiveScenariosForMonth, assistant: null };
+    }
+    // جدید: {nurse: {...}, assistant: {...}}
+    return {
+      nurse: rawActiveScenariosForMonth.nurse || null,
+      assistant: rawActiveScenariosForMonth.assistant || null,
+    };
+  }, [rawActiveScenariosForMonth]);
+
+  const activeScenariosData = rawActiveScenariosForMonth; // برای سازگاری با کد قدیمی modal
+  const scenarioVotesRaw = deptData?.scenarioVotes?.[monthKey] as any;
+  const normalizedScenarioVotes = React.useMemo(() => {
+    if (!scenarioVotesRaw) return { nurse: {} as any, assistant: {} as any };
+    const hasGroupKeys = scenarioVotesRaw.nurse !== undefined || scenarioVotesRaw.assistant !== undefined;
+    if (hasGroupKeys) {
+      return {
+        nurse: scenarioVotesRaw.nurse || {},
+        assistant: scenarioVotesRaw.assistant || {},
+      };
+    }
+    // قدیمی: flat {scenarioId: {userId: rating}} — نمی‌دانیم مال کدام گروه است،
+    // ولی برای نمایش در modal قدیمی آن را به عنوان هر دو گروه برمی‌گردانیم؛
+    // در منطق رای‌گیری جدید بر اساس وجود scenarioId در هر گروه تشخیص می‌دهیم.
+    return {
+      nurse: scenarioVotesRaw as any,
+      assistant: {},
+    };
+  }, [scenarioVotesRaw]);
+
+  // برای سازگاری با ScenariosModal قدیمی که scenarioVotes را flat می‌خواهد، یک merged می‌سازیم
+  const scenarioVotes = scenarioVotesRaw || {};
 
   const [viewingScenarioIndex, setViewingScenarioIndex] = useState<number>(0);
-  const isVotingMode = !!(activeScenariosData && activeScenariosData.scenarios && activeScenariosData.scenarios.length > 0);
-  const currentScenario = isVotingMode ? activeScenariosData.scenarios[viewingScenarioIndex] : null;
-  const displayedSchedule = isVotingMode ? currentScenario.schedule : schedule;
+  const [viewingScenarioIndexNurse, setViewingScenarioIndexNurse] = useState<number>(0);
+  const [viewingScenarioIndexAssistant, setViewingScenarioIndexAssistant] = useState<number>(0);
+  const [modalTargetJobGroup, setModalTargetJobGroup] = useState<JobGroup | null>(null);
+
+  const isVotingModeNurse = !!(normalizedActiveScenarios.nurse && normalizedActiveScenarios.nurse.scenarios && normalizedActiveScenarios.nurse.scenarios.length > 0);
+  const isVotingModeAssistant = !!(normalizedActiveScenarios.assistant && normalizedActiveScenarios.assistant.scenarios && normalizedActiveScenarios.assistant.scenarios.length > 0);
+  const isVotingMode = isVotingModeNurse || isVotingModeAssistant;
+
+  const currentScenarioNurse = isVotingModeNurse ? normalizedActiveScenarios.nurse.scenarios[viewingScenarioIndexNurse] : null;
+  const currentScenarioAssistant = isVotingModeAssistant ? normalizedActiveScenarios.assistant.scenarios[viewingScenarioIndexAssistant] : null;
+  // برای سازگاری: اگر هر دو فعال هستند، اولویت با پرستار برای نمایش در جدول (یا می‌توان جدول را اصلی نمایش داد)
+  const currentScenario = currentScenarioNurse || currentScenarioAssistant || null;
+  // Requirement 2: در زمان رای‌گیری، برنامه اصلی یا سناریوی در حال مشاهده نمایش داده می‌شود
+  // اگر هر دو گروه همزمان در رای‌گیری باشند، assignments هر دو را ترکیب می‌کنیم تا جدول یکپارچه بماند.
+  const displayedSchedule = React.useMemo(() => {
+    if (!schedule && !currentScenarioNurse && !currentScenarioAssistant) return schedule;
+    if (isVotingModeNurse && !isVotingModeAssistant && currentScenarioNurse) {
+      return currentScenarioNurse.schedule;
+    }
+    if (!isVotingModeNurse && isVotingModeAssistant && currentScenarioAssistant) {
+      return currentScenarioAssistant.schedule;
+    }
+    if (isVotingModeNurse && isVotingModeAssistant && currentScenarioNurse && currentScenarioAssistant) {
+      // ترکیب دو سناریو: پرستاران از سناریوی پرستاران، کمک‌بهیاران از سناریوی کمک‌بهیاران
+      const mergedAssignments: any = { ...(schedule?.assignments || {}) };
+      // nurse
+      for (const [pid, days] of Object.entries(currentScenarioNurse.schedule.assignments || {})) {
+        const p = personnel.find(per => per.id === pid);
+        if (p && p.jobGroup === 'nurse') {
+          mergedAssignments[pid] = days as any;
+        }
+      }
+      // assistant
+      for (const [pid, days] of Object.entries(currentScenarioAssistant.schedule.assignments || {})) {
+        const p = personnel.find(per => per.id === pid);
+        if (p && p.jobGroup === 'assistant') {
+          mergedAssignments[pid] = days as any;
+        }
+      }
+      // بقیه پرسنل (اگر سناریوها ناقص باشند) از schedule اصلی
+      return {
+        ...(schedule || currentScenarioNurse.schedule),
+        assignments: mergedAssignments,
+        warnings: [...(currentScenarioNurse.schedule.warnings || []), ...(currentScenarioAssistant.schedule.warnings || [])],
+        shiftLeaders: { ...(schedule?.shiftLeaders || {}), ...(currentScenarioNurse.schedule.shiftLeaders || {}), ...(currentScenarioAssistant.schedule.shiftLeaders || {}) },
+      } as any;
+    }
+    return schedule;
+  }, [schedule, personnel, isVotingModeNurse, isVotingModeAssistant, currentScenarioNurse, currentScenarioAssistant]);
 
   // Compiled reports from current schedule dynamically and reactively
   const reports = React.useMemo(() => {
@@ -366,7 +477,7 @@ export default function Home() {
       return generatePersonnelReports(currentYear, currentMonth, personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, effectiveDutyHours);
     }
     return [];
-  }, [personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
+  }, [personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, effectiveDutyHours]);
   // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
@@ -1597,6 +1708,7 @@ export default function Home() {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     try {
+      const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
       const { top3 } = generateAndScoreScenarios(
         currentYear,
         currentMonth,
@@ -1606,7 +1718,8 @@ export default function Home() {
         optimizerHolidays,
         optimizerFirstDay === -1 ? undefined : optimizerFirstDay,
         optimizerDutyHours,
-        jobGroup
+        jobGroup,
+        currentAssignmentsForMerge as any
       );
 
       // Persist generated scenarios into the DB so all personnel can see and vote on them
@@ -1624,18 +1737,44 @@ export default function Home() {
 
       const monthKey = `${currentYear}_${currentMonth}`;
       
+      // Requirement 1 & 2: جداسازی سناریوهای پرستاران و کمک‌بهیاران و عدم تاثیر متقابل
+      const existingMonthScenarios = (oldDept.activeScenarios || {})[monthKey] as any;
+      let baseScenariosForMonth: any = {};
+      if (existingMonthScenarios) {
+        if (existingMonthScenarios.scenarios && Array.isArray(existingMonthScenarios.scenarios)) {
+          const oldGroup = existingMonthScenarios.targetJobGroup;
+          if (oldGroup) baseScenariosForMonth[oldGroup] = existingMonthScenarios;
+        } else {
+          baseScenariosForMonth = { ...(existingMonthScenarios as any) };
+        }
+      }
+      baseScenariosForMonth[jobGroup] = {
+        scenarios: top3,
+        targetJobGroup: jobGroup
+      };
+
+      const existingMonthVotes = (oldDept.scenarioVotes || {})[monthKey] as any;
+      let baseVotesForMonth: any = {};
+      if (existingMonthVotes) {
+        const hasGroupKeys = existingMonthVotes.nurse !== undefined || existingMonthVotes.assistant !== undefined;
+        if (hasGroupKeys) {
+          baseVotesForMonth = { ...(existingMonthVotes as any) };
+        } else {
+          // قدیمی flat — برای گروه مقابل نگه نمی‌داریم چون گروه مشخص نیست
+          baseVotesForMonth = {};
+        }
+      }
+      baseVotesForMonth[jobGroup] = {}; // Reset votes only for this jobGroup
+
       const updatedDept = {
         ...oldDept,
         activeScenarios: {
           ...(oldDept.activeScenarios || {}),
-          [monthKey]: {
-            scenarios: top3,
-            targetJobGroup: jobGroup
-          }
+          [monthKey]: baseScenariosForMonth
         },
         scenarioVotes: {
           ...(oldDept.scenarioVotes || {}),
-          [monthKey]: {} // Reset votes for this month
+          [monthKey]: baseVotesForMonth
         }
       };
 
@@ -1655,10 +1794,24 @@ export default function Home() {
   const handleApplyScenario = async (selectedScenario: ScoredSchedule) => {
     setShowScenariosModal(false);
     
-    // Instead of using pendingJobGroupForScenarios from local state which might be empty if modal closed,
-    // read it from DB:
-    const activeScenariosData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr']?.activeScenarios?.[`${currentYear}_${currentMonth}`];
-    const jobGroup = activeScenariosData?.targetJobGroup || pendingJobGroupForScenarios;
+    // Requirement 1 & 2: تعیین گروه هدف بر اساس modalTargetJobGroup یا جستجو در سناریوهای فعال هر گروه
+    let jobGroup: JobGroup | null = modalTargetJobGroup || pendingJobGroupForScenarios;
+    if (!jobGroup) {
+      const deptScenarios = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr']?.activeScenarios?.[`${currentYear}_${currentMonth}`] as any;
+      if (deptScenarios) {
+        if (deptScenarios.scenarios && deptScenarios.targetJobGroup) {
+          jobGroup = deptScenarios.targetJobGroup;
+        } else {
+          // جدید: جستجو در nurse و assistant
+          const nurseScenarios = deptScenarios.nurse?.scenarios || [];
+          const assistantScenarios = deptScenarios.assistant?.scenarios || [];
+          if (nurseScenarios.some((s: any) => s.id === selectedScenario.id)) jobGroup = 'nurse';
+          else if (assistantScenarios.some((s: any) => s.id === selectedScenario.id)) jobGroup = 'assistant';
+          else if (deptScenarios.nurse) jobGroup = 'nurse';
+          else if (deptScenarios.assistant) jobGroup = 'assistant';
+        }
+      }
+    }
     if (!jobGroup) return;
 
     const deptId = selectedDepartmentId || 'sepehr';
@@ -1685,19 +1838,59 @@ export default function Home() {
           schedules: {},
         };
 
+        const monthKeyLocal = `${currentYear}_${currentMonth}`;
+        // Requirement 2: پس از تایید نهایی، رای‌گیری بسته و لیست فیکس شود — سناریو حذف و برنامه نهایی قفل شود
+        if (jobGroup === 'nurse') {
+          newSchedule.finalizedNurses = true;
+        } else if (jobGroup === 'assistant') {
+          newSchedule.finalizedAssistants = true;
+        }
+
+        const existingActive = (oldDept.activeScenarios || {})[monthKeyLocal] as any;
+        let newActiveScenarios = { ...(oldDept.activeScenarios || {}) };
+        if (existingActive) {
+          if (existingActive.scenarios && Array.isArray(existingActive.scenarios)) {
+            // old flat format — delete whole month after finalization
+            delete newActiveScenarios[monthKeyLocal];
+          } else {
+            // new format {nurse, assistant}
+            const updatedMonth: any = { ...existingActive };
+            delete updatedMonth[jobGroup as string];
+            if (Object.keys(updatedMonth).length === 0) {
+              delete newActiveScenarios[monthKeyLocal];
+            } else {
+              newActiveScenarios[monthKeyLocal] = updatedMonth;
+            }
+          }
+        }
+
+        const existingVotes = (oldDept.scenarioVotes || {})[monthKeyLocal] as any;
+        let newScenarioVotes = { ...(oldDept.scenarioVotes || {}) };
+        if (existingVotes) {
+          const hasGroupKeys = existingVotes.nurse !== undefined || existingVotes.assistant !== undefined;
+          if (hasGroupKeys) {
+            const updatedVotesMonth: any = { ...existingVotes };
+            delete updatedVotesMonth[jobGroup as string];
+            if (Object.keys(updatedVotesMonth).length === 0) {
+              delete newScenarioVotes[monthKeyLocal];
+            } else {
+              newScenarioVotes[monthKeyLocal] = updatedVotesMonth;
+            }
+          } else {
+            delete newScenarioVotes[monthKeyLocal];
+          }
+        }
+
         const updatedDept = {
           ...oldDept,
           schedules: {
             ...oldDept.schedules,
-            [`${currentYear}_${currentMonth}`]: newSchedule,
+            [monthKeyLocal]: newSchedule,
           },
+          activeScenarios: newActiveScenarios,
+          scenarioVotes: newScenarioVotes,
         };
         
-        // Remove active scenarios after finalization
-        if (updatedDept.activeScenarios) {
-            delete updatedDept.activeScenarios[`${currentYear}_${currentMonth}`];
-        }
-
         nextDb.deptData[deptId] = updatedDept;
 
         // Auto-lock the schedule for this job group so it shows up as "Finalized" for everyone
@@ -1765,8 +1958,6 @@ export default function Home() {
 
   const handleVoteScenario = async (scenarioId: number, rating: number) => {
     if (!authenticatedUser || !authenticatedUser.id) return;
-    // We use authenticatedUser.id or authenticatedUser.personnelId. 
-    // Wait, the requirement says "هر نفر در پنل خود بتواند... رای دهد." So personnelId or headnurse id.
     const userId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser.id || 'headnurse');
     
     const deptId = selectedDepartmentId || 'sepehr';
@@ -1776,21 +1967,91 @@ export default function Home() {
     if (!oldDept) return;
 
     const monthKey = `${currentYear}_${currentMonth}`;
-    const oldVotes = oldDept.scenarioVotes || {};
-    const currentMonthVotes = oldVotes[monthKey] || {};
-    const currentScenarioVotes = currentMonthVotes[scenarioId] || {};
+    const allScenariosForMonth = (oldDept.activeScenarios || {})[monthKey] as any;
+
+    // تشخیص گروه هدف بر اساس وجود scenarioId در لیست هر گروه
+    let targetGroup: JobGroup | null = modalTargetJobGroup || pendingJobGroupForScenarios;
+    if (!targetGroup && allScenariosForMonth) {
+      if (allScenariosForMonth.scenarios && Array.isArray(allScenariosForMonth.scenarios)) {
+        targetGroup = allScenariosForMonth.targetJobGroup || null;
+      } else {
+        const nurseSc = allScenariosForMonth.nurse?.scenarios || [];
+        const assistSc = allScenariosForMonth.assistant?.scenarios || [];
+        if (nurseSc.some((s: any) => s.id === scenarioId)) targetGroup = 'nurse';
+        else if (assistSc.some((s: any) => s.id === scenarioId)) targetGroup = 'assistant';
+      }
+    }
+    // اگر باز هم مشخص نشد، سعی می‌کنیم از نقش کاربر و سناریوهای فعال تشخیص دهیم
+    if (!targetGroup) {
+      if (role === 'personnel' && selectedPersonnelUser) {
+        targetGroup = selectedPersonnelUser.jobGroup;
+      } else {
+        // headnurse: اگر فقط یک گروه فعال است، همان
+        const hasNurse = !!allScenariosForMonth?.nurse || !!(allScenariosForMonth?.scenarios && allScenariosForMonth?.targetJobGroup === 'nurse');
+        const hasAssist = !!allScenariosForMonth?.assistant || !!(allScenariosForMonth?.scenarios && allScenariosForMonth?.targetJobGroup === 'assistant');
+        if (hasNurse && !hasAssist) targetGroup = 'nurse';
+        else if (!hasNurse && hasAssist) targetGroup = 'assistant';
+      }
+    }
+    // fallback: nurse
+    if (!targetGroup) targetGroup = 'nurse';
+
+    const oldVotesAll = oldDept.scenarioVotes || {};
+    const oldVotesMonth = oldVotesAll[monthKey] as any;
+
+    let updatedMonthVotes: any;
+    let isNewFormat = false;
+    if (oldVotesMonth) {
+      isNewFormat = oldVotesMonth.nurse !== undefined || oldVotesMonth.assistant !== undefined;
+    }
+
+    if (isNewFormat) {
+      const groupVotes = oldVotesMonth[targetGroup] || {};
+      const scenVotes = groupVotes[scenarioId] || {};
+      updatedMonthVotes = {
+        ...oldVotesMonth,
+        [targetGroup]: {
+          ...groupVotes,
+          [scenarioId]: {
+            ...scenVotes,
+            [userId]: rating
+          }
+        }
+      };
+    } else {
+      // old flat format migration: convert to new per-group on first vote after separation
+      // اگر قبلا flat بوده، آن را به گروه مربوطه منتقل می‌کنیم و گروه جدید را اضافه می‌کنیم
+      const existingFlat = oldVotesMonth || {};
+      // اگر flat قبلا وجود داشته و گروه ما همان گروه قدیمی است، flat را نگه می‌داریم و سپس به new format تبدیل می‌کنیم
+      // ساده‌ترین راه: اگر old flat و targetGroup مشخص است، old flat را به عنوان پایه همان گروه در نظر بگیر
+      if (Object.keys(existingFlat).length > 0 && !isNewFormat) {
+        // بررسی اینکه آیا flat مربوط به همین گروه است یا گروه دیگر — اگر نمی‌دانیم، فرض را بر همین گروه می‌گذاریم
+        updatedMonthVotes = {
+          [targetGroup]: {
+            ...existingFlat,
+            [scenarioId]: {
+              ...(existingFlat[scenarioId] || {}),
+              [userId]: rating
+            }
+          }
+        };
+        // گروه دیگر را خالی نگه می‌داریم (اگر قبلا وجود نداشته)
+      } else {
+        updatedMonthVotes = {
+          [targetGroup]: {
+            [scenarioId]: {
+              [userId]: rating
+            }
+          }
+        };
+      }
+    }
 
     const updatedDept = {
       ...oldDept,
       scenarioVotes: {
-        ...oldVotes,
-        [monthKey]: {
-          ...currentMonthVotes,
-          [scenarioId]: {
-            ...currentScenarioVotes,
-            [userId]: rating
-          }
-        }
+        ...oldVotesAll,
+        [monthKey]: updatedMonthVotes
       }
     };
 
@@ -2433,7 +2694,7 @@ export default function Home() {
   const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
     const day = Number(holidayDayInput);
-    const daysInMonth = officialCalendarState.calendar?.days.length ?? 31;
+    const daysInMonth = calendarDays.length || officialCalendarState.calendar?.days.length || 31;
     if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
       alert(`روز واردشده معتبر نیست؛ عددی بین ۱ تا ${daysInMonth} وارد کنید.`);
       return;
@@ -2883,8 +3144,14 @@ export default function Home() {
     window.print();
   };
 
-  // Generate current calendar array
-  const calendarDays = officialCalendarState.calendar?.days || [];
+  // Generate current calendar array — یکپارچه با تعطیلات انتخابی بخش و روز آغاز هفته (Requirement 4)
+  // تا هر تغییر تقویم سرپرستار در همه پنل‌ها، داشبورد و چینش لیست ذخیره و نمایش داده شود.
+  const calendarDays = React.useMemo(() => {
+    // اگر تقویم رسمی هنوز آماده نیست، آرایه خالی برمی‌گردانیم تا از پرش جلوگیری شود
+    if (!officialCalendarState.calendar) return [] as JalaliDateInfo[];
+    // از customHolidays (ادغام رسمی + تغییرات بخش) و firstDayOfWeekIndex استفاده می‌کنیم
+    return generateJalaliMonthCalendar(currentYear, currentMonth, customHolidays, firstDayOfWeekIndex);
+  }, [currentYear, currentMonth, customHolidays, firstDayOfWeekIndex, officialCalendarState.calendar]);
 
   // Render role badges
   const getRoleBadge = () => {
@@ -3865,54 +4132,113 @@ export default function Home() {
           {activeTab === 'schedule' && (
             <div className="space-y-6">
 
-              {isVotingMode && currentScenario && (
-                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
+              {/* Requirement 1 & 2: کادرهای جداگانه رای‌گیری پرستاران و کمک‌بهیاران */}
+              {/* پرستاران — فقط در پنل پرستاران و سرپرستار */}
+              {(isVotingModeNurse && currentScenarioNurse && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse'))) && (
+                <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border-2 border-indigo-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
                   <div className="flex flex-col md:flex-row items-center justify-between w-full gap-4">
                     <div className="flex items-center gap-4">
-                      <div className="bg-amber-100 p-3 rounded-full">
-                        <Star className="w-8 h-8 text-amber-500 fill-amber-500 animate-pulse" />
+                      <div className="bg-indigo-100 p-3 rounded-full">
+                        <Star className="w-8 h-8 text-indigo-500 fill-indigo-500 animate-pulse" />
                       </div>
                       <div>
-                        <h3 className="text-lg font-black text-amber-900 mb-1">برنامه‌های هوشمند منتظر رای و تایید شما هستند!</h3>
-                        <p className="text-xs font-bold text-amber-700">
+                        <h3 className="text-lg font-black text-indigo-900 mb-1">برنامه هوشمند پرستاران — منتظر رای و تایید نهایی</h3>
+                        <p className="text-xs font-bold text-indigo-700">
                           {role === 'headnurse' || role === 'admin' 
-                            ? 'پرسنل در حال ثبت رای برای ۳ برنامه تولید شده هستند. می‌توانید نتایج را ببینید و برنامه نهایی را تایید کنید.'
-                            : 'سرپرستار ۳ برنامه مختلف (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
+                            ? 'پرسنل پرستار در حال ثبت رای برای ۳ برنامه پرستاران هستند. پس از تایید نهایی، رای‌گیری بسته و لیست فیکس می‌شود.'
+                            : 'سرپرستار ۳ برنامه پرستاران (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
                         </p>
                       </div>
                     </div>
                     <button 
-                      onClick={() => setShowScenariosModal(true)}
-                      className="w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
+                      onClick={() => { setModalTargetJobGroup('nurse'); setPendingJobGroupForScenarios('nurse'); setShowScenariosModal(true); }}
+                      className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
                     >
-                      مشاهده برنامه‌ها و ثبت رای
+                      مشاهده برنامه‌های پرستاران و ثبت رای
                     </button>
                   </div>
                   
-                  <div className="w-full mt-4 pt-4 border-t border-amber-200 flex items-center justify-between">
+                  <div className="w-full mt-4 pt-4 border-t border-indigo-200 flex items-center justify-between">
                     <button 
-                      onClick={() => setViewingScenarioIndex(prev => (prev < 2 ? prev + 1 : 0))}
-                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-amber-700 text-xs font-bold border border-amber-300 transition-all"
+                      onClick={() => setViewingScenarioIndexNurse(prev => (prev < 2 ? prev + 1 : 0))}
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-indigo-700 text-xs font-bold border border-indigo-300 transition-all"
                     >
                       <ChevronRight className="w-4 h-4" />
-                      برنامه بعدی
+                      برنامه بعدی پرستاران
                     </button>
                     <div className="text-center flex flex-col items-center">
                       <div className="flex items-center gap-2">
-                        <h4 className="text-amber-900 font-black text-sm">
-                          در حال نمایش: {currentScenario.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenario.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
+                        <h4 className="text-indigo-900 font-black text-sm">
+                          پرستاران — در حال نمایش: {currentScenarioNurse.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
                         </h4>
-                        {currentScenario.type === 'MIXED' && (
+                        {currentScenarioNurse.type === 'MIXED' && (
                           <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">
                             پیشنهادی
                           </span>
                         )}
                       </div>
-                      <p className="text-amber-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-amber-900" dir="ltr">{currentScenario.totalScore.toFixed(0)}/100</span> | برای تایید و ثبت رای روی دکمه نارنجی کلیک کنید</p>
+                      <p className="text-indigo-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-indigo-900" dir="ltr">{currentScenarioNurse.totalScore.toFixed(0)}/100</span> | تا تایید نهایی سرپرستار رای‌گیری باز می‌ماند</p>
                     </div>
                     <button 
-                      onClick={() => setViewingScenarioIndex(prev => (prev > 0 ? prev - 1 : 2))}
-                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-amber-700 text-xs font-bold border border-amber-300 transition-all"
+                      onClick={() => setViewingScenarioIndexNurse(prev => (prev > 0 ? prev - 1 : 2))}
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-indigo-700 text-xs font-bold border border-indigo-300 transition-all"
+                    >
+                      برنامه قبلی
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* کمک‌بهیاران — فقط در پنل کمک‌بهیاران و سرپرستار */}
+              {(isVotingModeAssistant && currentScenarioAssistant && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant'))) && (
+                <div className="bg-gradient-to-r from-teal-50 to-emerald-50 border-2 border-teal-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
+                  <div className="flex flex-col md:flex-row items-center justify-between w-full gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="bg-teal-100 p-3 rounded-full">
+                        <Star className="w-8 h-8 text-teal-600 fill-teal-500 animate-pulse" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-black text-teal-900 mb-1">برنامه هوشمند کمک‌بهیاران — منتظر رای و تایید نهایی</h3>
+                        <p className="text-xs font-bold text-teal-700">
+                          {role === 'headnurse' || role === 'admin' 
+                            ? 'پرسنل کمک‌بهیار در حال ثبت رای برای ۳ برنامه کمک‌بهیاران هستند. پس از تایید نهایی، رای‌گیری بسته و لیست فیکس می‌شود.'
+                            : 'سرپرستار ۳ برنامه کمک‌بهیاران (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
+                        </p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => { setModalTargetJobGroup('assistant'); setPendingJobGroupForScenarios('assistant'); setShowScenariosModal(true); }}
+                      className="w-full md:w-auto bg-teal-600 hover:bg-teal-700 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
+                    >
+                      مشاهده برنامه‌های کمک‌بهیاران و ثبت رای
+                    </button>
+                  </div>
+                  
+                  <div className="w-full mt-4 pt-4 border-t border-teal-200 flex items-center justify-between">
+                    <button 
+                      onClick={() => setViewingScenarioIndexAssistant(prev => (prev < 2 ? prev + 1 : 0))}
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-teal-700 text-xs font-bold border border-teal-300 transition-all"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                      برنامه بعدی کمک‌بهیاران
+                    </button>
+                    <div className="text-center flex flex-col items-center">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-teal-900 font-black text-sm">
+                          کمک‌بهیاران — در حال نمایش: {currentScenarioAssistant.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
+                        </h4>
+                        {currentScenarioAssistant.type === 'MIXED' && (
+                          <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">
+                            پیشنهادی
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-teal-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-teal-900" dir="ltr">{currentScenarioAssistant.totalScore.toFixed(0)}/100</span> | تا تایید نهایی سرپرستار رای‌گیری باز می‌ماند</p>
+                    </div>
+                    <button 
+                      onClick={() => setViewingScenarioIndexAssistant(prev => (prev > 0 ? prev - 1 : 2))}
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-teal-700 text-xs font-bold border border-teal-300 transition-all"
                     >
                       برنامه قبلی
                       <ChevronLeft className="w-4 h-4" />
@@ -5835,13 +6161,24 @@ export default function Home() {
 
       <ScenariosModal
         isOpen={showScenariosModal}
-        scenarios={activeScenariosData?.scenarios || scenarios}
-        votes={scenarioVotes}
+        scenarios={
+          modalTargetJobGroup === 'nurse' ? (normalizedActiveScenarios.nurse?.scenarios || scenarios) :
+          modalTargetJobGroup === 'assistant' ? (normalizedActiveScenarios.assistant?.scenarios || scenarios) :
+          (activeScenariosData?.scenarios || normalizedActiveScenarios.nurse?.scenarios || normalizedActiveScenarios.assistant?.scenarios || scenarios)
+        }
+        votes={
+          modalTargetJobGroup === 'nurse' ? normalizedScenarioVotes.nurse :
+          modalTargetJobGroup === 'assistant' ? normalizedScenarioVotes.assistant :
+          normalizedScenarioVotes.nurse && Object.keys(normalizedScenarioVotes.nurse).length > 0 ? normalizedScenarioVotes.nurse :
+          normalizedScenarioVotes.assistant && Object.keys(normalizedScenarioVotes.assistant).length > 0 ? normalizedScenarioVotes.assistant :
+          scenarioVotes
+        }
         currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
         userRole={role}
+        targetJobGroup={modalTargetJobGroup}
         onApply={handleApplyScenario}
         onVote={handleVoteScenario}
-        onClose={() => setShowScenariosModal(false)}
+        onClose={() => { setShowScenariosModal(false); setModalTargetJobGroup(null); }}
       />
 
       <DeleteConfirmModal

@@ -702,8 +702,10 @@ export function solveNursingSchedule(
     }
   });
 
-  const staffs = activePersonnel.filter(p => p.position === 'staff');
-  const supervisor = activePersonnel.find(p => p.position === 'supervisor');
+  // مرتب‌سازی پرسنل بر اساس جایگاه تعریف‌شده در لیست (orderIndex) برای انتخاب سرشیفت
+  const byOrder = (a: Personnel, b: Personnel) => (a.orderIndex ?? 99999) - (b.orderIndex ?? 99999);
+  const staffs = [...activePersonnel.filter(p => p.position === 'staff')].sort(byOrder);
+  const supervisor = [...activePersonnel.filter(p => p.position === 'supervisor')].sort(byOrder)[0];
 
   // 5. Fill Shifts & Allocate Demand Day by Day
   for (let d = 1; d <= totalDays; d++) {
@@ -1429,56 +1431,42 @@ export function solveNursingSchedule(
     }
   });
 
-  // 7. Select and Assign Shift Leaders
-  for (let d = 1; d <= totalDays; d++) {
-    const isHoliday = calendar[d - 1].isHoliday;
-    
-    if (isHoliday) {
-      const isSuperPresent = supervisor && (assignments[supervisor.id][d] === 'M' || assignments[supervisor.id][d] === 'ME' || assignments[supervisor.id][d] === 'MN' || assignments[supervisor.id][d] === 'MEN');
-      const isStaffPresent = staffs.some(st => {
-        const s = assignments[st.id][d];
-        return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-      });
+  // 7. Select and Assign Shift Leaders — یک سرشیفت برای هر شیفت، نزدیک‌ترین به ابتدای لیست
+  const eligibleForLeader = (p: Personnel, shiftGroup: 'M' | 'E' | 'N', day: number) => {
+    if (p.jobGroup !== 'nurse') return false;
+    const s = assignments[p.id]?.[day];
+    if (!s) return false;
+    const covers =
+      shiftGroup === 'M' ? ['M', 'ME', 'MN', 'MEN'].includes(s) :
+      shiftGroup === 'E' ? ['E', 'ME', 'EN', 'MEN'].includes(s) :
+      ['N', 'EN', 'MN', 'MEN'].includes(s);
+    if (!covers) return false;
+    if (p.position === 'supervisor' || p.position === 'staff') return true;
+    return p.position === 'general' && p.canBeShiftLeader;
+  };
 
-      if (isSuperPresent || isStaffPresent) {
-        shiftLeaders[d].morning = isSuperPresent ? supervisor?.id : staffs.find(st => {
-          const s = assignments[st.id][d];
-          return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-        })?.id;
+  for (let d = 1; d <= totalDays; d++) {
+    // صبح: برای هر روز (تعطیل و عادی) یک سرشیفت انتخاب می‌شود، نزدیک‌ترین به ابتدای لیست
+    {
+      const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'M', d)).sort(byOrder);
+      if (candidates.length > 0) {
+        shiftLeaders[d].morning = candidates[0].id;
       } else {
-        const leader = nurses.find(n => {
-          if (n.position !== 'general' || !n.canBeShiftLeader) return false;
-          const s = assignments[n.id][d];
-          return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-        });
-        if (leader) {
-          shiftLeaders[d].morning = leader.id;
-        } else {
-          warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
-        }
+        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز ${d}`);
       }
     }
 
-    const activeStaffE = staffs.find(st => {
-      const s = assignments[st.id][d];
-      return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
-    });
-
-    if (activeStaffE) {
-      shiftLeaders[d].afternoon = activeStaffE.id;
-    } else {
-      const leader = nurses.find(n => {
-        if (n.position !== 'general' || !n.canBeShiftLeader) return false;
-        const s = assignments[n.id][d];
-        return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
-      });
-      if (leader) {
-        shiftLeaders[d].afternoon = leader.id;
+    // عصر
+    {
+      const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'E', d)).sort(byOrder);
+      if (candidates.length > 0) {
+        shiftLeaders[d].afternoon = candidates[0].id;
       } else {
         warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
       }
     }
 
+    // شب — اگر سرشیفت عصر EN باشد، همان فرد شب را هم پوشش می‌دهد (یک سرشیفت کافی است)
     const afternoonLeaderId = shiftLeaders[d].afternoon;
     if (afternoonLeaderId) {
       const afterS = assignments[afternoonLeaderId][d];
@@ -1487,21 +1475,10 @@ export function solveNursingSchedule(
         continue;
       }
     }
-
-    const activeStaffN = staffs.find(st => {
-      const s = assignments[st.id][d];
-      return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
-    });
-    if (activeStaffN) {
-      shiftLeaders[d].night = activeStaffN.id;
-    } else {
-      const leader = nurses.find(n => {
-        if (n.position !== 'general' || !n.canBeShiftLeader) return false;
-        const s = assignments[n.id][d];
-        return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
-      });
-      if (leader) {
-        shiftLeaders[d].night = leader.id;
+    {
+      const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'N', d)).sort(byOrder);
+      if (candidates.length > 0) {
+        shiftLeaders[d].night = candidates[0].id;
       } else {
         warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
       }
@@ -1566,11 +1543,10 @@ export function verifyCoverageAndLeaders(
   const shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } = {};
   for (let i = 1; i <= totalDays; i++) shiftLeaders[i] = {};
 
-  const activePersonnel = personnelList.filter(p => p.active);
+  const byOrderVerify = (a: Personnel, b: Personnel) => (a.orderIndex ?? 99999) - (b.orderIndex ?? 99999);
+  const activePersonnelSorted = [...activePersonnel].sort(byOrderVerify);
   const assistants = activePersonnel.filter(p => p.jobGroup === 'assistant');
   const nurses = activePersonnel.filter(p => p.jobGroup === 'nurse');
-  const staffs = activePersonnel.filter(p => p.position === 'staff');
-  const supervisor = activePersonnel.find(p => p.position === 'supervisor');
 
   for (let d = 1; d <= totalDays; d++) {
     const isHoliday = calendar[d - 1].isHoliday;
@@ -1600,40 +1576,40 @@ export function verifyCoverageAndLeaders(
     if (eAssignedNurse > demand.afternoonNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت E`);
     if (nAssignedNurse > demand.nightNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت N`);
 
-    if (isHoliday) {
-      const isSuperPresent = supervisor && assignments[supervisor.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[supervisor.id][d]);
-      const isStaffPresent = staffs.some(st => assignments[st.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[st.id][d]));
+    // انتخاب سرشیفت بر اساس نزدیک‌ترین به ابتدای لیست (orderIndex)
+    const eligibleForLeaderVerify = (p: Personnel, shiftGroup: 'M' | 'E' | 'N') => {
+      if (p.jobGroup !== 'nurse') return false;
+      const s = assignments[p.id]?.[d];
+      if (!s) return false;
+      const covers =
+        shiftGroup === 'M' ? ['M', 'ME', 'MN', 'MEN'].includes(s) :
+        shiftGroup === 'E' ? ['E', 'ME', 'EN', 'MEN'].includes(s) :
+        ['N', 'EN', 'MN', 'MEN'].includes(s);
+      if (!covers) return false;
+      if (p.position === 'supervisor' || p.position === 'staff') return true;
+      return p.position === 'general' && p.canBeShiftLeader;
+    };
 
-      if (isSuperPresent || isStaffPresent) {
-        shiftLeaders[d].morning = isSuperPresent ? supervisor?.id : staffs.find(st => assignments[st.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[st.id][d]))?.id;
-      } else {
-        const leader = nurses.find(n => n.position === 'general' && n.canBeShiftLeader && assignments[n.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[n.id][d]));
-        if (leader) shiftLeaders[d].morning = leader.id;
-        else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
-      }
+    // صبح — یک سرشیفت برای هر روز
+    {
+      const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'M'));
+      if (candidates.length > 0) shiftLeaders[d].morning = candidates[0].id;
+      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز ${d}`);
     }
-
-    const activeStaffE = staffs.find(st => assignments[st.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[st.id][d]));
-    if (activeStaffE) {
-      shiftLeaders[d].afternoon = activeStaffE.id;
-    } else {
-      const leader = nurses.find(n => n.position === 'general' && n.canBeShiftLeader && assignments[n.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[n.id][d]));
-      if (leader) shiftLeaders[d].afternoon = leader.id;
+    // عصر
+    {
+      const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'E'));
+      if (candidates.length > 0) shiftLeaders[d].afternoon = candidates[0].id;
       else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
     }
-
+    // شب — اگر عصر EN باشد همان فرد
     const afternoonLeaderId = shiftLeaders[d].afternoon;
     if (afternoonLeaderId && assignments[afternoonLeaderId]?.[d] === 'EN') {
       shiftLeaders[d].night = afternoonLeaderId;
     } else {
-      const activeStaffN = staffs.find(st => assignments[st.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[st.id][d]));
-      if (activeStaffN) {
-        shiftLeaders[d].night = activeStaffN.id;
-      } else {
-        const leader = nurses.find(n => n.position === 'general' && n.canBeShiftLeader && assignments[n.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[n.id][d]));
-        if (leader) shiftLeaders[d].night = leader.id;
-        else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
-      }
+      const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'N'));
+      if (candidates.length > 0) shiftLeaders[d].night = candidates[0].id;
+      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
     }
   }
 
