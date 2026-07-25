@@ -164,6 +164,10 @@ export const DepartmentDataSchema = z.object({
   schedules: SchedulesSchema,
   activeScenarios: z.any().optional(), // Stores the 3 generated scenarios
   scenarioVotes: z.any().optional(), // Stores votes per scenario: { monthKey: { [scenarioId: number]: { [personnelId: string]: number } } }
+  activeScenariosNurses: z.any().optional(),
+  activeScenariosAssistants: z.any().optional(),
+  scenarioVotesNurses: z.any().optional(),
+  scenarioVotesAssistants: z.any().optional(),
 }).strict();
 
 export const AppDatabaseStateSchema = z.object({

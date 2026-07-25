@@ -187,7 +187,9 @@ export function solveWithPriority(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  monthlyDutyHours?: any,
+  targetJobGroup?: 'nurse' | 'assistant',
+  existingAssignments?: { [pId: string]: { [day: number]: ShiftType } }
 ): OptimizationResult {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
@@ -210,7 +212,19 @@ export function solveWithPriority(
   // Deep-copy day maps. The priority pass must not mutate the base solver result.
   const assignments: { [pId: string]: { [day: number]: ShiftType } } = {};
   for (const [personnelId, dayAssignments] of Object.entries(baseResult.assignments)) {
-    assignments[personnelId] = { ...dayAssignments };
+    if (existingAssignments && existingAssignments[personnelId]) {
+      assignments[personnelId] = { ...existingAssignments[personnelId] };
+    } else {
+      assignments[personnelId] = { ...dayAssignments };
+    }
+  }
+
+  if (targetJobGroup && existingAssignments) {
+    activePersonnel.forEach(p => {
+      if (p.jobGroup !== targetJobGroup && existingAssignments[p.id]) {
+        assignments[p.id] = { ...existingAssignments[p.id] };
+      }
+    });
   }
 
   const warnings: string[] = [];
@@ -221,18 +235,26 @@ export function solveWithPriority(
     level3: []
   };
 
-  const groups = [
-    {
-      jobGroup: 'nurse' as const,
-      title: 'پرستار',
-      personnel: activePersonnel.filter(p => p.jobGroup === 'nurse'),
-    },
-    {
-      jobGroup: 'assistant' as const,
-      title: 'کمک بهیار',
-      personnel: activePersonnel.filter(p => p.jobGroup === 'assistant'),
-    },
-  ];
+  const groups = targetJobGroup
+    ? [
+        {
+          jobGroup: targetJobGroup,
+          title: targetJobGroup === 'nurse' ? 'پرستار' : 'کمک بهیار',
+          personnel: activePersonnel.filter(p => p.jobGroup === targetJobGroup),
+        }
+      ]
+    : [
+        {
+          jobGroup: 'nurse' as const,
+          title: 'پرستار',
+          personnel: activePersonnel.filter(p => p.jobGroup === 'nurse'),
+        },
+        {
+          jobGroup: 'assistant' as const,
+          title: 'کمک بهیار',
+          personnel: activePersonnel.filter(p => p.jobGroup === 'assistant'),
+        },
+      ];
   const shifts: CoverageShift[] = ['M', 'E', 'N'];
 
   const demandFor = (
@@ -1433,75 +1455,45 @@ export function solveNursingSchedule(
   for (let d = 1; d <= totalDays; d++) {
     const isHoliday = calendar[d - 1].isHoliday;
     
-    if (isHoliday) {
-      const isSuperPresent = supervisor && (assignments[supervisor.id][d] === 'M' || assignments[supervisor.id][d] === 'ME' || assignments[supervisor.id][d] === 'MN' || assignments[supervisor.id][d] === 'MEN');
-      const isStaffPresent = staffs.some(st => {
-        const s = assignments[st.id][d];
-        return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-      });
-
-      if (isSuperPresent || isStaffPresent) {
-        shiftLeaders[d].morning = isSuperPresent ? supervisor?.id : staffs.find(st => {
-          const s = assignments[st.id][d];
-          return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-        })?.id;
-      } else {
-        const leader = nurses.find(n => {
-          if (n.position !== 'general' || !n.canBeShiftLeader) return false;
-          const s = assignments[n.id][d];
-          return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
-        });
-        if (leader) {
-          shiftLeaders[d].morning = leader.id;
-        } else {
-          warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
-        }
-      }
+    const morningLeader = activePersonnel.find(p => {
+      if (p.jobGroup !== 'nurse') return false;
+      const isEligible = p.position === 'supervisor' || p.position === 'staff' || (p.position === 'general' && p.canBeShiftLeader);
+      if (!isEligible) return false;
+      const s = assignments[p.id]?.[d];
+      return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
+    });
+    if (morningLeader) {
+      shiftLeaders[d].morning = morningLeader.id;
+    } else if (isHoliday) {
+      warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
     }
 
-    const activeStaffE = staffs.find(st => {
-      const s = assignments[st.id][d];
+    const afternoonLeader = activePersonnel.find(p => {
+      if (p.jobGroup !== 'nurse') return false;
+      const isEligible = p.position === 'staff' || (p.position === 'general' && p.canBeShiftLeader);
+      if (!isEligible) return false;
+      const s = assignments[p.id]?.[d];
       return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
     });
-
-    if (activeStaffE) {
-      shiftLeaders[d].afternoon = activeStaffE.id;
+    if (afternoonLeader) {
+      shiftLeaders[d].afternoon = afternoonLeader.id;
     } else {
-      const leader = nurses.find(n => {
-        if (n.position !== 'general' || !n.canBeShiftLeader) return false;
-        const s = assignments[n.id][d];
-        return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
-      });
-      if (leader) {
-        shiftLeaders[d].afternoon = leader.id;
-      } else {
-        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
-      }
+      warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
     }
 
     const afternoonLeaderId = shiftLeaders[d].afternoon;
-    if (afternoonLeaderId) {
-      const afterS = assignments[afternoonLeaderId][d];
-      if (afterS === 'EN') {
-        shiftLeaders[d].night = afternoonLeaderId;
-        continue;
-      }
-    }
-
-    const activeStaffN = staffs.find(st => {
-      const s = assignments[st.id][d];
-      return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
-    });
-    if (activeStaffN) {
-      shiftLeaders[d].night = activeStaffN.id;
+    if (afternoonLeaderId && assignments[afternoonLeaderId]?.[d] === 'EN') {
+      shiftLeaders[d].night = afternoonLeaderId;
     } else {
-      const leader = nurses.find(n => {
-        if (n.position !== 'general' || !n.canBeShiftLeader) return false;
-        const s = assignments[n.id][d];
+      const nightLeader = activePersonnel.find(p => {
+        if (p.jobGroup !== 'nurse') return false;
+        const isEligible = p.position === 'staff' || (p.position === 'general' && p.canBeShiftLeader);
+        if (!isEligible) return false;
+        const s = assignments[p.id]?.[d];
         return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
       });
-      if (leader) {
-        shiftLeaders[d].night = leader.id;
+      if (nightLeader) {
+        shiftLeaders[d].night = nightLeader.id;
       } else {
         warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
       }
@@ -1600,39 +1592,47 @@ export function verifyCoverageAndLeaders(
     if (eAssignedNurse > demand.afternoonNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت E`);
     if (nAssignedNurse > demand.nightNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت N`);
 
-    if (isHoliday) {
-      const isSuperPresent = supervisor && assignments[supervisor.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[supervisor.id][d]);
-      const isStaffPresent = staffs.some(st => assignments[st.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[st.id][d]));
-
-      if (isSuperPresent || isStaffPresent) {
-        shiftLeaders[d].morning = isSuperPresent ? supervisor?.id : staffs.find(st => assignments[st.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[st.id][d]))?.id;
-      } else {
-        const leader = nurses.find(n => n.position === 'general' && n.canBeShiftLeader && assignments[n.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[n.id][d]));
-        if (leader) shiftLeaders[d].morning = leader.id;
-        else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
-      }
+    const morningLeader = activePersonnel.find(p => {
+      if (p.jobGroup !== 'nurse') return false;
+      const isEligible = p.position === 'supervisor' || p.position === 'staff' || (p.position === 'general' && p.canBeShiftLeader);
+      if (!isEligible) return false;
+      const s = assignments[p.id]?.[d];
+      return s === 'M' || s === 'ME' || s === 'MN' || s === 'MEN';
+    });
+    if (morningLeader) {
+      shiftLeaders[d].morning = morningLeader.id;
+    } else if (isHoliday) {
+      warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
     }
 
-    const activeStaffE = staffs.find(st => assignments[st.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[st.id][d]));
-    if (activeStaffE) {
-      shiftLeaders[d].afternoon = activeStaffE.id;
+    const afternoonLeader = activePersonnel.find(p => {
+      if (p.jobGroup !== 'nurse') return false;
+      const isEligible = p.position === 'staff' || (p.position === 'general' && p.canBeShiftLeader);
+      if (!isEligible) return false;
+      const s = assignments[p.id]?.[d];
+      return s === 'E' || s === 'ME' || s === 'EN' || s === 'MEN';
+    });
+    if (afternoonLeader) {
+      shiftLeaders[d].afternoon = afternoonLeader.id;
     } else {
-      const leader = nurses.find(n => n.position === 'general' && n.canBeShiftLeader && assignments[n.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[n.id][d]));
-      if (leader) shiftLeaders[d].afternoon = leader.id;
-      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
+      warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
     }
 
     const afternoonLeaderId = shiftLeaders[d].afternoon;
     if (afternoonLeaderId && assignments[afternoonLeaderId]?.[d] === 'EN') {
       shiftLeaders[d].night = afternoonLeaderId;
     } else {
-      const activeStaffN = staffs.find(st => assignments[st.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[st.id][d]));
-      if (activeStaffN) {
-        shiftLeaders[d].night = activeStaffN.id;
+      const nightLeader = activePersonnel.find(p => {
+        if (p.jobGroup !== 'nurse') return false;
+        const isEligible = p.position === 'staff' || (p.position === 'general' && p.canBeShiftLeader);
+        if (!isEligible) return false;
+        const s = assignments[p.id]?.[d];
+        return s === 'N' || s === 'EN' || s === 'MN' || s === 'MEN';
+      });
+      if (nightLeader) {
+        shiftLeaders[d].night = nightLeader.id;
       } else {
-        const leader = nurses.find(n => n.position === 'general' && n.canBeShiftLeader && assignments[n.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[n.id][d]));
-        if (leader) shiftLeaders[d].night = leader.id;
-        else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
+        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
       }
     }
   }

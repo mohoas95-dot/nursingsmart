@@ -17,7 +17,8 @@ export function generateAndScoreScenarios(
   customHolidays: Readonly<Record<number, string>>,
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any,
-  targetJobGroup?: 'nurse' | 'assistant'
+  targetJobGroup?: 'nurse' | 'assistant',
+  existingAssignments?: { [pId: string]: { [day: number]: ShiftType } }
 ): { all: ScoredSchedule[], top3: ScoredSchedule[] } {
   
   const scenarios: ScoredSchedule[] = [];
@@ -28,21 +29,21 @@ export function generateAndScoreScenarios(
   
   // 3 Fairness scenarios
   for (let i = 0; i < 3; i++) {
-    const optResult = solveWithPriority(year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
+    const optResult = solveWithPriority(year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, targetJobGroup, existingAssignments);
     const schedule: MonthlySchedule = { year, month, assignments: optResult.assignments, shiftLeaders: {}, warnings: optResult.warnings };
     scenarios.push(evaluateSchedule(idCounter++, 'FAIRNESS', schedule, personnelList, requests, settings, optResult.warnings, year, month, customHolidays, firstDayOfWeekIndex, monthlyDutyHours));
   }
 
   // 3 Requests scenarios
   for (let i = 0; i < 3; i++) {
-    const optResult = solveWithPriority(year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
+    const optResult = solveWithPriority(year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, targetJobGroup, existingAssignments);
     const schedule: MonthlySchedule = { year, month, assignments: optResult.assignments, shiftLeaders: {}, warnings: optResult.warnings };
     scenarios.push(evaluateSchedule(idCounter++, 'REQUESTS', schedule, personnelList, requests, settings, optResult.warnings, year, month, customHolidays, firstDayOfWeekIndex, monthlyDutyHours));
   }
 
   // 4 Mixed scenarios
   for (let i = 0; i < 4; i++) {
-    const optResult = solveWithPriority(year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours);
+    const optResult = solveWithPriority(year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, targetJobGroup, existingAssignments);
     const schedule: MonthlySchedule = { year, month, assignments: optResult.assignments, shiftLeaders: {}, warnings: optResult.warnings };
     scenarios.push(evaluateSchedule(idCounter++, 'MIXED', schedule, personnelList, requests, settings, optResult.warnings, year, month, customHolidays, firstDayOfWeekIndex, monthlyDutyHours));
   }
