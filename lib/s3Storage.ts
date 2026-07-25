@@ -445,16 +445,18 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
     versions[resourceVersionId(holidaysResource)] = holidays.etag;
     versions[resourceVersionId(firstDayResource)] = firstDayOfWeek.etag;
 
-    // activeScenarios and scenarioVotes are optional granular docs — they may not exist for old departments
+    // activeScenarios and scenarioVotes are optional granular docs — may not exist for old departments; treat missing as undefined so first write uses If-None-Match
     const activeScenariosDoc = await readResourceIfExists(activeScenariosResource);
     const scenarioVotesDoc = await readResourceIfExists(scenarioVotesResource);
-    let activeScenariosData: any = {};
-    let scenarioVotesData: any = {};
+    let activeScenariosData: any = undefined;
+    let scenarioVotesData: any = undefined;
     if (activeScenariosDoc) {
       const parsed = ActiveScenariosSchema.safeParse(activeScenariosDoc.data);
       if (parsed.success) {
         activeScenariosData = parsed.data;
         versions[resourceVersionId(activeScenariosResource)] = activeScenariosDoc.etag;
+      } else {
+        activeScenariosData = {};
       }
     }
     if (scenarioVotesDoc) {
@@ -462,6 +464,8 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
       if (parsed.success) {
         scenarioVotesData = parsed.data;
         versions[resourceVersionId(scenarioVotesResource)] = scenarioVotesDoc.etag;
+      } else {
+        scenarioVotesData = {};
       }
     }
 
