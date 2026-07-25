@@ -7,6 +7,7 @@ import {
 } from '@aws-sdk/client-s3';
 import type { ZodType } from 'zod';
 import {
+  ActiveScenariosSchema,
   AppDatabaseStateSchema,
   DepartmentSettingsSchema,
   DepartmentsSchema,
@@ -15,6 +16,7 @@ import {
   MonthlyScheduleSchema,
   PersonnelListSchema,
   RequestsSchema,
+  ScenarioVotesSchema,
   StorageResource,
   schemaForResource,
   type AppDatabaseState,
@@ -182,6 +184,8 @@ export function resourceVersionId(resource: StorageResource): string {
     case 'holidays': return `department:${resource.departmentId}:holidays`;
     case 'firstDayOfWeek': return `department:${resource.departmentId}:firstDayOfWeek`;
     case 'schedule': return `department:${resource.departmentId}:schedule:${resource.monthKey}`;
+    case 'activeScenarios': return `department:${resource.departmentId}:activeScenarios`;
+    case 'scenarioVotes': return `department:${resource.departmentId}:scenarioVotes`;
   }
 }
 
@@ -195,6 +199,8 @@ export function resourceObjectKey(resource: StorageResource): string {
     case 'holidays': return `${prefix}/${departmentPrefix(resource.departmentId)}/holidays.json`;
     case 'firstDayOfWeek': return `${prefix}/${departmentPrefix(resource.departmentId)}/first-day-of-week.json`;
     case 'schedule': return `${prefix}/${departmentPrefix(resource.departmentId)}/schedules/${resource.monthKey}.json`;
+    case 'activeScenarios': return `${prefix}/${departmentPrefix(resource.departmentId)}/active-scenarios.json`;
+    case 'scenarioVotes': return `${prefix}/${departmentPrefix(resource.departmentId)}/scenario-votes.json`;
   }
 }
 
@@ -299,6 +305,8 @@ export async function createDepartmentStorage(input: {
   await ensureCreateOnlyResource({ type: 'settings', departmentId }, input.settings);
   await ensureCreateOnlyResource({ type: 'holidays', departmentId }, {});
   await ensureCreateOnlyResource({ type: 'firstDayOfWeek', departmentId }, {});
+  await ensureCreateOnlyResource({ type: 'activeScenarios', departmentId }, {});
+  await ensureCreateOnlyResource({ type: 'scenarioVotes', departmentId }, {});
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const current = await readDepartmentIndexOptional();
@@ -419,6 +427,8 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
     const settingsResource = { type: 'settings', departmentId } as const;
     const holidaysResource = { type: 'holidays', departmentId } as const;
     const firstDayResource = { type: 'firstDayOfWeek', departmentId } as const;
+    const activeScenariosResource = { type: 'activeScenarios', departmentId } as const;
+    const scenarioVotesResource = { type: 'scenarioVotes', departmentId } as const;
 
     const [personnel, requests, settings, holidays, firstDayOfWeek, scheduleKeys] = await Promise.all([
       readDocument(personnelResource, PersonnelListSchema),
@@ -434,6 +444,30 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
     versions[resourceVersionId(settingsResource)] = settings.etag;
     versions[resourceVersionId(holidaysResource)] = holidays.etag;
     versions[resourceVersionId(firstDayResource)] = firstDayOfWeek.etag;
+
+    // activeScenarios and scenarioVotes are optional granular docs — may not exist for old departments; treat missing as undefined so first write uses If-None-Match
+    const activeScenariosDoc = await readResourceIfExists(activeScenariosResource);
+    const scenarioVotesDoc = await readResourceIfExists(scenarioVotesResource);
+    let activeScenariosData: any = undefined;
+    let scenarioVotesData: any = undefined;
+    if (activeScenariosDoc) {
+      const parsed = ActiveScenariosSchema.safeParse(activeScenariosDoc.data);
+      if (parsed.success) {
+        activeScenariosData = parsed.data;
+        versions[resourceVersionId(activeScenariosResource)] = activeScenariosDoc.etag;
+      } else {
+        activeScenariosData = {};
+      }
+    }
+    if (scenarioVotesDoc) {
+      const parsed = ScenarioVotesSchema.safeParse(scenarioVotesDoc.data);
+      if (parsed.success) {
+        scenarioVotesData = parsed.data;
+        versions[resourceVersionId(scenarioVotesResource)] = scenarioVotesDoc.etag;
+      } else {
+        scenarioVotesData = {};
+      }
+    }
 
     const schedulePairs = await Promise.all(scheduleKeys.map(async (monthKey) => {
       const resource = { type: 'schedule', departmentId, monthKey } as const;
@@ -454,6 +488,8 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
       holidays: holidays.data,
       firstDayOfWeek: firstDayOfWeek.data,
       schedules: Object.fromEntries(schedulePairs),
+      activeScenarios: activeScenariosData,
+      scenarioVotes: scenarioVotesData,
     }] as const;
   }));
 

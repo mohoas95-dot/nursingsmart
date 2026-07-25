@@ -153,6 +153,9 @@ export const MonthlyScheduleSchema = z.object({
 
 export const SchedulesSchema = z.record(monthKey, MonthlyScheduleSchema);
 
+export const ActiveScenariosSchema = z.record(monthKey, z.any());
+export const ScenarioVotesSchema = z.record(monthKey, z.any());
+
 export const DepartmentDataSchema = z.object({
   personnel: PersonnelListSchema,
   requests: RequestsSchema,
@@ -162,9 +165,12 @@ export const DepartmentDataSchema = z.object({
   holidays: HolidaysSchema,
   firstDayOfWeek: FirstDayOfWeekSchema,
   schedules: SchedulesSchema,
-  activeScenarios: z.any().optional(), // Stores the 3 generated scenarios
-  scenarioVotes: z.any().optional(), // Stores votes per scenario: { monthKey: { [scenarioId: number]: { [personnelId: string]: number } } }
-}).strict();
+  activeScenarios: z.any().optional(), // Stores the 3 generated scenarios per group: { monthKey: { nurse: {...}, assistant: {...} } }
+  scenarioVotes: z.any().optional(), // Stores votes per scenario: { monthKey: { nurse: {...}, assistant: {...} } }
+  // New granular storage for scenarios/votes (persisted as separate S3 objects for reliability across refresh)
+  activeScenarios_v2: ActiveScenariosSchema.optional(),
+  scenarioVotes_v2: ScenarioVotesSchema.optional(),
+}).strict().passthrough();
 
 export const AppDatabaseStateSchema = z.object({
   departments: DepartmentsSchema,
@@ -194,6 +200,8 @@ export const StorageResourceSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('holidays'), departmentId: nonEmptyId }).strict(),
   z.object({ type: z.literal('firstDayOfWeek'), departmentId: nonEmptyId }).strict(),
   z.object({ type: z.literal('schedule'), departmentId: nonEmptyId, monthKey }).strict(),
+  z.object({ type: z.literal('activeScenarios'), departmentId: nonEmptyId }).strict(),
+  z.object({ type: z.literal('scenarioVotes'), departmentId: nonEmptyId }).strict(),
 ]);
 
 export type StorageResource = z.infer<typeof StorageResourceSchema>;
@@ -207,5 +215,7 @@ export function schemaForResource(resource: StorageResource): z.ZodType {
     case 'holidays': return HolidaysSchema;
     case 'firstDayOfWeek': return FirstDayOfWeekSchema;
     case 'schedule': return MonthlyScheduleSchema;
+    case 'activeScenarios': return ActiveScenariosSchema;
+    case 'scenarioVotes': return ScenarioVotesSchema;
   }
 }

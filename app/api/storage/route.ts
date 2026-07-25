@@ -78,6 +78,21 @@ function authorizeResourceWrite(user: AuthenticatedUser, resource: StorageResour
   if (resource.type === 'departments') {
     throw new AuthenticationError(403, 'فقط مدیر سامانه اجازه تغییر فهرست بخش‌ها را دارد.');
   }
+  if (resource.type === 'activeScenarios') {
+    if (!user.departmentId || user.departmentId !== resource.departmentId) {
+      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
+    }
+    if (user.role !== 'HEAD_NURSE') {
+      throw new AuthenticationError(403, 'فقط سرپرستار اجازه مدیریت سناریوها را دارد.');
+    }
+    return;
+  }
+  if (resource.type === 'scenarioVotes') {
+    if (!user.departmentId || user.departmentId !== resource.departmentId) {
+      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
+    }
+    return;
+  }
   if (!user.departmentId || user.departmentId !== resource.departmentId) {
     throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
   }
