@@ -394,7 +394,7 @@ export default function Home() {
     ? { 
         ...(schedule || { year: currentYear, month: currentMonth, shiftLeaders: {}, warnings: [] }), 
         assignments: previewAssignments,
-        shiftLeaders: verifyCoverageAndLeaders(currentYear, currentMonth, personnel, previewAssignments, settings, customHolidays, firstDayOfWeekIndex === -1 ? undefined : firstDayOfWeekIndex, monthlyDutyHours, requests).shiftLeaders
+        shiftLeaders: verifyCoverageAndLeaders(currentYear, currentMonth, personnel, previewAssignments, settings, customHolidays, firstDayOfWeekIndex === -1 ? undefined : firstDayOfWeekIndex, requests).shiftLeaders
       } 
     : schedule;
 
