@@ -54,6 +54,17 @@ import {
 } from '../lib/balanceChecker';
 import { generateSmartSuggestions } from '../lib/smartSuggestion';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
+import {
+  DEFAULT_CUSTOM_HOLIDAY_TITLE,
+  clearHolidayOverride,
+  diffHolidayOverrides,
+  holidayOverrideTitle,
+  holidaySource,
+  isEffectiveHoliday,
+  mergeHolidayOverrides,
+  setHolidayOverride,
+  toggleHolidayOverride,
+} from '../domain/calendar/holiday-overrides';
 import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
 import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
@@ -188,10 +199,21 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState<boolean>(false);
   const [isMonthLoaded, setIsMonthLoaded] = useState<boolean>(() => typeof window === 'undefined');
 
-  const [, setCustomHolidays] = useState<{ [day: number]: string }>({});
   const [, setFirstDayOfWeekIndex] = useState<number | undefined>(undefined);
-  // Adapter فقط خواندنی: دیتابیس و فرم‌های قدیمی هرگز منبع رسمی را بازنویسی نمی‌کنند.
-  const customHolidays = officialCalendarState.calendar?.holidays ?? {};
+  // تعطیلات رسمی کشور فقط‌خواندنی هستند و هرگز بازنویسی نمی‌شوند؛ تغییرات سرپرستار
+  // به‌صورت یک لایه‌ی override جداگانه (روز → عنوان یا نگهبان روز کاری) ذخیره می‌شود
+  // تا با هر بار همگام‌سازی مجدد تقویم رسمی از بین نرود.
+  // مرجع پایدار لازم است؛ در غیر این صورت `?? {}` در هر رندر یک شیء تازه می‌سازد و
+  // تمام useMemo/useEffectهای وابسته به تعطیلات را بی‌جهت دوباره اجرا می‌کند.
+  const officialHolidays = React.useMemo(
+    () => officialCalendarState.calendar?.holidays ?? {},
+    [officialCalendarState.calendar]
+  );
+  const [holidayOverrides, setHolidayOverrides] = useState<{ [day: number]: string }>({});
+  const customHolidays = React.useMemo(
+    () => mergeHolidayOverrides(officialHolidays, holidayOverrides),
+    [officialHolidays, holidayOverrides]
+  );
   const firstDayOfWeekIndex = officialCalendarState.calendar?.firstDayOfWeek;
   const [calendarOccasions, setCalendarOccasions] = useState<{ [day: number]: string[] }>({});
   const [calendarSyncedAt, setCalendarSyncedAt] = useState<string | null>(null);
@@ -206,7 +228,6 @@ export default function Home() {
       setCalendarOccasions({});
       return;
     }
-    setCustomHolidays(official.holidays);
     setCalendarOccasions(official.occasions);
     setFirstDayOfWeekIndex(official.firstDayOfWeek);
     setCalendarSyncedAt(official.syncedAt);
@@ -327,6 +348,8 @@ export default function Home() {
     return personnel.find(person => person.id === authenticatedUser.personnelId) || null;
   }, [authenticatedUser, personnel]);
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>('');
+  // فقط سرپرستار بخش و مدیر سامانه اجازه تعیین تعطیلات انتخابی را دارند.
+  const canManageHolidays = role === 'headnurse' || role === 'admin';
   // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
@@ -632,7 +655,8 @@ export default function Home() {
 
     const hKey = `${currentYear}_${currentMonth}`;
     const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
-    setCustomHolidays(holidaysInfo.days || {});
+    // فقط لایه‌ی تغییرات بخش بارگذاری می‌شود؛ تعطیلات رسمی از منبع کشور می‌آیند.
+    setHolidayOverrides(holidaysInfo.days || {});
     setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
 
     const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
@@ -905,7 +929,8 @@ export default function Home() {
 
           const hKey = `${currentYear}_${currentMonth}`;
           const holidaysInfo = deptInfo.holidays?.[hKey] || { days: {}, monthlyDutyHours: null };
-          setCustomHolidays(holidaysInfo.days || {});
+          // فقط لایه‌ی تغییرات بخش بارگذاری می‌شود؛ تعطیلات رسمی از منبع کشور می‌آیند.
+          setHolidayOverrides(holidaysInfo.days || {});
           setMonthlyDutyHours(holidaysInfo.monthlyDutyHours || null);
 
           const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
@@ -1454,7 +1479,9 @@ export default function Home() {
         holidays: {
           ...oldDept.holidays,
           [`${currentYear}_${currentMonth}`]: {
-            days: updatedH,
+            // فقط تفاوت نسبت به تقویم رسمی ذخیره می‌شود تا همگام‌سازی بعدی ماه،
+            // تعطیلات رسمی به‌روز را حفظ کند و تغییرات سرپرستار هم پاک نشود.
+            days: diffHolidayOverrides(officialHolidays, updatedH),
             monthlyDutyHours: cleanMonthlyDutyHours
           }
         },
@@ -2204,13 +2231,60 @@ export default function Home() {
   };
 
   // --- Holiday Management ---
+  // تنها نقطه‌ی نوشتن روی تعطیلات: لایه‌ی تغییرات را به‌روزرسانی می‌کند، بلافاصله
+  // رابط کاربری را (خوش‌بینانه) تغییر می‌دهد و سپس نتیجه‌ی ادغام‌شده را ذخیره می‌کند.
+  const applyHolidayOverrides = async (
+    nextOverrides: { [day: number]: string },
+    strategy: ScheduleUpdateStrategy = { mode: 'full_resolve' }
+  ) => {
+    if (!canManageHolidays) return;
+    const previousOverrides = holidayOverrides;
+    setHolidayOverrides(nextOverrides);
+    try {
+      await saveState(
+        personnel,
+        requests,
+        settings,
+        mergeHolidayOverrides(officialHolidays, nextOverrides),
+        strategy
+      );
+    } catch (error) {
+      // ذخیره‌سازی ناموفق نباید تقویم نمایش‌داده‌شده را با سرور ناسازگار بگذارد.
+      setHolidayOverrides(previousOverrides);
+      console.error('Error saving holiday override:', error);
+      throw error;
+    }
+  };
+
+  const handleToggleHoliday = async (day: number, title?: string) => {
+    try {
+      await applyHolidayOverrides(toggleHolidayOverride(officialHolidays, holidayOverrides, day, title));
+    } catch {
+      /* پیام خطا در saveState به کاربر نمایش داده شده است. */
+    }
+  };
+
+  const handleRenameHoliday = async (day: number, title: string) => {
+    try {
+      await applyHolidayOverrides(setHolidayOverride(officialHolidays, holidayOverrides, day, title));
+    } catch {
+      /* پیام خطا در saveState به کاربر نمایش داده شده است. */
+    }
+  };
+
   const handleAddHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
+    const day = Number(holidayDayInput);
+    const daysInMonth = officialCalendarState.calendar?.days.length ?? 31;
+    if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
+      alert(`روز واردشده معتبر نیست؛ عددی بین ۱ تا ${daysInMonth} وارد کنید.`);
+      return;
+    }
     if (!holidayTitleInput.trim()) return;
     try {
-      const updated = { ...customHolidays, [holidayDayInput]: holidayTitleInput.trim() };
-      setCustomHolidays(updated);
-      await saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
+      await applyHolidayOverrides(
+        setHolidayOverride(officialHolidays, holidayOverrides, day, holidayTitleInput.trim())
+      );
       setHolidayTitleInput('');
       alert('تعطیلات با موفقیت ثبت شد.');
     } catch (error) {
@@ -2220,12 +2294,55 @@ export default function Home() {
 
   const handleRemoveHoliday = async (day: number) => {
     try {
-      const updated = { ...customHolidays };
-      delete updated[day];
-      setCustomHolidays(updated);
-      await saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
+      await applyHolidayOverrides(clearHolidayOverride(officialHolidays, holidayOverrides, day));
     } catch (error) {
       console.error("Error removing holiday:", error);
+    }
+  };
+
+  // تثبیت ساعت موظفی محاسبه‌شده‌ی ماه جاری روی همان ماه، تا تغییرات بعدی تنظیمات
+  // سراسری بخش، ساعت اعلام‌شده به پرسنل برای این ماه را جابه‌جا نکند.
+  const handleApproveMonthlyDutyHours = async (officialHours: number, contractHours: number) => {
+    if (!canManageHolidays) return;
+    try {
+      const dutyToSave = {
+        ...settings.dutyHours,
+        ...(settings.autoCalculateDutyHours
+          ? { official: officialHours, contract: contractHours }
+          : {}),
+      };
+
+      const nextDb = getFreshDbCopy();
+      if (!nextDb.deptData) nextDb.deptData = {};
+
+      const deptId = selectedDepartmentId || 'sepehr';
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      nextDb.deptData[deptId] = {
+        ...oldDept,
+        holidays: {
+          ...oldDept.holidays,
+          [`${currentYear}_${currentMonth}`]: {
+            // همان لایه‌ی تغییرات ذخیره می‌شود تا تعطیلات رسمی بازنویسی نشوند.
+            days: holidayOverrides,
+            monthlyDutyHours: dutyToSave,
+          },
+        },
+      };
+
+      await saveDbState(nextDb);
+      setMonthlyDutyHours(dutyToSave);
+      alert('ساعت موظفی این ماه بر اساس تقویم و تنظیمات نهایی شد و در داشبورد پرسنل برای همین ماه نمایش داده خواهد شد.');
+    } catch (e) {
+      alert('خطا در ثبت نهایی موظفی این ماه: ' + e);
     }
   };
 
@@ -4918,233 +5035,25 @@ export default function Home() {
                 </form>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-6">
+              {/* «تعریف تقویم و مناسبت‌های تعطیل انتخابی» به تب «مدیریت تقویم و تعطیلات» منتقل شد. */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100">تعریف تقویم و مناسبت‌های تعطیل انتخابی</h3>
-                  <p className="text-xs text-slate-400 mt-1 font-semibold">جمعه‌ها به طور خودکار تعطیل هستند. در این بخش می‌توانید تعطیلات مذهبی یا ملی اضافی ماه را تعریف کنید.</p>
+                  <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100 flex items-center gap-2">
+                    <CalendarIcon className="w-5 h-5 text-emerald-600" /> تعریف تقویم و مناسبت‌های تعطیل انتخابی
+                  </h3>
+                  <p className="text-xs font-bold leading-6 text-slate-500 mt-3">
+                    این بخش به تب «مدیریت تقویم و تعطیلات» منتقل شده است تا همه‌ی تنظیمات تقویم، تعطیلات رسمی کشور،
+                    مناسبت‌های تعطیل انتخابی بخش و محاسبه ساعت موظفی در یک صفحه مدیریت شوند.
+                  </p>
                 </div>
-
-                <form onSubmit={handleAddHoliday} className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">روز چندم ماه؟</label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="31"
-                      value={holidayDayInput}
-                      onChange={(e) => setHolidayDayInput(parseNumberInput(e.target.value))}
-                      className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">عنوان مناسبت تعطیل</label>
-                    <input
-                      type="text"
-                      placeholder="مثلاً: عاشورای حسینی"
-                      value={holidayTitleInput}
-                      onChange={(e) => setHolidayTitleInput(e.target.value)}
-                      className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:outline-none"
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <button
-                      type="submit"
-                      className="w-full bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1 cursor-pointer"
-                      id="btn-add-holiday"
-                    >
-                      <Plus className="w-4 h-4"/> افزودن به تقویم
-                    </button>
-                  </div>
-                </form>
-
-                <div className="space-y-2">
-                  <h4 className="font-extrabold text-slate-800 text-xs">تعطیلات ثبت شده اضافه در آبان/آذر/خرداد:</h4>
-                  <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden text-xs">
-                    {Object.keys(customHolidays).length === 0 ? (
-                      <div className="p-4 text-center text-slate-400">هیچ مورد تعطیل دیگری در این ماه ثبت نشده است.</div>
-                    ) : (
-                      Object.keys(customHolidays).map(d => {
-                        const dayNum = Number(d);
-                        return (
-                          <div key={dayNum} className="p-3 bg-slate-50/50 flex justify-between items-center hover:bg-slate-100/50 transition-colors">
-                            <span className="font-bold text-slate-800 font-mono">روز {dayNum} {JALALI_MONTH_NAMES[currentMonth - 1]}: <span className="text-rose-600 mr-2">{customHolidays[dayNum]}</span></span>
-                            <button
-                              onClick={() => handleRemoveHoliday(dayNum)}
-                              className="text-red-500 hover:text-red-700 bg-white p-1 rounded-lg shadow-sm border border-slate-200 cursor-pointer"
-                              id={`btn-remove-holiday-${dayNum}`}
-                            >
-                              حذف
-                            </button>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mt-4 space-y-3">
-                  <div>
-                    <h4 className="text-xs font-black text-slate-800">روز ۱ام ماه چندشنبه است؟</h4>
-                    <p className="text-[10px] text-slate-400 mt-1">با تعیین این فیلد، روزهای هفته در تقویم بر لایه‌ی محاسباتی جدید قرار خواهند گرفت و توزیع شیفت‌ها و جمعه‌ها تصحیح می‌شود.</p>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1.5 text-center font-bold">
-                    {WEEKDAYS.map((w, idx) => {
-                      const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
-                      const isSelected = firstDayOfWeekIndex !== undefined
-                        ? firstDayOfWeekIndex === idx
-                        : mathDefault === idx;
-
-                      return (
-                        <button
-                          type="button"
-                          key={`start-day-${idx}`}
-                          onClick={() => {
-                            setFirstDayOfWeekIndex(idx);
-                            if (typeof window !== 'undefined') {
-                              localStorage.setItem(`hospital_first_day_of_week_index_${currentYear}_${currentMonth}`, String(idx));
-                              localStorage.setItem('hospital_first_day_of_week_index', String(idx));
-                            }
-                            saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
-                          }}
-                          className={`px-2 py-1.5 rounded-xl border text-[10px] font-extrabold cursor-pointer transition-all ${
-                            isSelected
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                          }`}
-                        >
-                          {w}
-                          {mathDefault === idx && <span className="block text-[8px] opacity-75 font-normal">(پیش‌فرض)</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mt-4 space-y-3">
-                  <div>
-                    <h4 className="text-xs font-black text-slate-800 font-sans">تقویم تعاملی {JALALI_MONTH_NAMES[currentMonth - 1]} (کلیک جهت تعیین تعطیلی):</h4>
-                    <p className="text-[10px] text-slate-400 mt-1">بر روی هر یک از خانه‌های تقویم زیر کلیک کنید تا وضعیت آن روز بین «کاری» و «تعطیل» سوئیچ شود.</p>
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-1 text-center font-extrabold text-[9px]">
-                    {WEEKDAYS.map(w => (
-                      <div key={w} className="py-1 text-slate-400 font-extrabold text-[9px]">{w[0]}</div>
-                    ))}
-
-                    {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, i) => (
-                      <div key={`pad-${i}`} className="p-2 bg-slate-100/20 rounded-lg text-transparent text-[10px]">-</div>
-                    ))}
-
-                    {calendarDays.map(d => {
-                      const isCustomHoliday = !!customHolidays[d.day];
-                      const isFriday = d.dayOfWeek === 6;
-                      const isRed = isFriday || isCustomHoliday;
-
-                      return (
-                        <button
-                          type="button"
-                          key={`day-btn-${d.day}`}
-                          onClick={() => {
-                            const updated = { ...customHolidays };
-                            if (updated[d.day]) {
-                              delete updated[d.day];
-                            } else {
-                              updated[d.day] = 'تعطیل کاربری با یک کلیک';
-                            }
-                            setCustomHolidays(updated);
-                            saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
-                          }}
-                          className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[38px] cursor-pointer ${
-                            isRed
-                              ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100/50 hover:border-rose-300'
-                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
-                          }`}
-                        >
-                          <span className="font-mono text-xs">{d.day}</span>
-                          <span className="text-[7px] leading-none opacity-80 mt-0.5">
-                            {isFriday ? 'جمعه' : isCustomHoliday ? 'تعطیل' : 'کاری'}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="pt-4 border-t border-slate-200 text-center">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          const activeFd = firstDayOfWeekIndex !== undefined ? firstDayOfWeekIndex : -1;
-                          let dutyToSave = { ...settings.dutyHours };
-                          if (settings.autoCalculateDutyHours) {
-                            const isLeapYearVal = [1, 5, 9, 13, 17, 22, 26, 30].includes(currentYear % 33);
-                            const daysInMonth = currentMonth <= 6 ? 31 : (currentMonth === 12 && !isLeapYearVal ? 29 : 30);
-                            const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
-                            const activeFirstDayIndex = activeFd !== -1 ? activeFd : mathDefault;
-
-                            let liveCalendarDays = [];
-                            for (let d = 1; d <= daysInMonth; d++) {
-                              const calculatedDayOfWeek = (activeFirstDayIndex + ((d - 1) % 7)) % 7;
-                              const isFriday = calculatedDayOfWeek === 6;
-                              const isCustomHoliday = !!customHolidays[d];
-                              liveCalendarDays.push({ day: d, isHoliday: isFriday || isCustomHoliday, dayOfWeek: calculatedDayOfWeek });
-                            }
-                            const nonFridayHolidaysCount_val = liveCalendarDays.filter(d => d.dayOfWeek !== 6 && d.isHoliday).length;
-                            const X_val = daysInMonth - nonFridayHolidaysCount_val - (liveCalendarDays.filter(d => d.dayOfWeek === 6).length);
-                            const thursdaysNonHolidayCount_val = liveCalendarDays.filter(d => d.dayOfWeek === 5 && !d.isHoliday).length;
-                            const Y_val = thursdaysNonHolidayCount_val * 2;
-                            const z_calc = (X_val * 7) - Y_val;
-                            const contract_calc = z_calc + 14;
-                            dutyToSave.official = z_calc;
-                            dutyToSave.contract = contract_calc;
-                          }
-
-                          const nextDb = getFreshDbCopy();
-                          if (!nextDb.deptData) nextDb.deptData = {};
-
-                          const deptId = selectedDepartmentId || 'sepehr';
-                          const oldDept = nextDb.deptData[deptId] || {
-                            personnel: [],
-                            requests: [],
-                            settings_system: INITIAL_SETTINGS,
-                            settings_credentials: { username: 'headnurse', password: '123456' },
-                            holidays: {},
-                            firstDayOfWeek: {},
-                            schedules: {},
-                          };
-
-                          const updatedDept = {
-                            ...oldDept,
-                            holidays: {
-                              ...oldDept.holidays,
-                              [`${currentYear}_${currentMonth}`]: {
-                                days: customHolidays,
-                                monthlyDutyHours: dutyToSave
-                              }
-                            }
-                          };
-
-                          nextDb.deptData[deptId] = updatedDept;
-                          await saveDbState(nextDb);
-
-                          setMonthlyDutyHours(dutyToSave);
-                          alert('ساعت موظفی این ماه بر اساس تقویم و تنظیمات نهایی شد و در داشبورد پرسنل برای همین ماه نمایش داده خواهد شد.');
-                        } catch (e) {
-                          alert('خطا در ثبت نهایی موظفی این ماه: ' + e);
-                        }
-                      }}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs px-4 py-3 rounded-xl transition-all shadow-sm cursor-pointer border border-indigo-700 font-sans"
-                    >
-                      تصویب نهایی ساعت موظفی مطابق تقویم برای ماه در حال نمایش
-                    </button>
-                    {monthlyDutyHours && (
-                      <div className="mt-2 text-[10px] font-bold text-indigo-700">
-                        ساعت موظفی این ماه تعیین مقطعی شده است: (رسمی {monthlyDutyHours.official}، قراردادی {monthlyDutyHours.contract}، طرح {monthlyDutyHours.conscript}، اضافه‌کار {monthlyDutyHours.overtime})
-                      </div>
-                    )}
-                  </div>
-                </div>
-
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('calendar')}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+                  id="btn-go-to-calendar-tab"
+                >
+                  <CalendarIcon className="w-4 h-4" /> رفتن به مدیریت تقویم و تعطیلات
+                </button>
               </div>
 
               <div className="lg:col-span-2 bg-white border border-rose-200 rounded-3xl p-6 shadow-sm space-y-5">
@@ -5235,56 +5144,220 @@ export default function Home() {
 
                 <details className="group mb-6 overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/40">
                   <summary className="flex cursor-pointer list-none items-center justify-between p-4 text-sm font-black text-slate-800">
-                    <span>تنظیم ساعت دستی</span>
+                    <span>تنظیم دستی روز آغاز ماه</span>
                     <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] text-amber-700 group-open:hidden">خاموش</span>
                     <span className="hidden rounded-full bg-emerald-100 px-2 py-1 text-[10px] text-emerald-700 group-open:inline">روشن</span>
                   </summary>
                   <div className="border-t border-amber-200 p-4">
                     <p className="mb-4 text-[10px] font-bold leading-6 text-amber-700">فقط هنگامی استفاده کنید که اتصال تقویم آنلاین کشور با مشکل مواجه شده باشد.</p>
-                <div className="space-y-3 bg-slate-50 border border-slate-200 rounded-2xl p-5 mb-6">
-                  <div>
-                    <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                      روز ۱ام {JALALI_MONTH_NAMES[currentMonth - 1]} چندشنبه است؟
-                    </h4>
-                    <p className="text-[10px] text-slate-400 mt-1">
-                      با انتخاب روز هفته برای روز ۱ام، مابقی روزها به لحاظ موقعیت در یک لایه محاسباتی بازچیده می‌شوند:
-                    </p>
+
+                    <div className="space-y-3 bg-slate-50 border border-slate-200 rounded-2xl p-5">
+                      <div>
+                        <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                          روز ۱ام {JALALI_MONTH_NAMES[currentMonth - 1]} چندشنبه است؟
+                        </h4>
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          با انتخاب روز هفته برای روز ۱ام، مابقی روزها به لحاظ موقعیت در یک لایه محاسباتی بازچیده می‌شوند:
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
+                        {WEEKDAYS.map((w, idx) => {
+                          const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
+                          const isSelected = firstDayOfWeekIndex !== undefined
+                            ? firstDayOfWeekIndex === idx
+                            : mathDefault === idx;
+
+                          return (
+                            <button
+                              type="button"
+                              key={`tab-cal-start-day-${idx}`}
+                              disabled={!canManageHolidays}
+                              onClick={() => {
+                                setFirstDayOfWeekIndex(idx);
+                                if (typeof window !== 'undefined') {
+                                  localStorage.setItem(`hospital_first_day_of_week_index_${currentYear}_${currentMonth}`, String(idx));
+                                  localStorage.setItem('hospital_first_day_of_week_index', String(idx));
+                                }
+                                saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
+                              }}
+                              className={`px-3 py-2 rounded-xl border text-xs font-black transition-all flex flex-col items-center justify-center gap-1 ${
+                                isSelected
+                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.02]'
+                                  : 'bg-white text-slate-600 border-slate-200'
+                              } ${canManageHolidays ? 'hover:bg-slate-50 cursor-pointer' : 'opacity-70 cursor-not-allowed'}`}
+                            >
+                              <span>{w}</span>
+                              {mathDefault === idx && (
+                                <span className="text-[8px] font-normal opacity-85">(پیش‌فرض سیستم)</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                {/* ===== تعریف تقویم و مناسبت‌های تعطیل انتخابی (منتقل‌شده از تب تنظیمات بخش) ===== */}
+                <div className="space-y-5 rounded-2xl border border-emerald-200 bg-emerald-50/30 p-5 mb-6">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 pb-3">
+                    <div>
+                      <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                        <CalendarIcon className="w-4 h-4 text-emerald-600" /> تعریف تقویم و مناسبت‌های تعطیل انتخابی
+                      </h4>
+                      <p className="text-[10px] font-bold text-slate-500 mt-1 leading-6">
+                        جمعه‌ها و تعطیلات رسمی کشور به‌صورت خودکار اعمال می‌شوند. در این بخش می‌توانید مناسبت تعطیل اختصاصی بخش را
+                        اضافه یا یک تعطیلی رسمی را برای بخش خود به روز کاری تبدیل کنید.
+                      </p>
+                    </div>
+                    {!canManageHolidays && (
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-black text-amber-700">
+                        فقط سرپرستار بخش اجازه تغییر دارد
+                      </span>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
-                    {WEEKDAYS.map((w, idx) => {
-                      const mathDefault = getJalaliWeekday(currentYear, currentMonth, 1);
-                      const isSelected = firstDayOfWeekIndex !== undefined
-                        ? firstDayOfWeekIndex === idx
-                        : mathDefault === idx;
-
-                      return (
+                  {canManageHolidays && (
+                    <form onSubmit={handleAddHoliday} className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white p-4 rounded-2xl border border-slate-200">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1" htmlFor="input-holiday-day">روز چندم ماه؟</label>
+                        <input
+                          id="input-holiday-day"
+                          type="number"
+                          min="1"
+                          max={calendarDays.length || 31}
+                          value={holidayDayInput}
+                          onChange={(e) => setHolidayDayInput(parseNumberInput(e.target.value))}
+                          className="w-full text-xs font-extrabold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1" htmlFor="input-holiday-title">عنوان مناسبت تعطیل</label>
+                        <input
+                          id="input-holiday-title"
+                          type="text"
+                          placeholder="مثلاً: عاشورای حسینی"
+                          value={holidayTitleInput}
+                          onChange={(e) => setHolidayTitleInput(e.target.value)}
+                          className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex items-end">
                         <button
-                          type="button"
-                          key={`tab-cal-start-day-${idx}`}
-                          disabled={role === 'personnel'}
-                          onClick={() => {
-                            setFirstDayOfWeekIndex(idx);
-                            if (typeof window !== 'undefined') {
-                              localStorage.setItem(`hospital_first_day_of_week_index_${currentYear}_${currentMonth}`, String(idx));
-                              localStorage.setItem('hospital_first_day_of_week_index', String(idx));
-                            }
-                            saveState(personnel, requests, settings, customHolidays, idx, { mode: 'full_resolve' });
-                          }}
-                          className={`px-3 py-2 rounded-xl border text-xs font-black transition-all flex flex-col items-center justify-center gap-1 ${
-                            isSelected
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.02]'
-                              : 'bg-white text-slate-600 border-slate-200'
-                          } ${role !== 'personnel' ? 'hover:bg-slate-50 cursor-pointer' : 'opacity-70 cursor-not-allowed'}`}
+                          type="submit"
+                          className="w-full bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1 cursor-pointer"
+                          id="btn-add-holiday"
                         >
-                          <span>{w}</span>
-                          {mathDefault === idx && (
-                            <span className="text-[8px] font-normal opacity-85">(پیش‌فرض سیستم)</span>
-                          )}
+                          <Plus className="w-4 h-4"/> افزودن به تقویم
                         </button>
-                      );
-                    })}
+                      </div>
+                    </form>
+                  )}
+
+                  <div className="space-y-2">
+                    <h5 className="font-extrabold text-slate-800 text-xs">تعطیلات ثبت‌شده {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}:</h5>
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden text-xs bg-white">
+                      {Object.keys(customHolidays).length === 0 ? (
+                        <div className="p-4 text-center text-slate-400 font-bold">به‌جز جمعه‌ها، تعطیلی دیگری برای این ماه ثبت نشده است.</div>
+                      ) : (
+                        Object.keys(customHolidays)
+                          .map(Number)
+                          .sort((a, b) => a - b)
+                          .map(dayNum => {
+                            const source = holidaySource(officialHolidays, holidayOverrides, dayNum);
+                            return (
+                              <div key={dayNum} className="p-3 bg-slate-50/50 flex flex-wrap justify-between items-center gap-2 hover:bg-slate-100/50 transition-colors">
+                                <span className="font-bold text-slate-800 font-mono">
+                                  روز {dayNum} {JALALI_MONTH_NAMES[currentMonth - 1]}:
+                                  <span className="text-rose-600 mr-2 font-sans">{customHolidays[dayNum]}</span>
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${
+                                    source === 'official'
+                                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  }`}>
+                                    {source === 'official' ? 'تعطیل رسمی کشور' : 'انتخابی بخش'}
+                                  </span>
+                                  {canManageHolidays && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveHoliday(dayNum)}
+                                      className="text-red-500 hover:text-red-700 bg-white p-1 px-2 rounded-lg shadow-sm border border-slate-200 cursor-pointer font-bold"
+                                      id={`btn-remove-holiday-${dayNum}`}
+                                      title="این روز به روز کاری تبدیل می‌شود"
+                                    >
+                                      حذف
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                    <div>
+                      <h5 className="text-xs font-black text-slate-800 font-sans">تقویم تعاملی {JALALI_MONTH_NAMES[currentMonth - 1]} (کلیک جهت تعیین تعطیلی):</h5>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {canManageHolidays
+                          ? 'بر روی هر یک از خانه‌های تقویم زیر کلیک کنید تا وضعیت آن روز بین «کاری» و «تعطیل» سوئیچ شود. جمعه‌ها همیشه تعطیل هستند.'
+                          : 'وضعیت تعطیلی روزهای این ماه؛ تغییر آن فقط توسط سرپرستار بخش امکان‌پذیر است.'}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-1 text-center font-extrabold text-[9px]">
+                      {WEEKDAYS.map(w => (
+                        <div key={`grid-head-${w}`} className="py-1 text-slate-400 font-extrabold text-[9px]">{w[0]}</div>
+                      ))}
+
+                      {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, i) => (
+                        <div key={`pad-${i}`} className="p-2 bg-slate-100/20 rounded-lg text-transparent text-[10px]">-</div>
+                      ))}
+
+                      {calendarDays.map(d => {
+                        const isFriday = d.dayOfWeek === 6;
+                        const isHoliday = isFriday || isEffectiveHoliday(officialHolidays, holidayOverrides, d.day);
+                        const source = holidaySource(officialHolidays, holidayOverrides, d.day);
+                        const title = isFriday
+                          ? 'جمعه؛ تعطیل هفتگی (غیرقابل تغییر)'
+                          : (customHolidays[d.day] || (calendarOccasions[d.day] || []).join('، ') || 'روز کاری');
+
+                        return (
+                          <button
+                            type="button"
+                            key={`day-btn-${d.day}`}
+                            disabled={isFriday || !canManageHolidays}
+                            title={title}
+                            aria-pressed={isHoliday}
+                            onClick={() => handleToggleHoliday(d.day)}
+                            className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[42px] ${
+                              isHoliday
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-white text-slate-700 border-slate-200'
+                            } ${
+                              isFriday || !canManageHolidays
+                                ? 'cursor-not-allowed opacity-80'
+                                : `cursor-pointer ${isHoliday ? 'hover:bg-rose-100/60 hover:border-rose-300' : 'hover:bg-slate-100 hover:border-slate-300'}`
+                            }`}
+                          >
+                            <span className="font-mono text-xs">{d.day}</span>
+                            <span className="text-[7px] leading-none opacity-80 mt-0.5">
+                              {isFriday ? 'جمعه' : source === 'official' ? 'رسمی' : source === 'custom' ? 'تعطیل' : 'کاری'}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-wrap gap-3 pt-1 text-[9px] font-bold text-slate-500">
+                      <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-rose-100 ring-1 ring-rose-300" /> تعطیل</span>
+                      <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-white ring-1 ring-slate-300" /> روز کاری</span>
+                    </div>
                   </div>
                 </div>
 
@@ -5295,7 +5368,7 @@ export default function Home() {
                       کنترل تیکی روزهای هفته و تعطیلات تا آخر ماه {JALALI_MONTH_NAMES[currentMonth - 1]} ({calendarDays.length} روز)
                     </h4>
                     <p className="text-[10px] text-slate-400 mt-1">
-                      برای تغییر وضعیت هر روز بین «روز کاری عادی» و «روز تعطیل رسمی»، گزینه‌ی مربوطه را تیک بزنید. جمعه‌ها بر اساس قوانین به صورت دائم تعطیل هستند.
+                      برای تغییر وضعیت هر روز بین «روز کاری عادی» و «روز تعطیل»، گزینه‌ی مربوطه را تیک بزنید. جمعه‌ها بر اساس قوانین به صورت دائم تعطیل هستند.
                     </p>
                   </div>
 
@@ -5310,9 +5383,10 @@ export default function Home() {
                       </div>
 
                       {calendarDays.map(d => {
-                        const isCustomHoliday = !!customHolidays[d.day];
                         const isFriday = d.dayOfWeek === 6;
+                        const isCustomHoliday = isEffectiveHoliday(officialHolidays, holidayOverrides, d.day);
                         const isChecked = isFriday || isCustomHoliday;
+                        const source = holidaySource(officialHolidays, holidayOverrides, d.day);
 
                         return (
                           <div
@@ -5324,26 +5398,17 @@ export default function Home() {
                             }`}
                           >
                             <div className="col-span-3 flex items-center justify-center gap-2">
-                              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                              <label className={`flex items-center gap-1.5 select-none ${isFriday || !canManageHolidays ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                                 <input
                                   type="checkbox"
                                   checked={isChecked}
-                                  disabled={isFriday || role === 'personnel'}
-                                  onChange={(e) => {
-                                    const updated = { ...customHolidays };
-                                    if (e.target.checked) {
-                                      updated[d.day] = customHolidays[d.day] || 'تعطیل انتخابی با تیک';
-                                    } else {
-                                      delete updated[d.day];
-                                    }
-                                    setCustomHolidays(updated);
-                                    saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
-                                  }}
+                                  disabled={isFriday || !canManageHolidays}
+                                  onChange={() => handleToggleHoliday(d.day)}
                                   className="w-4 h-4 accent-emerald-600 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed"
                                   id={`check-holiday-${d.day}`}
                                 />
                                 <span className={`text-[10px] ${isChecked ? 'text-rose-600 font-extrabold' : 'text-slate-400 font-normal'}`}>
-                                  {isChecked ? 'تعطیل کاربری' : 'روز کاری'}
+                                  {isFriday ? 'جمعه' : source === 'official' ? 'تعطیل رسمی' : source === 'custom' ? 'تعطیل انتخابی' : 'روز کاری'}
                                 </span>
                               </label>
                             </div>
@@ -5370,19 +5435,19 @@ export default function Home() {
                                 <input
                                   type="text"
                                   placeholder="مثلاً: مناسبت تعطیلی مذهبی..."
-                                  disabled={!isCustomHoliday || role === 'personnel'}
-                                  value={customHolidays[d.day] || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    const updated = { ...customHolidays };
-                                    if (updated[d.day] !== undefined) {
-                                      updated[d.day] = val;
-                                      setCustomHolidays(updated);
-                                      saveState(personnel, requests, settings, updated, { mode: 'full_resolve' });
-                                    }
+                                  disabled={!isCustomHoliday || !canManageHolidays}
+                                  defaultValue={holidayOverrideTitle(officialHolidays, holidayOverrides, d.day)}
+                                  key={`holiday-title-${d.day}-${holidayOverrideTitle(officialHolidays, holidayOverrides, d.day)}`}
+                                  onBlur={(e) => {
+                                    const val = e.target.value.trim() || DEFAULT_CUSTOM_HOLIDAY_TITLE;
+                                    if (val === holidayOverrideTitle(officialHolidays, holidayOverrides, d.day)) return;
+                                    handleRenameHoliday(d.day, val);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') e.currentTarget.blur();
                                   }}
                                   className={`w-full text-[10px] px-2.5 py-1 rounded-lg border focus:outline-none transition-all ${
-                                    isCustomHoliday && role !== 'personnel'
+                                    isCustomHoliday && canManageHolidays
                                       ? 'bg-white border-rose-300 text-rose-800 font-black focus:border-rose-500'
                                       : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-75'
                                   }`}
@@ -5395,8 +5460,6 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-                  </div>
-                </details>
 
               </div>
 
@@ -5454,6 +5517,24 @@ export default function Home() {
                         />
                       </div>
                     </div>
+
+                    {canManageHolidays && (
+                      <div className="pt-4 border-t border-slate-200 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleApproveMonthlyDutyHours(z_calc, contract_calc)}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs px-4 py-3 rounded-xl transition-all shadow-sm cursor-pointer border border-indigo-700 font-sans"
+                          id="btn-approve-monthly-duty-hours"
+                        >
+                          تصویب نهایی ساعت موظفی مطابق تقویم برای ماه در حال نمایش
+                        </button>
+                        {monthlyDutyHours && (
+                          <div className="mt-2 text-[10px] font-bold text-indigo-700">
+                            ساعت موظفی این ماه تعیین مقطعی شده است: (رسمی {monthlyDutyHours.official}، قراردادی {monthlyDutyHours.contract}، طرح {monthlyDutyHours.conscript}، اضافه‌کار {monthlyDutyHours.overtime})
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
