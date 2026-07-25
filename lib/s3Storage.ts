@@ -443,7 +443,7 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
     versions[resourceVersionId(requestsResource)] = requests.etag;
     versions[resourceVersionId(settingsResource)] = settings.etag;
     versions[resourceVersionId(holidaysResource)] = holidays.etag;
-    versions[resourceVersionId(firstDayOfWeekResource)] = firstDayOfWeek.etag;
+    versions[resourceVersionId(firstDayResource)] = firstDayOfWeek.etag;
 
     // activeScenarios and scenarioVotes are optional granular docs — they may not exist for old departments
     const activeScenariosDoc = await readResourceIfExists(activeScenariosResource);
