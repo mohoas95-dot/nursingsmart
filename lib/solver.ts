@@ -1431,7 +1431,7 @@ export function solveNursingSchedule(
     }
   });
 
-  // 7. Select and Assign Shift Leaders — یک سرشیفت برای هر شیفت، نزدیک‌ترین به ابتدای لیست
+  // 7. Select and Assign Shift Leaders — یک سرشیفت برای هر شیفت عصر/شب، صبح فقط روزهای تعطیل، نزدیک‌ترین به ابتدای لیست
   const eligibleForLeader = (p: Personnel, shiftGroup: 'M' | 'E' | 'N', day: number) => {
     if (p.jobGroup !== 'nurse') return false;
     const s = assignments[p.id]?.[day];
@@ -1446,17 +1446,18 @@ export function solveNursingSchedule(
   };
 
   for (let d = 1; d <= totalDays; d++) {
-    // صبح: برای هر روز (تعطیل و عادی) یک سرشیفت انتخاب می‌شود، نزدیک‌ترین به ابتدای لیست
-    {
+    const isHolidayDay = calendar[d - 1].isHoliday;
+    // صبح: فقط روزهای تعطیل نیاز به سرشیفت دارد (درخواست کاربر: صبح روز غیرتعطیل 👑 ندارد)
+    if (isHolidayDay) {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'M', d)).sort(byOrder);
       if (candidates.length > 0) {
         shiftLeaders[d].morning = candidates[0].id;
       } else {
-        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز ${d}`);
+        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
       }
     }
 
-    // عصر
+    // عصر — یک سرشیفت کافی است، نزدیک‌ترین به ابتدای لیست
     {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'E', d)).sort(byOrder);
       if (candidates.length > 0) {
@@ -1577,6 +1578,7 @@ export function verifyCoverageAndLeaders(
     if (nAssignedNurse > demand.nightNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت N`);
 
     // انتخاب سرشیفت بر اساس نزدیک‌ترین به ابتدای لیست (orderIndex)
+    // صبح فقط روزهای تعطیل 👑 دارد (درخواست کاربر)
     const eligibleForLeaderVerify = (p: Personnel, shiftGroup: 'M' | 'E' | 'N') => {
       if (p.jobGroup !== 'nurse') return false;
       const s = assignments[p.id]?.[d];
@@ -1590,11 +1592,11 @@ export function verifyCoverageAndLeaders(
       return p.position === 'general' && p.canBeShiftLeader;
     };
 
-    // صبح — یک سرشیفت برای هر روز
-    {
+    // صبح — فقط روزهای تعطیل
+    if (isHoliday) {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'M'));
       if (candidates.length > 0) shiftLeaders[d].morning = candidates[0].id;
-      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز ${d}`);
+      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
     }
     // عصر
     {
