@@ -46,6 +46,22 @@ export {
   calculateMonthlyDutyHours,
 } from './calendar/duty-hours-calculator';
 
+export {
+  DEFAULT_CUSTOM_HOLIDAY_TITLE,
+  WORKING_DAY_OVERRIDE,
+  clearHolidayOverride,
+  diffHolidayOverrides,
+  holidayOverrideTitle,
+  holidaySource,
+  isEffectiveHoliday,
+  isWorkingDayOverride,
+  mergeHolidayOverrides,
+  setHolidayOverride,
+  toggleHolidayOverride,
+} from './calendar/holiday-overrides';
+
+export type { HolidayMap } from './calendar/holiday-overrides';
+
 // ============================================================================
 // Guards
 // ============================================================================
