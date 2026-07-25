@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { KeyRound, Loader2 } from 'lucide-react';
+import { KeyRound, Loader2, LogOut } from 'lucide-react';
 
 export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolean }) {
   const router = useRouter();
@@ -11,6 +11,25 @@ export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolea
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const handleCancel = async () => {
+    setError('');
+    setLoggingOut(true);
+    try {
+      const response = await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'خروج انجام نشد.');
+      router.replace('/login');
+      router.refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'خطا در خروج از حساب.');
+      setLoggingOut(false);
+    }
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -47,6 +66,10 @@ export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolea
       <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white hover:bg-indigo-700 disabled:opacity-60">
         {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
         {submitting ? 'در حال ثبت...' : 'ثبت رمز جدید و ادامه'}
+      </button>
+      <button type="button" onClick={handleCancel} disabled={loggingOut} className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-600 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-60">
+        {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+        {loggingOut ? 'در حال خروج...' : 'انصراف و خروج'}
       </button>
     </form>
   );
