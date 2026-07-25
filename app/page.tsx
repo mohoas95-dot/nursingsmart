@@ -52,7 +52,11 @@ import {
   findBestSubstitute,
   checkAndApplyAutoSubstitution
 } from '../lib/balanceChecker';
-import { generateSmartSuggestions } from '../lib/smartSuggestion';
+import {
+  generateSmartSuggestions
+} from '../lib/smartSuggestion';
+import { generateAndScoreScenarios } from '../lib/scenarioGenerator';
+import { ScoredSchedule } from '../lib/scoring';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
 import {
   DEFAULT_CUSTOM_HOLIDAY_TITLE,
@@ -70,6 +74,7 @@ import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/sc
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
+import { ScenariosModal } from '../features/scheduling/components/ScenariosModal';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
@@ -111,7 +116,8 @@ import {
   Menu,
   X,
   Settings2,
-  History
+  History,
+  Star
 } from 'lucide-react';
 
 // Department interface for multi-department management
@@ -303,6 +309,9 @@ export default function Home() {
 
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
+  const [scenarios, setScenarios] = useState<ScoredSchedule[] | null>(null);
+  const [showScenariosModal, setShowScenariosModal] = useState<boolean>(false);
+  const [pendingJobGroupForScenarios, setPendingJobGroupForScenarios] = useState<JobGroup | null>(null);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean, generalNurse: boolean, generalAssistant: boolean, generalOther: boolean}>({general: true, personnel: true, generalNurse: true, generalAssistant: true, generalOther: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
 
@@ -330,16 +339,6 @@ export default function Home() {
     }, 0);
   }, []);
 
-  // Compiled reports from current schedule dynamically and reactively
-  const reports = React.useMemo(() => {
-    if (schedule && personnel.length > 0 && settings) {
-      return generatePersonnelReports(currentYear, currentMonth, personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, effectiveDutyHours);
-    }
-    return [];
-  }, [personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
-
-  // solvingTarget now managed by useScheduleState hook
-
   // User Authentication & Roles
   // roles: 'admin' | 'headnurse' | 'personnel' | 'guest'
   const [role, setRole] = useState<'admin' | 'headnurse' | 'personnel' | 'guest'>('guest');
@@ -348,8 +347,26 @@ export default function Home() {
     return personnel.find(person => person.id === authenticatedUser.personnelId) || null;
   }, [authenticatedUser, personnel]);
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>('');
-  // فقط سرپرستار بخش و مدیر سامانه اجازه تعیین تعطیلات انتخابی را دارند.
+
   const canManageHolidays = role === 'headnurse' || role === 'admin';
+  
+  const monthKey = `${currentYear}_${currentMonth}`;
+  const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'];
+  const activeScenariosData = deptData?.activeScenarios?.[monthKey];
+  const scenarioVotes = deptData?.scenarioVotes?.[monthKey] || {};
+
+  const [viewingScenarioIndex, setViewingScenarioIndex] = useState<number>(0);
+  const isVotingMode = !!(activeScenariosData && activeScenariosData.scenarios && activeScenariosData.scenarios.length > 0);
+  const currentScenario = isVotingMode ? activeScenariosData.scenarios[viewingScenarioIndex] : null;
+  const displayedSchedule = isVotingMode ? currentScenario.schedule : schedule;
+
+  // Compiled reports from current schedule dynamically and reactively
+  const reports = React.useMemo(() => {
+    if (displayedSchedule && personnel.length > 0 && settings) {
+      return generatePersonnelReports(currentYear, currentMonth, personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, effectiveDutyHours);
+    }
+    return [];
+  }, [personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
   // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
@@ -1068,9 +1085,9 @@ export default function Home() {
   };
 
   const getVisibleWarnings = () => {
-    if (!schedule) return [];
+    if (!displayedSchedule) return [];
     // هشدارهایی که نه در dismissedWarnings هستند و نه در dismissedAlertWarnings
-    const visible = filterActiveWarnings(schedule.warnings, dismissedWarnings)
+    const visible = filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
     return visible;
   };
@@ -1100,10 +1117,10 @@ export default function Home() {
   };
 
   const visibleWarnings = React.useMemo(() => {
-    if (!schedule) return [];
-    return filterActiveWarnings(schedule.warnings, dismissedWarnings)
+    if (!displayedSchedule) return [];
+    return filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
-  }, [schedule, dismissedWarnings, dismissedAlertWarnings]);
+  }, [displayedSchedule, dismissedWarnings, dismissedAlertWarnings]);
 
   const aggregatedAlerts = React.useMemo<AggregatedAlert[]>(() => {
     return aggregateWarnings(visibleWarnings, personnel);
@@ -1111,25 +1128,25 @@ export default function Home() {
 
   // تمام هشدارها (شامل نادیده‌گرفته‌شده‌ها) برای پنجره هشدار
   const allAlertsForDialog = React.useMemo<AggregatedAlert[]>(() => {
-    if (!schedule) return [];
+    if (!displayedSchedule) return [];
     // فقط dismissedWarnings (ذخیره‌شده در دیتابیس) فیلتر شوند، نه dismissedAlertWarnings
-    const warningsForDialog = filterActiveWarnings(schedule.warnings, dismissedWarnings);
+    const warningsForDialog = filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings);
     return aggregateWarnings(warningsForDialog, personnel);
-  }, [schedule, dismissedWarnings, personnel]);
+  }, [displayedSchedule, dismissedWarnings, personnel]);
 
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
-    if (!schedule) return [];
+    if (!displayedSchedule) return [];
     return generateSmartSuggestions(
       currentYear,
       currentMonth,
       personnel,
       requests,
-      schedule.assignments,
+      displayedSchedule.assignments,
       visibleWarnings,
       customHolidays,
       firstDayOfWeekIndex
     );
-  }, [schedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
+  }, [displayedSchedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
 
   // UI Tabs & Active View
   const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'profile'>('schedule');
@@ -1571,7 +1588,88 @@ export default function Home() {
     const optimizerFirstDay = firstDayRef.current;
     const optimizerDutyHours = monthlyDutyHoursRef.current;
 
-    // Persistence adapter: bridges Facade to legacy saveDbState
+    // -------------------------------------------------------------
+    // Scenario Generation Phase (New Feature)
+    // -------------------------------------------------------------
+    setSolvingTarget(jobGroup);
+    
+    // Allow UI to render loading state
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    try {
+      const { top3 } = generateAndScoreScenarios(
+        currentYear,
+        currentMonth,
+        optimizerPersonnel,
+        optimizerRequests,
+        optimizerSettings,
+        optimizerHolidays,
+        optimizerFirstDay === -1 ? undefined : optimizerFirstDay,
+        optimizerDutyHours,
+        jobGroup
+      );
+
+      // Persist generated scenarios into the DB so all personnel can see and vote on them
+      const nextDb = getFreshDbCopy();
+      if (!nextDb.deptData) nextDb.deptData = {};
+      const oldDept = nextDb.deptData[deptId] || {
+        personnel: [],
+        requests: [],
+        settings_system: INITIAL_SETTINGS,
+        settings_credentials: { username: 'headnurse', password: '123456' },
+        holidays: {},
+        firstDayOfWeek: {},
+        schedules: {},
+      };
+
+      const monthKey = `${currentYear}_${currentMonth}`;
+      
+      const updatedDept = {
+        ...oldDept,
+        activeScenarios: {
+          ...(oldDept.activeScenarios || {}),
+          [monthKey]: {
+            scenarios: top3,
+            targetJobGroup: jobGroup
+          }
+        },
+        scenarioVotes: {
+          ...(oldDept.scenarioVotes || {}),
+          [monthKey]: {} // Reset votes for this month
+        }
+      };
+
+      nextDb.deptData[deptId] = updatedDept;
+      await saveDbState(nextDb);
+
+      setSolvingTarget(null);
+      return;
+    } catch (err) {
+      console.error(err);
+      alert('خطا در تولید سناریوها');
+      setSolvingTarget(null);
+      return;
+    }
+  };
+
+  const handleApplyScenario = async (selectedScenario: ScoredSchedule) => {
+    setShowScenariosModal(false);
+    
+    // Instead of using pendingJobGroupForScenarios from local state which might be empty if modal closed,
+    // read it from DB:
+    const activeScenariosData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr']?.activeScenarios?.[`${currentYear}_${currentMonth}`];
+    const jobGroup = activeScenariosData?.targetJobGroup || pendingJobGroupForScenarios;
+    if (!jobGroup) return;
+
+    const deptId = selectedDepartmentId || 'sepehr';
+    const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
+    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const optimizerPersonnel = personnelRef.current;
+    const optimizerRequests = requestsRef.current;
+    const optimizerHolidays = holidaysRef.current;
+    const optimizerFirstDay = firstDayRef.current;
+    const optimizerDutyHours = monthlyDutyHoursRef.current;
+
     const persistenceAdapter: SchedulePersistence = {
       saveSchedule: async (newSchedule: any) => {
         const nextDb = getFreshDbCopy();
@@ -1594,20 +1692,45 @@ export default function Home() {
             [`${currentYear}_${currentMonth}`]: newSchedule,
           },
         };
+        
+        // Remove active scenarios after finalization
+        if (updatedDept.activeScenarios) {
+            delete updatedDept.activeScenarios[`${currentYear}_${currentMonth}`];
+        }
 
         nextDb.deptData[deptId] = updatedDept;
+
+        // Auto-lock the schedule for this job group so it shows up as "Finalized" for everyone
+        if (jobGroup === 'nurse') {
+          if (!nextDb.lockState) nextDb.lockState = { finalizedNursesMonths: [], finalizedAssistantsMonths: [], requestsLockedMonths: [] };
+          if (!nextDb.lockState.finalizedNursesMonths) nextDb.lockState.finalizedNursesMonths = [];
+          if (!nextDb.lockState.finalizedNursesMonths.includes(`${currentYear}_${currentMonth}`)) {
+            nextDb.lockState.finalizedNursesMonths.push(`${currentYear}_${currentMonth}`);
+          }
+        } else if (jobGroup === 'assistant') {
+          if (!nextDb.lockState) nextDb.lockState = { finalizedNursesMonths: [], finalizedAssistantsMonths: [], requestsLockedMonths: [] };
+          if (!nextDb.lockState.finalizedAssistantsMonths) nextDb.lockState.finalizedAssistantsMonths = [];
+          if (!nextDb.lockState.finalizedAssistantsMonths.includes(`${currentYear}_${currentMonth}`)) {
+            nextDb.lockState.finalizedAssistantsMonths.push(`${currentYear}_${currentMonth}`);
+          }
+        }
+
         await saveDbState(nextDb);
       },
     };
 
-    // UI adapter: bridges Facade to React state
     const uiAdapter: ScheduleUIFeedback = {
       setSolvingTarget: (target) => setSolvingTarget(target as JobGroup | null),
       showConfirmation: (message) => confirm(message),
       showError: (message) => console.error('Optimizer error:', message),
     };
 
-    // Call Facade
+    // Override the solver to just return the selected scenario's assignments
+    const mockSolver = (y: any, m: any, p: any, req: any, set: any, h: any, fd: any, mdh: any) => {
+      const baseResult = solveWithPriority(y, m, p, req, set, h, fd, mdh);
+      return { assignments: selectedScenario.schedule.assignments, warnings: baseResult.warnings };
+    };
+
     const result = await runOptimizerFacade(
       {
         jobGroup,
@@ -1627,17 +1750,52 @@ export default function Home() {
         },
         dismissedWarnings,
       },
-      solveWithPriority,
+      mockSolver,
       verifyCoverageAndLeaders,
       persistenceAdapter,
       uiAdapter,
       deptId,
-      { delayMs: 1500 }
+      { delayMs: 500 }
     );
 
     if (!result.success && result.error) {
-      alert('خطا در اجرای بهینه‌ساز: ' + result.error);
+      alert('خطا در اعمال برنامه: ' + result.error);
     }
+  };
+
+  const handleVoteScenario = async (scenarioId: number, rating: number) => {
+    if (!authenticatedUser || !authenticatedUser.id) return;
+    // We use authenticatedUser.id or authenticatedUser.personnelId. 
+    // Wait, the requirement says "هر نفر در پنل خود بتواند... رای دهد." So personnelId or headnurse id.
+    const userId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser.id || 'headnurse');
+    
+    const deptId = selectedDepartmentId || 'sepehr';
+    const nextDb = getFreshDbCopy();
+    if (!nextDb.deptData) nextDb.deptData = {};
+    const oldDept = nextDb.deptData[deptId];
+    if (!oldDept) return;
+
+    const monthKey = `${currentYear}_${currentMonth}`;
+    const oldVotes = oldDept.scenarioVotes || {};
+    const currentMonthVotes = oldVotes[monthKey] || {};
+    const currentScenarioVotes = currentMonthVotes[scenarioId] || {};
+
+    const updatedDept = {
+      ...oldDept,
+      scenarioVotes: {
+        ...oldVotes,
+        [monthKey]: {
+          ...currentMonthVotes,
+          [scenarioId]: {
+            ...currentScenarioVotes,
+            [userId]: rating
+          }
+        }
+      }
+    };
+
+    nextDb.deptData[deptId] = updatedDept;
+    await saveDbState(nextDb);
   };
 
   const handleToggleLock = async (jobGroup: JobGroup) => {
@@ -3707,9 +3865,69 @@ export default function Home() {
           {activeTab === 'schedule' && (
             <div className="space-y-6">
 
+              {isVotingMode && currentScenario && (
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
+                  <div className="flex flex-col md:flex-row items-center justify-between w-full gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="bg-amber-100 p-3 rounded-full">
+                        <Star className="w-8 h-8 text-amber-500 fill-amber-500 animate-pulse" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-black text-amber-900 mb-1">برنامه‌های هوشمند منتظر رای و تایید شما هستند!</h3>
+                        <p className="text-xs font-bold text-amber-700">
+                          {role === 'headnurse' || role === 'admin' 
+                            ? 'پرسنل در حال ثبت رای برای ۳ برنامه تولید شده هستند. می‌توانید نتایج را ببینید و برنامه نهایی را تایید کنید.'
+                            : 'سرپرستار ۳ برنامه مختلف (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
+                        </p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setShowScenariosModal(true)}
+                      className="w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
+                    >
+                      مشاهده برنامه‌ها و ثبت رای
+                    </button>
+                  </div>
+                  
+                  <div className="w-full mt-4 pt-4 border-t border-amber-200 flex items-center justify-between">
+                    <button 
+                      onClick={() => setViewingScenarioIndex(prev => (prev < 2 ? prev + 1 : 0))}
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-amber-700 text-xs font-bold border border-amber-300 transition-all"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                      برنامه بعدی
+                    </button>
+                    <div className="text-center flex flex-col items-center">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-amber-900 font-black text-sm">
+                          در حال نمایش: {currentScenario.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenario.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
+                        </h4>
+                        {currentScenario.type === 'MIXED' && (
+                          <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">
+                            پیشنهادی
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-amber-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-amber-900" dir="ltr">{currentScenario.totalScore.toFixed(0)}/100</span> | برای تایید و ثبت رای روی دکمه نارنجی کلیک کنید</p>
+                    </div>
+                    <button 
+                      onClick={() => setViewingScenarioIndex(prev => (prev > 0 ? prev - 1 : 2))}
+                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-amber-700 text-xs font-bold border border-amber-300 transition-all"
+                    >
+                      برنامه قبلی
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4 print:hidden">
                 <div className="flex items-center gap-3">
-                  <h3 className="font-extrabold text-slate-800 text-sm">لیست شیفت‌های ماهانه</h3>
+                  <h3 className="font-extrabold text-slate-800 text-sm">
+                    {role === 'personnel' && (finalizedNursesMonths.includes(`${currentYear}_${currentMonth}`) || finalizedAssistantsMonths.includes(`${currentYear}_${currentMonth}`))
+                      ? 'لیست نهایی تایید شده شیفت‌های ماهانه'
+                      : 'لیست شیفت‌های ماهانه'}
+                  </h3>
                   <p className="text-slate-400 text-xs font-semibold">تعداد روزها: {calendarDays.length} روز / {calendarDays.filter(c => c.isHoliday).length} روز تعطیلات</p>
                 </div>
 
@@ -3791,12 +4009,6 @@ export default function Home() {
 
                       {personnel
                         .filter(p => p.active)
-                        .filter(p => {
-                          if (role === 'personnel' && selectedPersonnelUser) {
-                            return p.id === selectedPersonnelUser.id;
-                          }
-                          return true;
-                        })
                         .map(p => {
                           const pAssignments = schedule?.assignments[p.id] || {};
                           const report = reports.find(r => r.personnelId === p.id);
@@ -5620,6 +5832,17 @@ export default function Home() {
 
         </div>
       </main>
+
+      <ScenariosModal
+        isOpen={showScenariosModal}
+        scenarios={activeScenariosData?.scenarios || scenarios}
+        votes={scenarioVotes}
+        currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
+        userRole={role}
+        onApply={handleApplyScenario}
+        onVote={handleVoteScenario}
+        onClose={() => setShowScenariosModal(false)}
+      />
 
       <DeleteConfirmModal
         isOpen={!!deleteTarget}
