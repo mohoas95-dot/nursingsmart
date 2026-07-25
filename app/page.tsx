@@ -694,6 +694,8 @@ export default function Home() {
       case 'holidays': return `department:${resource.departmentId}:holidays`;
       case 'firstDayOfWeek': return `department:${resource.departmentId}:firstDayOfWeek`;
       case 'schedule': return `department:${resource.departmentId}:schedule:${resource.monthKey}`;
+      case 'activeScenarios': return `department:${resource.departmentId}:activeScenarios`;
+      case 'scenarioVotes': return `department:${resource.departmentId}:scenarioVotes`;
     }
   };
 
@@ -730,6 +732,8 @@ export default function Home() {
         },
         { resource: { type: 'holidays', departmentId }, before: before?.holidays, after: after.holidays },
         { resource: { type: 'firstDayOfWeek', departmentId }, before: before?.firstDayOfWeek, after: after.firstDayOfWeek },
+        { resource: { type: 'activeScenarios', departmentId }, before: (before as any)?.activeScenarios, after: (after as any)?.activeScenarios },
+        { resource: { type: 'scenarioVotes', departmentId }, before: (before as any)?.scenarioVotes, after: (after as any)?.scenarioVotes },
       ];
 
       for (const item of resources) {
@@ -856,7 +860,7 @@ export default function Home() {
 
   const readCommittedResourceValue = (snapshot: AppDatabaseState, resource: StorageResource): unknown => {
     if (resource.type === 'departments') return snapshot.departments;
-    const dept = snapshot.deptData[resource.departmentId];
+    const dept = snapshot.deptData[resource.departmentId] as any;
     if (!dept) return undefined;
     switch (resource.type) {
       case 'personnel': return dept.personnel;
@@ -869,6 +873,8 @@ export default function Home() {
       case 'holidays': return dept.holidays;
       case 'firstDayOfWeek': return dept.firstDayOfWeek;
       case 'schedule': return dept.schedules?.[resource.monthKey];
+      case 'activeScenarios': return dept.activeScenarios;
+      case 'scenarioVotes': return dept.scenarioVotes;
     }
   };
 
@@ -880,7 +886,7 @@ export default function Home() {
       next.departments = mutation.data as AppDatabaseState['departments'];
       return next;
     }
-    const dept = next.deptData[resource.departmentId];
+    const dept = next.deptData[resource.departmentId] as any;
     if (!dept) throw new Error(`داده بخش ${resource.departmentId} وجود ندارد.`);
     switch (resource.type) {
       case 'personnel': dept.personnel = mutation.data as typeof dept.personnel; break;
@@ -895,6 +901,8 @@ export default function Home() {
       case 'holidays': dept.holidays = mutation.data as typeof dept.holidays; break;
       case 'firstDayOfWeek': dept.firstDayOfWeek = mutation.data as typeof dept.firstDayOfWeek; break;
       case 'schedule': dept.schedules = { ...dept.schedules, [resource.monthKey]: mutation.data as typeof dept.schedules[string] }; break;
+      case 'activeScenarios': dept.activeScenarios = mutation.data as any; break;
+      case 'scenarioVotes': dept.scenarioVotes = mutation.data as any; break;
     }
     return next;
   };
@@ -4188,112 +4196,112 @@ export default function Home() {
             <div className="space-y-6">
 
               {/* Requirement 1 & 2: کادرهای جداگانه رای‌گیری پرستاران و کمک‌بهیاران */}
-              {/* پرستاران — مینیمال اما رنگی و هماهنگ با UI */}
+              {/* پرستاران — بولد، زنده، حرفه‌ای */}
               {(isVotingModeNurse && currentScenarioNurse && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse'))) && (
-                <div className="relative bg-gradient-to-r from-indigo-50 to-blue-50 border-2 border-indigo-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
-                  {(role === 'headnurse' || role === 'admin') && (
-                    <button
-                      onClick={() => handleCancelVoting('nurse')}
-                      title="لغو رای‌گیری"
-                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-white/70 hover:bg-rose-50 text-indigo-400 hover:text-rose-600 rounded-full border border-indigo-200 hover:border-rose-200 transition-all"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
+                <div className="relative bg-gradient-to-r from-indigo-50 via-blue-50 to-indigo-100 border-2 border-indigo-300 rounded-2xl p-5 shadow-md flex flex-col gap-3 print:hidden">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-indigo-100 border border-indigo-200 p-2.5 rounded-xl">
-                        <Star className="w-5 h-5 text-indigo-600 fill-indigo-200" />
+                    <div className="flex items-center gap-3.5">
+                      <div className="bg-white border-2 border-indigo-200 p-3 rounded-2xl shadow-sm">
+                        <Star className="w-6 h-6 text-amber-400 fill-amber-400" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-black text-indigo-900">۳ لیست پیشنهادی</h3>
-                          <span className="text-[10px] font-bold bg-white text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">پرستاران</span>
+                        <div className="flex items-center gap-2.5">
+                          <h3 className="text-[15px] font-black text-indigo-900 tracking-tight">۳ لیست پیشنهادی</h3>
+                          <span className="text-[11px] font-black bg-indigo-600 text-white border border-indigo-600 px-2.5 py-1 rounded-full shadow-sm">پرستاران</span>
                         </div>
-                        <p className="text-[11px] text-indigo-700/70 font-bold mt-0.5">
-                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای' : 'برای انتخاب نهایی رای دهید'}
+                        <p className="text-[12px] text-indigo-800 font-bold mt-1">
+                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای شما' : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {(role === 'headnurse' || role === 'admin') && (
+                        <button
+                          onClick={() => handleCancelVoting('nurse')}
+                          title="لغو رای‌گیری"
+                          className="w-9 h-9 flex items-center justify-center bg-white hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-xl border-2 border-slate-200 hover:border-rose-200 shadow-sm transition-all"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
                       <button 
                         onClick={() => setViewingScenarioIndexNurse(prev => (prev < 2 ? prev + 1 : 0))}
-                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-indigo-200 rounded-lg text-indigo-600"
+                        className="w-9 h-9 flex items-center justify-center bg-white hover:bg-indigo-50 border-2 border-indigo-200 rounded-xl text-indigo-700 shadow-sm transition-all"
                       >
-                        <ChevronRight className="w-4 h-4" />
+                        <ChevronRight className="w-5 h-5" />
                       </button>
                       <button 
                         onClick={() => { setModalTargetJobGroup('nurse'); setPendingJobGroupForScenarios('nurse'); setShowScenariosModal(true); }}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black px-4 py-2 rounded-xl shadow-md transition-all"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-[13px] font-black px-5 py-2.5 rounded-xl shadow-lg shadow-indigo-200 transition-all"
                       >
                         مشاهده و رای
                       </button>
                       <button 
                         onClick={() => setViewingScenarioIndexNurse(prev => (prev > 0 ? prev - 1 : 2))}
-                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-indigo-200 rounded-lg text-indigo-600"
+                        className="w-9 h-9 flex items-center justify-center bg-white hover:bg-indigo-50 border-2 border-indigo-200 rounded-xl text-indigo-700 shadow-sm transition-all"
                       >
-                        <ChevronLeft className="w-4 h-4" />
+                        <ChevronLeft className="w-5 h-5" />
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] font-bold bg-white/70 border border-indigo-100 rounded-xl px-3 py-2">
-                    <span className="text-indigo-800">{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
-                    <span className="font-mono text-indigo-700">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}</span>
+                  <div className="flex items-center justify-between text-[12px] font-black bg-white border-2 border-indigo-100 rounded-xl px-4 py-2.5 shadow-sm">
+                    <span className="text-indigo-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}</span>
                   </div>
                 </div>
               )}
 
-              {/* کمک‌بهیاران — مینیمال اما رنگی */}
+              {/* کمک‌بهیاران — بولد، زنده */}
               {(isVotingModeAssistant && currentScenarioAssistant && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant'))) && (
-                <div className="relative bg-gradient-to-r from-teal-50 to-emerald-50 border-2 border-teal-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
-                  {(role === 'headnurse' || role === 'admin') && (
-                    <button
-                      onClick={() => handleCancelVoting('assistant')}
-                      title="لغو رای‌گیری"
-                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-white/70 hover:bg-rose-50 text-teal-500 hover:text-rose-600 rounded-full border border-teal-200 hover:border-rose-200 transition-all"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
+                <div className="relative bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-100 border-2 border-teal-300 rounded-2xl p-5 shadow-md flex flex-col gap-3 print:hidden">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-teal-100 border border-teal-200 p-2.5 rounded-xl">
-                        <Star className="w-5 h-5 text-teal-700 fill-teal-100" />
+                    <div className="flex items-center gap-3.5">
+                      <div className="bg-white border-2 border-teal-200 p-3 rounded-2xl shadow-sm">
+                        <Star className="w-6 h-6 text-amber-400 fill-amber-400" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-black text-teal-900">۳ لیست پیشنهادی</h3>
-                          <span className="text-[10px] font-bold bg-white text-teal-700 border border-teal-200 px-2 py-0.5 rounded-full">کمک‌بهیاران</span>
+                        <div className="flex items-center gap-2.5">
+                          <h3 className="text-[15px] font-black text-teal-900 tracking-tight">۳ لیست پیشنهادی</h3>
+                          <span className="text-[11px] font-black bg-teal-600 text-white border border-teal-600 px-2.5 py-1 rounded-full shadow-sm">کمک‌بهیاران</span>
                         </div>
-                        <p className="text-[11px] text-teal-700/70 font-bold mt-0.5">
-                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای' : 'برای انتخاب نهایی رای دهید'}
+                        <p className="text-[12px] text-teal-800 font-bold mt-1">
+                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای شما' : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {(role === 'headnurse' || role === 'admin') && (
+                        <button
+                          onClick={() => handleCancelVoting('assistant')}
+                          title="لغو رای‌گیری"
+                          className="w-9 h-9 flex items-center justify-center bg-white hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-xl border-2 border-slate-200 hover:border-rose-200 shadow-sm transition-all"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
                       <button 
                         onClick={() => setViewingScenarioIndexAssistant(prev => (prev < 2 ? prev + 1 : 0))}
-                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-teal-200 rounded-lg text-teal-700"
+                        className="w-9 h-9 flex items-center justify-center bg-white hover:bg-teal-50 border-2 border-teal-200 rounded-xl text-teal-700 shadow-sm transition-all"
                       >
-                        <ChevronRight className="w-4 h-4" />
+                        <ChevronRight className="w-5 h-5" />
                       </button>
                       <button 
                         onClick={() => { setModalTargetJobGroup('assistant'); setPendingJobGroupForScenarios('assistant'); setShowScenariosModal(true); }}
-                        className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-black px-4 py-2 rounded-xl shadow-md transition-all"
+                        className="bg-teal-600 hover:bg-teal-700 text-white text-[13px] font-black px-5 py-2.5 rounded-xl shadow-lg shadow-teal-200 transition-all"
                       >
                         مشاهده و رای
                       </button>
                       <button 
                         onClick={() => setViewingScenarioIndexAssistant(prev => (prev > 0 ? prev - 1 : 2))}
-                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-teal-200 rounded-lg text-teal-700"
+                        className="w-9 h-9 flex items-center justify-center bg-white hover:bg-teal-50 border-2 border-teal-200 rounded-xl text-teal-700 shadow-sm transition-all"
                       >
-                        <ChevronLeft className="w-4 h-4" />
+                        <ChevronLeft className="w-5 h-5" />
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] font-bold bg-white/70 border border-teal-100 rounded-xl px-3 py-2">
-                    <span className="text-teal-800">{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
-                    <span className="font-mono text-teal-700">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}</span>
+                  <div className="flex items-center justify-between text-[12px] font-black bg-white border-2 border-teal-100 rounded-xl px-4 py-2.5 shadow-sm">
+                    <span className="text-teal-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="font-mono text-teal-700 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}</span>
                   </div>
                 </div>
               )}
