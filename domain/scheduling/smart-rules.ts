@@ -4,12 +4,21 @@
  * قوانین هوشمند بازتولید برنامه پرستاران و کمک‌بهیاران.
  *
  * RESPONSIBILITY:
- *   1. سقف کارکرد متوالی: مجموع واحدهای شیفت پشت‌سرهم هرگز نباید از ۵ بیشتر شود.
- *      وزن هر روز: ‏M = 1، ‏E = 1، ‏N = 2 — بنابراین ME = 2، ‏EN = 3، ‏MN = 3، ‏MEN = 4.
- *      مثال: شیفت MEN (۴ واحد) و فردای آن ME (۲ واحد) = ۶ واحد → غیرمجاز.
- *   2. استراحت اجباری: بلافاصله پس از رسیدن زنجیره متوالی به ۵ واحد، روز بعد باید
- *      استراحت (آف یا مرخصی) باشد. این قانون به‌صورت ذاتی از قانون ۱ نتیجه می‌شود،
- *      چون ادامه کارکردن مجموع را بیشتر از ۵ می‌کند.
+ *   1. سقف ۵ شیفت متوالی: هر روز سه جایگاه زمانی به ترتیب دارد (صبح M، عصر E، شب N)
+ *      و دنبالهٔ زمانیِ حضور به‌صورت …M,E,N,M,E,N… در نظر گرفته می‌شود. «شیفت متوالی»
+ *      یعنی جایگاه‌های کاریِ پشت‌سرهم بدون هیچ جایگاه خالی بینشان:
+ *        - E بعد از M (در همان روز)، N بعد از E (در همان روز)،
+ *        - و Mِ روز بعد پس از Nِ دیشب (در مرز دو روز).
+ *      رسیدن به ۵ جایگاه کاریِ متوالیِ پشت‌سرهم ممنوع است (حداکثر مجاز ۴ است).
+ *      نکتهٔ کلیدی: وجود حتی یک جایگاه خالی، زنجیره را قطع می‌کند. بنابراین پنج روز
+ *      که هر کدام فقط M باشد متوالی محسوب نمی‌شود، چون بین دو M یک E و یک Nِ خالی
+ *      وجود دارد. مثال‌ها:
+ *        - MEN (روز ۱) + M (روز ۲) = M,E,N,M → ۴ شیفت متوالی → مجاز.
+ *        - MEN (روز ۱) + ME (روز ۲) = M,E,N,M,E → ۵ شیفت متوالی → ممنوع.
+ *        - MN در یک روز = M و N با جای خالیِ E بینشان → دو زنجیرهٔ جداگانهٔ ۱تایی.
+ *   2. استراحت اجباری: بلافاصله پس از رسیدن زنجیرهٔ متوالی به ۴ شیفت (سقف مجاز)،
+ *      هر شیفت کاریِ دیگری زنجیره را به ۵ می‌رساند و ممنوع است؛ پس عملاً یک استراحت
+ *      (آف یا مرخصی) لازم می‌شود. این قانون به‌صورت ذاتی از قانون ۱ نتیجه می‌شود.
  *   3. ممنوعیت شیفت تک‌تک: قرار گرفتن یک شیفت تک‌مؤلفه (به‌ویژه عصر/E) میان
  *      روزهای کاری با مؤلفه متفاوت غیرمجاز است؛ چیدمان باید الگوی پیوسته داشته باشد
  *      و به تگ روتین کاری هر نفر احترام بگذارد.
@@ -26,66 +35,128 @@ export type AssignmentMap = Readonly<Record<string, Readonly<Record<number, Shif
 // ============================================================================
 // قانون ۱ و ۲: سقف ۵ شیفت متوالی و استراحت اجباری
 // ============================================================================
+//
+// مدل صحیح «شیفت متوالی» (اسلات‌محور):
+//   هر روز سه جایگاه زمانیِ مرتب دارد: صبح (M)، عصر (E)، شب (N). دنبالهٔ زمانیِ حضور
+//   به‌صورت یک خطِ پیوسته در نظر گرفته می‌شود:
+//     روز۱.M ، روز۱.E ، روز۱.N ، روز۲.M ، روز۲.E ، روز۲.N ، …
+//   یک جایگاه «کاری» است اگر شیفتِ آن روز شامل آن مؤلفه باشد. «زنجیرهٔ متوالی» یعنی
+//   بزرگ‌ترین بلوکِ جایگاه‌های کاریِ پشت‌سرهم در این خط، به‌شرطی که هیچ جایگاه خالی
+//   بینشان نباشد. رسیدن به ۵ جایگاه کاریِ متوالی ممنوع است (حداکثر مجاز ۴ است).
+//
+//   در نتیجه:
+//     - E بعد از M و N بعد از E (در یک روز) و Mِ فردا پس از Nِ دیشب، متوالی‌اند.
+//     - هر جایگاه خالی (مثلاً E یا Nِ خالی بین دو M در دو روز پیاپی) زنجیره را قطع
+//       می‌کند؛ پس پنج روز فقط M، پنج زنجیرهٔ جداگانهٔ ۱تایی است و متوالی محسوب نمی‌شود.
 
-/** سقف مجموع واحدهای شیفت پشت‌سرهم. */
-export const MAX_CONSECUTIVE_SHIFT_UNITS = 5;
+/** حداکثر تعداد شیفت متوالیِ مجاز؛ رسیدن به ۵ شیفت متوالی ممنوع است. */
+export const MAX_CONSECUTIVE_SHIFTS = 4;
 
-/** وزن هر شیفت بر اساس قانون: M = 1، E = 1، N = 2. */
-export const SHIFT_SEQUENCE_WEIGHT: Readonly<Record<string, number>> = {
-  M: 1,
-  E: 1,
-  N: 2,
-  ME: 2,
-  EN: 3,
-  MN: 3,
-  MEN: 4,
-  OFF: 0,
-};
+/** ترتیب جایگاه‌های زمانی هر روز که مبنای شمارش شیفت متوالی است. */
+const DAY_PERIODS = ['M', 'E', 'N'] as const;
+type DayPeriod = (typeof DAY_PERIODS)[number];
 
 /** آیا این شیفت یک روز کاری است؟ (آف و مرخصی روز کاری محسوب نمی‌شوند.) */
 export function isWorkShift(shift: ShiftType | undefined): boolean {
   return !!shift && shift !== 'OFF' && !shift.startsWith('L');
 }
 
-/** وزن زنجیره‌ای یک شیفت؛ برای آف و مرخصی صفر است. */
-export function getShiftWeight(shift: ShiftType | undefined): number {
-  if (!isWorkShift(shift)) return 0;
-  return SHIFT_SEQUENCE_WEIGHT[shift as string] ?? 0;
+/** اندیسِ خطیِ یک جایگاه زمانی در دنبالهٔ سراسری ماه (هر روز ۳ جایگاه دارد). */
+function slotIndex(day: number, periodIndex: number): number {
+  return (day - 1) * DAY_PERIODS.length + periodIndex;
 }
 
 /**
- * مجموع واحدهای زنجیره کاری متوالی حول یک روز مشخص با احتساب یک تخصیص فرضی.
- * زنجیره از هر دو سو تا رسیدن به روز غیرکاری (آف/مرخصی) ادامه می‌یابد.
+ * آیا پرسنل در جایگاه زمانیِ مشخصِ یک روز حضور دارد؟
+ * اگر روز با overrideDay مطابقت کند، شیفت فرضیِ overrideShift به‌جای تخصیص واقعی
+ * همان روز در نظر گرفته می‌شود (برای ارزیابی پیش‌نگر هنگام ساخت برنامه).
  */
-export function getRunWeightAroundDay(
+function isSlotWorked(
   assignments: AssignmentMap,
   personnelId: string,
   day: number,
-  totalDays: number,
+  periodIndex: number,
+  overrideDay?: number,
   overrideShift?: ShiftType
-): number {
-  const resolve = (d: number): ShiftType | undefined =>
-    d === day && overrideShift !== undefined ? overrideShift : assignments[personnelId]?.[d];
+): boolean {
+  const shift =
+    day === overrideDay && overrideShift !== undefined
+      ? overrideShift
+      : assignments[personnelId]?.[day];
+  return shiftContainsComponent(shift, DAY_PERIODS[periodIndex]);
+}
 
-  let weight = getShiftWeight(resolve(day));
+export interface ConsecutiveRunSummary {
+  /** اولین روز زنجیره. */
+  startDay: number;
+  /** آخرین روز زنجیره. */
+  endDay: number;
+  /** اولین دورهٔ کاری زنجیره (M/E/N). */
+  startPeriod: DayPeriod;
+  /** آخرین دورهٔ کاری زنجیره (M/E/N). */
+  endPeriod: DayPeriod;
+  /** تعداد شیفت‌های متوالی (جایگاه‌های کاریِ پشت‌سرهم) در این زنجیره. */
+  length: number;
+}
 
-  for (let d = day - 1; d >= 1; d--) {
-    const w = getShiftWeight(assignments[personnelId]?.[d]);
-    if (w === 0) break;
-    weight += w;
-  }
-  for (let d = day + 1; d <= totalDays; d++) {
-    const w = getShiftWeight(assignments[personnelId]?.[d]);
-    if (w === 0) break;
-    weight += w;
-  }
-  return weight;
+/** خلاصهٔ یک زنجیره از روی اندیس شروع و پایانِ جایگاه‌ها می‌سازد. */
+function buildRunSummary(startSlot: number, endSlot: number): ConsecutiveRunSummary {
+  return {
+    startDay: Math.floor(startSlot / DAY_PERIODS.length) + 1,
+    endDay: Math.floor(endSlot / DAY_PERIODS.length) + 1,
+    startPeriod: DAY_PERIODS[startSlot % DAY_PERIODS.length],
+    endPeriod: DAY_PERIODS[endSlot % DAY_PERIODS.length],
+    length: endSlot - startSlot + 1,
+  };
 }
 
 /**
- * آیا تخصیص candidateShift در روز day، زنجیره متوالی را از سقف ۵ واحد عبور می‌دهد؟
- * اگر زنجیره قبلی دقیقاً ۵ واحد باشد، هر شیفت کاری جدید نقض محسوب می‌شود و عملاً
- * «استراحت اجباری پس از ۵ شیفت» را هم اعمال می‌کند.
+ * تمام زنجیره‌های کاری متوالی پرسنل در ماه (برای تحلیل و هشدار).
+ * زنجیره = بزرگ‌ترین بلوکِ جایگاه‌های کاریِ پشت‌سرهم در دنبالهٔ M,E,N,M,E,N,…
+ * هر جایگاه خالی (آف/مرخصی یا مؤلفهٔ کارنشده) زنجیره را قطع می‌کند.
+ */
+export function findConsecutiveRuns(
+  assignments: AssignmentMap,
+  personnelId: string,
+  totalDays: number,
+  overrideDay?: number,
+  overrideShift?: ShiftType
+): ConsecutiveRunSummary[] {
+  const runs: ConsecutiveRunSummary[] = [];
+  const totalSlots = totalDays * DAY_PERIODS.length;
+  let runStart = -1;
+
+  for (let slot = 0; slot < totalSlots; slot++) {
+    const day = Math.floor(slot / DAY_PERIODS.length) + 1;
+    const periodIndex = slot % DAY_PERIODS.length;
+    const worked = isSlotWorked(assignments, personnelId, day, periodIndex, overrideDay, overrideShift);
+    if (worked) {
+      if (runStart === -1) runStart = slot;
+    } else if (runStart !== -1) {
+      runs.push(buildRunSummary(runStart, slot - 1));
+      runStart = -1;
+    }
+  }
+  if (runStart !== -1) runs.push(buildRunSummary(runStart, totalSlots - 1));
+  return runs;
+}
+
+/** زنجیره‌هایی که به ۵ شیفت متوالی یا بیشتر رسیده‌اند (غیرمجاز). */
+export function findConsecutiveCapViolations(
+  assignments: AssignmentMap,
+  personnelId: string,
+  totalDays: number
+): ConsecutiveRunSummary[] {
+  return findConsecutiveRuns(assignments, personnelId, totalDays).filter(
+    run => run.length > MAX_CONSECUTIVE_SHIFTS
+  );
+}
+
+/**
+ * آیا تخصیص candidateShift در روز day، زنجیرهٔ متوالی را به ۵ شیفت (یا بیشتر) می‌رساند؟
+ * تنها زنجیره‌هایی می‌توانند تغییر کنند که از جایگاه‌های همان روز day عبور می‌کنند،
+ * بنابراین فقط همان‌ها بررسی می‌شوند. اگر زنجیرهٔ عبوری از day به ۵ برسد نقض است و
+ * عملاً «استراحت اجباری پس از ۴ شیفت متوالی» را هم اعمال می‌کند.
  */
 export function wouldBreachConsecutiveCap(
   assignments: AssignmentMap,
@@ -95,54 +166,24 @@ export function wouldBreachConsecutiveCap(
   totalDays: number
 ): boolean {
   if (!isWorkShift(candidateShift)) return false;
-  return getRunWeightAroundDay(assignments, personnelId, day, totalDays, candidateShift) > MAX_CONSECUTIVE_SHIFT_UNITS;
-}
 
-export interface ConsecutiveRunSummary {
-  startDay: number;
-  endDay: number;
-  weight: number;
-}
+  const dayStartSlot = slotIndex(day, 0);
+  const dayEndSlot = slotIndex(day, DAY_PERIODS.length - 1);
+  const runs = findConsecutiveRuns(assignments, personnelId, totalDays, day, candidateShift);
 
-/** تمام زنجیره‌های کاری متوالی پرسنل در ماه (برای تحلیل و هشدار). */
-export function findConsecutiveRuns(
-  assignments: AssignmentMap,
-  personnelId: string,
-  totalDays: number
-): ConsecutiveRunSummary[] {
-  const runs: ConsecutiveRunSummary[] = [];
-  let runStart = 0;
-  let weight = 0;
-
-  for (let d = 1; d <= totalDays; d++) {
-    const w = getShiftWeight(assignments[personnelId]?.[d]);
-    if (w === 0) {
-      if (weight > 0) runs.push({ startDay: runStart, endDay: d - 1, weight });
-      runStart = 0;
-      weight = 0;
-    } else {
-      if (weight === 0) runStart = d;
-      weight += w;
-    }
-  }
-  if (weight > 0) runs.push({ startDay: runStart, endDay: totalDays, weight });
-  return runs;
-}
-
-/** زنجیره‌هایی که از سقف ۵ واحد عبور کرده‌اند. */
-export function findConsecutiveCapViolations(
-  assignments: AssignmentMap,
-  personnelId: string,
-  totalDays: number
-): ConsecutiveRunSummary[] {
-  return findConsecutiveRuns(assignments, personnelId, totalDays).filter(
-    run => run.weight > MAX_CONSECUTIVE_SHIFT_UNITS
-  );
+  return runs.some(run => {
+    const runStartSlot = slotIndex(run.startDay, DAY_PERIODS.indexOf(run.startPeriod));
+    const runEndSlot = slotIndex(run.endDay, DAY_PERIODS.indexOf(run.endPeriod));
+    const overlapsDay = runStartSlot <= dayEndSlot && runEndSlot >= dayStartSlot;
+    return overlapsDay && run.length > MAX_CONSECUTIVE_SHIFTS;
+  });
 }
 
 /**
  * آیا پرسنل در پایان ماه به سقف متوالی رسیده و نیاز به استراحت اجباری در ابتدای
- * ماه بعد دارد؟
+ * ماه بعد دارد؟ یعنی آخرین زنجیره دقیقاً تا آخرین جایگاه ماه (شبِ آخرین روز) ادامه
+ * داشته و طولش به سقف مجاز (۴) رسیده باشد؛ در این صورت هر شیفتِ ماه بعد آن را به ۵
+ * می‌رساند و ممنوع است.
  */
 export function endsMonthAtCapWithoutRest(
   assignments: AssignmentMap,
@@ -151,7 +192,12 @@ export function endsMonthAtCapWithoutRest(
 ): boolean {
   const runs = findConsecutiveRuns(assignments, personnelId, totalDays);
   const lastRun = runs[runs.length - 1];
-  return !!lastRun && lastRun.endDay === totalDays && lastRun.weight >= MAX_CONSECUTIVE_SHIFT_UNITS;
+  if (!lastRun) return false;
+  return (
+    lastRun.endDay === totalDays &&
+    lastRun.endPeriod === 'N' &&
+    lastRun.length >= MAX_CONSECUTIVE_SHIFTS
+  );
 }
 
 // ============================================================================
