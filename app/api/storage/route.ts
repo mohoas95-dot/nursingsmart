@@ -78,19 +78,23 @@ function authorizeResourceWrite(user: AuthenticatedUser, resource: StorageResour
   if (resource.type === 'departments') {
     throw new AuthenticationError(403, 'فقط مدیر سامانه اجازه تغییر فهرست بخش‌ها را دارد.');
   }
-  if (!user.departmentId || user.departmentId !== resource.departmentId) {
-    throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-  }
-  // Scenario voting: پرسنل می‌توانند رای دهند (scenarioVotes)، اما ایجاد/حذف سناریو (activeScenarios) فقط برای سرپرستار
   if (resource.type === 'activeScenarios') {
-    if (user.role !== 'HEAD_NURSE' && user.role !== 'ADMIN') {
+    if (!user.departmentId || user.departmentId !== resource.departmentId) {
+      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
+    }
+    if (user.role !== 'HEAD_NURSE') {
       throw new AuthenticationError(403, 'فقط سرپرستار اجازه مدیریت سناریوها را دارد.');
     }
     return;
   }
   if (resource.type === 'scenarioVotes') {
-    // پرسنل و سرپرستار هر دو می‌توانند رای دهند
+    if (!user.departmentId || user.departmentId !== resource.departmentId) {
+      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
+    }
     return;
+  }
+  if (!user.departmentId || user.departmentId !== resource.departmentId) {
+    throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
   }
   if (user.role === 'PERSONNEL' && resource.type !== 'requests' && resource.type !== 'schedule') {
     throw new AuthenticationError(403, 'پرسنل فقط اجازه ثبت درخواست‌های شیفت خود را دارند.');
