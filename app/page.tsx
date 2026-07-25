@@ -4246,7 +4246,7 @@ export default function Home() {
                   </div>
                   <div className="flex items-center justify-between text-[12px] font-black bg-white border-2 border-indigo-100 rounded-xl px-4 py-2.5 shadow-sm">
                     <span className="text-indigo-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
-                    <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}</span>
+                    <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}/100</span>
                   </div>
                 </div>
               )}
@@ -4301,7 +4301,7 @@ export default function Home() {
                   </div>
                   <div className="flex items-center justify-between text-[12px] font-black bg-white border-2 border-teal-100 rounded-xl px-4 py-2.5 shadow-sm">
                     <span className="text-teal-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
-                    <span className="font-mono text-teal-700 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}</span>
+                    <span className="font-mono text-teal-700 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}/100</span>
                   </div>
                 </div>
               )}

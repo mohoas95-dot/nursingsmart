@@ -86,6 +86,9 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
                       <span className="text-[12px] font-black text-slate-800">
                         {scenario.type === 'FAIRNESS' ? 'عدالت‌محور' : scenario.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}
                       </span>
+                      {scenario.type === 'MIXED' && (
+                        <span className="text-[8px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-full">پیشنهادی</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1 text-[11px] font-bold bg-amber-50 border border-amber-100 px-2 py-1 rounded-full">
                       <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
@@ -95,21 +98,21 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
 
                   <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 mb-3">
                     <span className="text-[11px] font-bold text-slate-500">امتیاز</span>
-                    <span className="text-[13px] font-black text-slate-900">{scenario.totalScore.toFixed(0)}</span>
+                    <span className="text-[13px] font-black text-slate-900">{scenario.totalScore.toFixed(0)}/100</span>
                   </div>
 
                   <div className="grid grid-cols-3 gap-1.5 mb-3">
                     <div className="text-center bg-white border border-slate-100 rounded-lg py-1.5">
                       <div className="text-[9px] text-slate-400 font-bold">قوانین</div>
-                      <div className="text-[11px] font-black">{scenario.scoreA.toFixed(0)}</div>
+                      <div className="text-[11px] font-black">{scenario.scoreA.toFixed(0)}/100</div>
                     </div>
                     <div className="text-center bg-white border border-slate-100 rounded-lg py-1.5">
                       <div className="text-[9px] text-slate-400 font-bold">درخواست</div>
-                      <div className="text-[11px] font-black">{scenario.scoreB.toFixed(0)}</div>
+                      <div className="text-[11px] font-black">{scenario.scoreB.toFixed(0)}/100</div>
                     </div>
                     <div className="text-center bg-white border border-slate-100 rounded-lg py-1.5">
                       <div className="text-[9px] text-slate-400 font-bold">عدالت</div>
-                      <div className="text-[11px] font-black">{scenario.scoreC.toFixed(0)}</div>
+                      <div className="text-[11px] font-black">{scenario.scoreC.toFixed(0)}/100</div>
                     </div>
                   </div>
 
