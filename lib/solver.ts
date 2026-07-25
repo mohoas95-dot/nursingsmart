@@ -1544,6 +1544,7 @@ export function verifyCoverageAndLeaders(
   const shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } = {};
   for (let i = 1; i <= totalDays; i++) shiftLeaders[i] = {};
 
+  const activePersonnel = personnelList.filter(p => p.active);
   const byOrderVerify = (a: Personnel, b: Personnel) => (a.orderIndex ?? 99999) - (b.orderIndex ?? 99999);
   const activePersonnelSorted = [...activePersonnel].sort(byOrderVerify);
   const assistants = activePersonnel.filter(p => p.jobGroup === 'assistant');
