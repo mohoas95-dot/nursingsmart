@@ -162,11 +162,14 @@ export const DepartmentDataSchema = z.object({
   holidays: HolidaysSchema,
   firstDayOfWeek: FirstDayOfWeekSchema,
   schedules: SchedulesSchema,
+  activeScenarios: z.any().optional(), // Stores the 3 generated scenarios
+  scenarioVotes: z.any().optional(), // Stores votes per scenario: { monthKey: { [scenarioId: number]: { [personnelId: string]: number } } }
 }).strict();
 
 export const AppDatabaseStateSchema = z.object({
   departments: DepartmentsSchema,
   deptData: z.record(nonEmptyId, DepartmentDataSchema),
+  lockState: z.any().optional(),
 }).strict().superRefine((state, ctx) => {
   const departmentIds = new Set(state.departments.map((department) => department.id));
   for (const departmentId of departmentIds) {
