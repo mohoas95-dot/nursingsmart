@@ -2059,6 +2059,61 @@ export default function Home() {
     await saveDbState(nextDb);
   };
 
+  const handleCancelVoting = async (jobGroup: JobGroup) => {
+    if (role !== 'headnurse' && role !== 'admin') return;
+    const groupLabel = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
+    if (!confirm(`رای‌گیری ${groupLabel} لغو شود؟ سناریوهای پیشنهادی حذف خواهند شد.`)) return;
+
+    const deptId = selectedDepartmentId || 'sepehr';
+    const nextDb = getFreshDbCopy();
+    if (!nextDb.deptData) nextDb.deptData = {};
+    const oldDept = nextDb.deptData[deptId];
+    if (!oldDept) return;
+
+    const monthKeyLocal = `${currentYear}_${currentMonth}`;
+    const existingActive = (oldDept.activeScenarios || {})[monthKeyLocal] as any;
+    let newActiveScenarios = { ...(oldDept.activeScenarios || {}) };
+    if (existingActive) {
+      if (existingActive.scenarios && Array.isArray(existingActive.scenarios)) {
+        delete newActiveScenarios[monthKeyLocal];
+      } else {
+        const updatedMonth: any = { ...existingActive };
+        delete updatedMonth[jobGroup];
+        if (Object.keys(updatedMonth).length === 0) {
+          delete newActiveScenarios[monthKeyLocal];
+        } else {
+          newActiveScenarios[monthKeyLocal] = updatedMonth;
+        }
+      }
+    }
+
+    const existingVotes = (oldDept.scenarioVotes || {})[monthKeyLocal] as any;
+    let newScenarioVotes = { ...(oldDept.scenarioVotes || {}) };
+    if (existingVotes) {
+      const hasGroupKeys = existingVotes.nurse !== undefined || existingVotes.assistant !== undefined;
+      if (hasGroupKeys) {
+        const updatedVotesMonth: any = { ...existingVotes };
+        delete updatedVotesMonth[jobGroup];
+        if (Object.keys(updatedVotesMonth).length === 0) {
+          delete newScenarioVotes[monthKeyLocal];
+        } else {
+          newScenarioVotes[monthKeyLocal] = updatedVotesMonth;
+        }
+      } else {
+        delete newScenarioVotes[monthKeyLocal];
+      }
+    }
+
+    const updatedDept = {
+      ...oldDept,
+      activeScenarios: newActiveScenarios,
+      scenarioVotes: newScenarioVotes,
+    };
+
+    nextDb.deptData[deptId] = updatedDept;
+    await saveDbState(nextDb);
+  };
+
   const handleToggleLock = async (jobGroup: JobGroup) => {
     if (role === 'personnel') return;
     try {
@@ -4133,116 +4188,112 @@ export default function Home() {
             <div className="space-y-6">
 
               {/* Requirement 1 & 2: کادرهای جداگانه رای‌گیری پرستاران و کمک‌بهیاران */}
-              {/* پرستاران — فقط در پنل پرستاران و سرپرستار */}
+              {/* پرستاران — فقط در پنل پرستاران و سرپرستار - طراحی مینیمال حرفه‌ای */}
               {(isVotingModeNurse && currentScenarioNurse && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse'))) && (
-                <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border-2 border-indigo-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
-                  <div className="flex flex-col md:flex-row items-center justify-between w-full gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-indigo-100 p-3 rounded-full">
-                        <Star className="w-8 h-8 text-indigo-500 fill-indigo-500 animate-pulse" />
+                <div className="relative bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
+                  {(role === 'headnurse' || role === 'admin') && (
+                    <button
+                      onClick={() => handleCancelVoting('nurse')}
+                      title="لغو رای‌گیری"
+                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 hover:border-rose-200 transition-all"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-indigo-50 border border-indigo-100 p-2 rounded-xl">
+                        <Star className="w-5 h-5 text-indigo-600 fill-indigo-100" />
                       </div>
                       <div>
-                        <h3 className="text-lg font-black text-indigo-900 mb-1">برنامه هوشمند پرستاران — منتظر رای و تایید نهایی</h3>
-                        <p className="text-xs font-bold text-indigo-700">
-                          {role === 'headnurse' || role === 'admin' 
-                            ? 'پرسنل پرستار در حال ثبت رای برای ۳ برنامه پرستاران هستند. پس از تایید نهایی، رای‌گیری بسته و لیست فیکس می‌شود.'
-                            : 'سرپرستار ۳ برنامه پرستاران (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-black text-slate-800">۳ سناریو پیشنهادی</h3>
+                          <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded-full">پرستاران</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 font-bold mt-0.5">
+                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای' : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => { setModalTargetJobGroup('nurse'); setPendingJobGroupForScenarios('nurse'); setShowScenariosModal(true); }}
-                      className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
-                    >
-                      مشاهده برنامه‌های پرستاران و ثبت رای
-                    </button>
-                  </div>
-                  
-                  <div className="w-full mt-4 pt-4 border-t border-indigo-200 flex items-center justify-between">
-                    <button 
-                      onClick={() => setViewingScenarioIndexNurse(prev => (prev < 2 ? prev + 1 : 0))}
-                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-indigo-700 text-xs font-bold border border-indigo-300 transition-all"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                      برنامه بعدی پرستاران
-                    </button>
-                    <div className="text-center flex flex-col items-center">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-indigo-900 font-black text-sm">
-                          پرستاران — در حال نمایش: {currentScenarioNurse.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
-                        </h4>
-                        {currentScenarioNurse.type === 'MIXED' && (
-                          <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">
-                            پیشنهادی
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-indigo-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-indigo-900" dir="ltr">{currentScenarioNurse.totalScore.toFixed(0)}/100</span> | تا تایید نهایی سرپرستار رای‌گیری باز می‌ماند</p>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setViewingScenarioIndexNurse(prev => (prev < 2 ? prev + 1 : 0))}
+                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => { setModalTargetJobGroup('nurse'); setPendingJobGroupForScenarios('nurse'); setShowScenariosModal(true); }}
+                        className="bg-slate-900 hover:bg-black text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+                      >
+                        مشاهده و رای
+                      </button>
+                      <button 
+                        onClick={() => setViewingScenarioIndexNurse(prev => (prev > 0 ? prev - 1 : 2))}
+                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button 
-                      onClick={() => setViewingScenarioIndexNurse(prev => (prev > 0 ? prev - 1 : 2))}
-                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-indigo-700 text-xs font-bold border border-indigo-300 transition-all"
-                    >
-                      برنامه قبلی
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+                    <span>{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="font-mono">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}</span>
                   </div>
                 </div>
               )}
 
-              {/* کمک‌بهیاران — فقط در پنل کمک‌بهیاران و سرپرستار */}
+              {/* کمک‌بهیاران — فقط در پنل کمک‌بهیاران و سرپرستار - مینیمال */}
               {(isVotingModeAssistant && currentScenarioAssistant && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant'))) && (
-                <div className="bg-gradient-to-r from-teal-50 to-emerald-50 border-2 border-teal-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
-                  <div className="flex flex-col md:flex-row items-center justify-between w-full gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-teal-100 p-3 rounded-full">
-                        <Star className="w-8 h-8 text-teal-600 fill-teal-500 animate-pulse" />
+                <div className="relative bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
+                  {(role === 'headnurse' || role === 'admin') && (
+                    <button
+                      onClick={() => handleCancelVoting('assistant')}
+                      title="لغو رای‌گیری"
+                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 hover:border-rose-200 transition-all"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-teal-50 border border-teal-100 p-2 rounded-xl">
+                        <Star className="w-5 h-5 text-teal-600 fill-teal-100" />
                       </div>
                       <div>
-                        <h3 className="text-lg font-black text-teal-900 mb-1">برنامه هوشمند کمک‌بهیاران — منتظر رای و تایید نهایی</h3>
-                        <p className="text-xs font-bold text-teal-700">
-                          {role === 'headnurse' || role === 'admin' 
-                            ? 'پرسنل کمک‌بهیار در حال ثبت رای برای ۳ برنامه کمک‌بهیاران هستند. پس از تایید نهایی، رای‌گیری بسته و لیست فیکس می‌شود.'
-                            : 'سرپرستار ۳ برنامه کمک‌بهیاران (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-black text-slate-800">۳ سناریو پیشنهادی</h3>
+                          <span className="text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-100 px-2 py-0.5 rounded-full">کمک‌بهیاران</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 font-bold mt-0.5">
+                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای' : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => { setModalTargetJobGroup('assistant'); setPendingJobGroupForScenarios('assistant'); setShowScenariosModal(true); }}
-                      className="w-full md:w-auto bg-teal-600 hover:bg-teal-700 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
-                    >
-                      مشاهده برنامه‌های کمک‌بهیاران و ثبت رای
-                    </button>
-                  </div>
-                  
-                  <div className="w-full mt-4 pt-4 border-t border-teal-200 flex items-center justify-between">
-                    <button 
-                      onClick={() => setViewingScenarioIndexAssistant(prev => (prev < 2 ? prev + 1 : 0))}
-                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-teal-700 text-xs font-bold border border-teal-300 transition-all"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                      برنامه بعدی کمک‌بهیاران
-                    </button>
-                    <div className="text-center flex flex-col items-center">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-teal-900 font-black text-sm">
-                          کمک‌بهیاران — در حال نمایش: {currentScenarioAssistant.type === 'FAIRNESS' ? 'برنامه عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'برنامه درخواست‌محور' : 'برنامه تلفیقی'}
-                        </h4>
-                        {currentScenarioAssistant.type === 'MIXED' && (
-                          <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">
-                            پیشنهادی
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-teal-700 text-[11px] font-bold mt-1.5">امتیاز کلی سیستم: <span className="font-black text-teal-900" dir="ltr">{currentScenarioAssistant.totalScore.toFixed(0)}/100</span> | تا تایید نهایی سرپرستار رای‌گیری باز می‌ماند</p>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setViewingScenarioIndexAssistant(prev => (prev < 2 ? prev + 1 : 0))}
+                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => { setModalTargetJobGroup('assistant'); setPendingJobGroupForScenarios('assistant'); setShowScenariosModal(true); }}
+                        className="bg-slate-900 hover:bg-black text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+                      >
+                        مشاهده و رای
+                      </button>
+                      <button 
+                        onClick={() => setViewingScenarioIndexAssistant(prev => (prev > 0 ? prev - 1 : 2))}
+                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
                     </div>
-                    <button 
-                      onClick={() => setViewingScenarioIndexAssistant(prev => (prev > 0 ? prev - 1 : 2))}
-                      className="px-3 py-1.5 flex items-center gap-1.5 bg-white/80 rounded-md shadow-sm hover:bg-white text-teal-700 text-xs font-bold border border-teal-300 transition-all"
-                    >
-                      برنامه قبلی
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+                    <span>{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="font-mono">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}</span>
                   </div>
                 </div>
               )}
