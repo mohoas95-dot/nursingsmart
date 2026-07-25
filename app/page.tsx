@@ -339,16 +339,6 @@ export default function Home() {
     }, 0);
   }, []);
 
-  // Compiled reports from current schedule dynamically and reactively
-  const reports = React.useMemo(() => {
-    if (schedule && personnel.length > 0 && settings) {
-      return generatePersonnelReports(currentYear, currentMonth, personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, effectiveDutyHours);
-    }
-    return [];
-  }, [personnel, schedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
-
-  // solvingTarget now managed by useScheduleState hook
-
   // User Authentication & Roles
   // roles: 'admin' | 'headnurse' | 'personnel' | 'guest'
   const [role, setRole] = useState<'admin' | 'headnurse' | 'personnel' | 'guest'>('guest');
@@ -357,13 +347,26 @@ export default function Home() {
     return personnel.find(person => person.id === authenticatedUser.personnelId) || null;
   }, [authenticatedUser, personnel]);
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>('');
-  // فقط سرپرستار بخش و مدیر سامانه اجازه تعیین تعطیلات انتخابی را دارند.
+
   const canManageHolidays = role === 'headnurse' || role === 'admin';
   
   const monthKey = `${currentYear}_${currentMonth}`;
   const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'];
   const activeScenariosData = deptData?.activeScenarios?.[monthKey];
   const scenarioVotes = deptData?.scenarioVotes?.[monthKey] || {};
+
+  const [viewingScenarioIndex, setViewingScenarioIndex] = useState<number>(0);
+  const isVotingMode = !!(activeScenariosData && activeScenariosData.scenarios && activeScenariosData.scenarios.length > 0);
+  const currentScenario = isVotingMode ? activeScenariosData.scenarios[viewingScenarioIndex] : null;
+  const displayedSchedule = isVotingMode ? currentScenario.schedule : schedule;
+
+  // Compiled reports from current schedule dynamically and reactively
+  const reports = React.useMemo(() => {
+    if (displayedSchedule && personnel.length > 0 && settings) {
+      return generatePersonnelReports(currentYear, currentMonth, personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, effectiveDutyHours);
+    }
+    return [];
+  }, [personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, monthlyDutyHours]);
   // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
@@ -1082,9 +1085,9 @@ export default function Home() {
   };
 
   const getVisibleWarnings = () => {
-    if (!schedule) return [];
+    if (!displayedSchedule) return [];
     // هشدارهایی که نه در dismissedWarnings هستند و نه در dismissedAlertWarnings
-    const visible = filterActiveWarnings(schedule.warnings, dismissedWarnings)
+    const visible = filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
     return visible;
   };
@@ -1114,10 +1117,10 @@ export default function Home() {
   };
 
   const visibleWarnings = React.useMemo(() => {
-    if (!schedule) return [];
-    return filterActiveWarnings(schedule.warnings, dismissedWarnings)
+    if (!displayedSchedule) return [];
+    return filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
-  }, [schedule, dismissedWarnings, dismissedAlertWarnings]);
+  }, [displayedSchedule, dismissedWarnings, dismissedAlertWarnings]);
 
   const aggregatedAlerts = React.useMemo<AggregatedAlert[]>(() => {
     return aggregateWarnings(visibleWarnings, personnel);
@@ -1125,25 +1128,25 @@ export default function Home() {
 
   // تمام هشدارها (شامل نادیده‌گرفته‌شده‌ها) برای پنجره هشدار
   const allAlertsForDialog = React.useMemo<AggregatedAlert[]>(() => {
-    if (!schedule) return [];
+    if (!displayedSchedule) return [];
     // فقط dismissedWarnings (ذخیره‌شده در دیتابیس) فیلتر شوند، نه dismissedAlertWarnings
-    const warningsForDialog = filterActiveWarnings(schedule.warnings, dismissedWarnings);
+    const warningsForDialog = filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings);
     return aggregateWarnings(warningsForDialog, personnel);
-  }, [schedule, dismissedWarnings, personnel]);
+  }, [displayedSchedule, dismissedWarnings, personnel]);
 
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
-    if (!schedule) return [];
+    if (!displayedSchedule) return [];
     return generateSmartSuggestions(
       currentYear,
       currentMonth,
       personnel,
       requests,
-      schedule.assignments,
+      displayedSchedule.assignments,
       visibleWarnings,
       customHolidays,
       firstDayOfWeekIndex
     );
-  }, [schedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
+  }, [displayedSchedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
 
   // UI Tabs & Active View
   const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'profile'>('schedule');
@@ -3862,27 +3865,52 @@ export default function Home() {
           {activeTab === 'schedule' && (
             <div className="space-y-6">
 
-              {activeScenariosData && activeScenariosData.scenarios && activeScenariosData.scenarios.length > 0 && (
-                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-amber-100 p-3 rounded-full">
-                      <Star className="w-8 h-8 text-amber-500 fill-amber-500 animate-pulse" />
+              {isVotingMode && currentScenario && (
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-2xl p-5 shadow-sm flex flex-col items-center justify-between gap-4 animate-in fade-in slide-in-from-bottom-4 print:hidden">
+                  <div className="flex flex-col md:flex-row items-center justify-between w-full gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="bg-amber-100 p-3 rounded-full">
+                        <Star className="w-8 h-8 text-amber-500 fill-amber-500 animate-pulse" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-black text-amber-900 mb-1">برنامه‌های هوشمند منتظر رای و تایید شما هستند!</h3>
+                        <p className="text-xs font-bold text-amber-700">
+                          {role === 'headnurse' || role === 'admin' 
+                            ? 'پرسنل در حال ثبت رای برای ۳ برنامه تولید شده هستند. می‌توانید نتایج را ببینید و برنامه نهایی را تایید کنید.'
+                            : 'سرپرستار ۳ برنامه مختلف (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-lg font-black text-amber-900 mb-1">برنامه‌های هوشمند منتظر رای و تایید شما هستند!</h3>
-                      <p className="text-xs font-bold text-amber-700">
-                        {role === 'headnurse' || role === 'admin' 
-                          ? 'پرسنل در حال ثبت رای برای ۳ برنامه تولید شده هستند. می‌توانید نتایج را ببینید و برنامه نهایی را تایید کنید.'
-                          : 'سرپرستار ۳ برنامه مختلف (عدالت‌محور، درخواست‌محور، تلفیقی) ایجاد کرده است. لطفا به آن‌ها رای دهید.'}
-                      </p>
-                    </div>
+                    <button 
+                      onClick={() => setShowScenariosModal(true)}
+                      className="w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
+                    >
+                      مشاهده برنامه‌ها و ثبت رای
+                    </button>
                   </div>
-                  <button 
-                    onClick={() => setShowScenariosModal(true)}
-                    className="w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-black text-sm px-6 py-3 rounded-xl shadow-md transition-all whitespace-nowrap"
-                  >
-                    مشاهده برنامه‌ها و ثبت رای
-                  </button>
+                  
+                  <div className="w-full mt-4 pt-4 border-t border-amber-200 flex items-center justify-between">
+                    <button 
+                      onClick={() => setViewingScenarioIndex(prev => (prev < 2 ? prev + 1 : 0))}
+                      className="px-4 py-2 flex items-center gap-2 bg-white rounded-lg shadow-sm hover:bg-amber-100 text-amber-700 font-black border border-amber-300 transition-colors"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                      برنامه بعدی
+                    </button>
+                    <div className="text-center">
+                      <h4 className="text-amber-900 font-black text-base">
+                        در حال نمایش: برنامه شماره {currentScenario.id} ({currentScenario.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenario.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'})
+                      </h4>
+                      <p className="text-amber-700 text-xs font-bold mt-1">امتیاز کلی سیستم: {currentScenario.totalScore.toFixed(0)} از ۱۰۰ | برای تایید و ثبت رای روی دکمه نارنجی کلیک کنید</p>
+                    </div>
+                    <button 
+                      onClick={() => setViewingScenarioIndex(prev => (prev > 0 ? prev - 1 : 2))}
+                      className="px-4 py-2 flex items-center gap-2 bg-white rounded-lg shadow-sm hover:bg-amber-100 text-amber-700 font-black border border-amber-300 transition-colors"
+                    >
+                      برنامه قبلی
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
               )}
 
