@@ -1786,10 +1786,6 @@ export default function Home() {
       }
     }
 
-    nextDb.deptData[deptId] = updatedDept;
-    await saveDbState(nextDb);
-  };
-
   const handleVoteScenario = async (targetGroup: 'nurse' | 'assistant', scenarioId: number, rating: number) => {
     if (!authenticatedUser || !authenticatedUser.id) return;
     const userId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser.id || 'headnurse');
