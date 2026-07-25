@@ -4188,29 +4188,29 @@ export default function Home() {
             <div className="space-y-6">
 
               {/* Requirement 1 & 2: کادرهای جداگانه رای‌گیری پرستاران و کمک‌بهیاران */}
-              {/* پرستاران — فقط در پنل پرستاران و سرپرستار - طراحی مینیمال حرفه‌ای */}
+              {/* پرستاران — مینیمال اما رنگی و هماهنگ با UI */}
               {(isVotingModeNurse && currentScenarioNurse && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse'))) && (
-                <div className="relative bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
+                <div className="relative bg-gradient-to-r from-indigo-50 to-blue-50 border-2 border-indigo-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
                   {(role === 'headnurse' || role === 'admin') && (
                     <button
                       onClick={() => handleCancelVoting('nurse')}
                       title="لغو رای‌گیری"
-                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 hover:border-rose-200 transition-all"
+                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-white/70 hover:bg-rose-50 text-indigo-400 hover:text-rose-600 rounded-full border border-indigo-200 hover:border-rose-200 transition-all"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   )}
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="bg-indigo-50 border border-indigo-100 p-2 rounded-xl">
-                        <Star className="w-5 h-5 text-indigo-600 fill-indigo-100" />
+                      <div className="bg-indigo-100 border border-indigo-200 p-2.5 rounded-xl">
+                        <Star className="w-5 h-5 text-indigo-600 fill-indigo-200" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-black text-slate-800">۳ سناریو پیشنهادی</h3>
-                          <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded-full">پرستاران</span>
+                          <h3 className="text-sm font-black text-indigo-900">۳ لیست پیشنهادی</h3>
+                          <span className="text-[10px] font-bold bg-white text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">پرستاران</span>
                         </div>
-                        <p className="text-[11px] text-slate-500 font-bold mt-0.5">
+                        <p className="text-[11px] text-indigo-700/70 font-bold mt-0.5">
                           {role === 'headnurse' || role === 'admin' ? 'در انتظار رای' : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
@@ -4218,54 +4218,54 @@ export default function Home() {
                     <div className="flex items-center gap-2">
                       <button 
                         onClick={() => setViewingScenarioIndexNurse(prev => (prev < 2 ? prev + 1 : 0))}
-                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-indigo-200 rounded-lg text-indigo-600"
                       >
                         <ChevronRight className="w-4 h-4" />
                       </button>
                       <button 
                         onClick={() => { setModalTargetJobGroup('nurse'); setPendingJobGroupForScenarios('nurse'); setShowScenariosModal(true); }}
-                        className="bg-slate-900 hover:bg-black text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black px-4 py-2 rounded-xl shadow-md transition-all"
                       >
                         مشاهده و رای
                       </button>
                       <button 
                         onClick={() => setViewingScenarioIndexNurse(prev => (prev > 0 ? prev - 1 : 2))}
-                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-indigo-200 rounded-lg text-indigo-600"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
-                    <span>{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
-                    <span className="font-mono">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}</span>
+                  <div className="flex items-center justify-between text-[11px] font-bold bg-white/70 border border-indigo-100 rounded-xl px-3 py-2">
+                    <span className="text-indigo-800">{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="font-mono text-indigo-700">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}</span>
                   </div>
                 </div>
               )}
 
-              {/* کمک‌بهیاران — فقط در پنل کمک‌بهیاران و سرپرستار - مینیمال */}
+              {/* کمک‌بهیاران — مینیمال اما رنگی */}
               {(isVotingModeAssistant && currentScenarioAssistant && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant'))) && (
-                <div className="relative bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
+                <div className="relative bg-gradient-to-r from-teal-50 to-emerald-50 border-2 border-teal-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 print:hidden">
                   {(role === 'headnurse' || role === 'admin') && (
                     <button
                       onClick={() => handleCancelVoting('assistant')}
                       title="لغو رای‌گیری"
-                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 hover:border-rose-200 transition-all"
+                      className="absolute top-3 left-3 w-7 h-7 flex items-center justify-center bg-white/70 hover:bg-rose-50 text-teal-500 hover:text-rose-600 rounded-full border border-teal-200 hover:border-rose-200 transition-all"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   )}
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="bg-teal-50 border border-teal-100 p-2 rounded-xl">
-                        <Star className="w-5 h-5 text-teal-600 fill-teal-100" />
+                      <div className="bg-teal-100 border border-teal-200 p-2.5 rounded-xl">
+                        <Star className="w-5 h-5 text-teal-700 fill-teal-100" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-black text-slate-800">۳ سناریو پیشنهادی</h3>
-                          <span className="text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-100 px-2 py-0.5 rounded-full">کمک‌بهیاران</span>
+                          <h3 className="text-sm font-black text-teal-900">۳ لیست پیشنهادی</h3>
+                          <span className="text-[10px] font-bold bg-white text-teal-700 border border-teal-200 px-2 py-0.5 rounded-full">کمک‌بهیاران</span>
                         </div>
-                        <p className="text-[11px] text-slate-500 font-bold mt-0.5">
+                        <p className="text-[11px] text-teal-700/70 font-bold mt-0.5">
                           {role === 'headnurse' || role === 'admin' ? 'در انتظار رای' : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
@@ -4273,27 +4273,27 @@ export default function Home() {
                     <div className="flex items-center gap-2">
                       <button 
                         onClick={() => setViewingScenarioIndexAssistant(prev => (prev < 2 ? prev + 1 : 0))}
-                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-teal-200 rounded-lg text-teal-700"
                       >
                         <ChevronRight className="w-4 h-4" />
                       </button>
                       <button 
                         onClick={() => { setModalTargetJobGroup('assistant'); setPendingJobGroupForScenarios('assistant'); setShowScenariosModal(true); }}
-                        className="bg-slate-900 hover:bg-black text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+                        className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-black px-4 py-2 rounded-xl shadow-md transition-all"
                       >
                         مشاهده و رای
                       </button>
                       <button 
                         onClick={() => setViewingScenarioIndexAssistant(prev => (prev > 0 ? prev - 1 : 2))}
-                        className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-white border border-slate-200 rounded-lg text-slate-600"
+                        className="w-8 h-8 flex items-center justify-center bg-white/80 hover:bg-white border border-teal-200 rounded-lg text-teal-700"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
-                    <span>{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
-                    <span className="font-mono">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}</span>
+                  <div className="flex items-center justify-between text-[11px] font-bold bg-white/70 border border-teal-100 rounded-xl px-3 py-2">
+                    <span className="text-teal-800">{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="font-mono text-teal-700">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}</span>
                   </div>
                 </div>
               )}

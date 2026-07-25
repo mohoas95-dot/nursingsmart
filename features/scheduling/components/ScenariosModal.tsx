@@ -51,20 +51,20 @@ export function ScenariosModal({ isOpen, scenarios, votes, currentUserId, userRo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" dir="rtl">
       <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-white">
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center">
-              <ShieldCheck className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center">
+              <ShieldCheck className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-black text-[13px] text-slate-900">۳ سناریو</h2>
-                {groupBadge && <span className="text-[10px] font-bold bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full text-slate-600">{groupBadge}</span>}
+                <h2 className="font-black text-[13px] text-white">۳ لیست پیشنهادی</h2>
+                {groupBadge && <span className="text-[10px] font-bold bg-white/20 text-white border border-white/30 px-2 py-0.5 rounded-full">{groupBadge}</span>}
               </div>
-              <p className="text-[11px] text-slate-500 font-bold">امتیاز دهید و یک گزینه را تایید کنید</p>
+              <p className="text-[11px] text-emerald-100 font-bold">امتیاز دهید و یک گزینه را تایید کنید</p>
             </div>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-slate-50 hover:bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500">
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white">
             <XCircle className="w-5 h-5" />
           </button>
         </div>
