@@ -41,12 +41,12 @@ test('duplicate dismissal entries are collapsed', () => {
 
 test('a re-created violation is NOT silently hidden by an old dismissal record', () => {
   // ۱) تخلف وجود دارد و سرپرستار آن را نادیده می‌گیرد.
-  let dismissed = pruneDismissedWarnings([WARN_A], [WARN_A]);
-  assert.deepEqual(dismissed, [WARN_A]);
+  const afterDismiss: string[] = pruneDismissedWarnings([WARN_A], [WARN_A]);
+  assert.deepEqual(afterDismiss, [WARN_A]);
 
   // ۲) سرپرستار شیفت را اصلاح می‌کند؛ هشدار دیگر تولید نمی‌شود → رکورد پاک می‌شود.
-  dismissed = pruneDismissedWarnings([], dismissed);
-  assert.deepEqual(dismissed, []);
+  const dismissed: string[] = pruneDismissedWarnings([], afterDismiss);
+  assert.equal(dismissed.length, 0);
 
   // ۳) بعداً پس از بازتولید، دقیقاً همان تخلف دوباره ساخته می‌شود.
   //    چون رکورد قدیمی پاک شده بود، این‌بار هشدار باید دیده شود (نه پنهان).
