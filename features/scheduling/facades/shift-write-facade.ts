@@ -303,11 +303,19 @@ export async function applyManualShiftChangeFacade(
     settings,
     holidays,
     firstDayOfWeek,
+    lockState,
     dismissedWarnings = currentSchedule.dismissedWarnings ?? [],
+    protectedCells: protectedCellsInput,
   } = input;
 
+  const lockedRows = lockState?.lockedRows ?? [];
+
+  // سلول ویرایش‌شده توسط سرپرستار + تمام سلول‌های محافظت‌شده قبلی
+  const protectedSet = new Set<string>(protectedCellsInput ?? []);
+  protectedSet.add(`${personnelId}:${day}`); // سلول فعلی همیشه محافظت می‌شود
+
   try {
-    // Step 1: Update the cell (pure domain logic)
+    // Step 1: Update the cell — تغییر دستی سرپرستار حفظ می‌شود
     const updatedAssignments = updateScheduleCell(
       currentSchedule.assignments,
       personnelId,
@@ -315,40 +323,77 @@ export async function applyManualShiftChangeFacade(
       shift
     );
 
-    // Step 2: Verify coverage and leaders
+    // Step 2: Auto-reconcile — جبران خودکار کمبود و مازاد
+    // سیستم به‌صورت زنجیره‌وار تلاش می‌کند کمبود/مازاد را جبران کند.
+    // چندین بار اجرا می‌شود تا اثرات آبشاری (مثلاً آزاد شدن نفر از مازاد روز دیگر
+    // و استفاده از او برای جبران کمبود) هم پوشش داده شوند.
+    // قوانین:
+    //   - تغییر دستی سرپرستار هرگز لغو نمی‌شود (سلول ویرایش‌شده دست‌نخورده می‌ماند)
+    //   - شیفت نفرات قفل‌شده (lockedRows) هرگز تغییر نمی‌کند
+    //   - فقط در صورتی که هیچ راهی برای جبران نباشد، هشدار صادر می‌شود
+    const editedPerson = personnel.find(p => p.id === personnelId);
+    const targetJobGroups: Array<'nurse' | 'assistant'> = editedPerson
+      ? [editedPerson.jobGroup]
+      : ['nurse', 'assistant'];
+
+    const calendar = generateJalaliMonthCalendar(year, month, holidays, firstDayOfWeek);
+    const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+
+    let reconciledAssignments = updatedAssignments;
+    const MAX_RECONCILE_PASSES = 3;
+    let prevUnresolvedCount = Infinity;
+
+    for (let pass = 0; pass < MAX_RECONCILE_PASSES; pass++) {
+      const staffingResult = reconcileStaffingCoverage(
+        reconciledAssignments,
+        personnel,
+        settings,
+        calendarDays,
+        targetJobGroups,
+        lockedRows, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
+        requests,
+        protectedSet // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
+      );
+      reconciledAssignments = staffingResult.assignments;
+
+      // اگر تعداد gapها کمتر نشد یا صفر شد، توقف
+      if (staffingResult.unresolvedGaps.length === 0) break;
+      if (staffingResult.unresolvedGaps.length >= prevUnresolvedCount) break;
+      prevUnresolvedCount = staffingResult.unresolvedGaps.length;
+    }
+
+    // Step 3: Verify coverage and leaders (on reconciled assignments)
     const verification = verifier(
       year,
       month,
       personnel,
-      updatedAssignments,
+      reconciledAssignments,
       settings,
       holidays,
       firstDayOfWeek,
       requests
     );
 
-    // Step 3: Retire alerts that this edit actually resolved.
-    // اگر سرپرستار با همین ویرایش تخلفی را برطرف کند، هشدار آن دیگر تولید نمی‌شود؛
-    // پس رکورد «نادیده‌گرفتن»‌اش هم باید برود تا بروز دوبارهٔ آن در آینده پنهان نماند.
+    // Step 4: Retire alerts that this edit actually resolved.
     const prunedDismissed = pruneDismissedWarnings(verification.warnings, dismissedWarnings);
     const resolvedWarnings = findResolvedWarnings(
       currentSchedule.warnings ?? [],
       verification.warnings
     );
 
-    // Step 4: Build new schedule
+    // Step 5: Build new schedule
     const newSchedule: MonthlySchedule = {
       ...currentSchedule,
       year,
       month,
-      assignments: updatedAssignments,
+      assignments: reconciledAssignments,
       shiftLeaders: verification.shiftLeaders,
       warnings: verification.warnings,
       dismissedWarnings: prunedDismissed,
       finalized: false,
     };
 
-    // Step 5: Persist to S3
+    // Step 6: Persist to S3
     await persistence.saveSchedule(newSchedule, departmentId);
 
     return {

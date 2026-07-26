@@ -70,6 +70,7 @@ import {
   toggleHolidayOverride,
 } from '../domain/calendar/holiday-overrides';
 import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
+import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
 import {
   dismissedWarningsChanged,
   pruneDismissedWarningMap,
@@ -348,6 +349,14 @@ export default function Home() {
   const holidaysRef = React.useRef(customHolidays);
   const firstDayRef = React.useRef(firstDayOfWeekIndex);
   const monthlyDutyHoursRef = React.useRef(monthlyDutyHours);
+  const scheduleRef = React.useRef(schedule);
+  const dismissedWarningsRef = React.useRef(dismissedWarnings);
+  const lockedRowsRef = React.useRef(lockedRows);
+  // ====== سلول‌های محافظت‌شده (ویرایش‌های دستی سرپرستار) ======
+  // هر سلولی که سرپرستار دستی ویرایش می‌کند در این مجموعه ثبت می‌شود.
+  // سیستم جبران خودکار هرگز این سلول‌ها را تغییر نمی‌دهد.
+  // با اجرای بهینه‌ساز، این فهرست پاک می‌شود.
+  const protectedCellsRef = React.useRef<Set<string>>(new Set());
 
   useEffect(() => {
     personnelRef.current = personnel;
@@ -356,7 +365,10 @@ export default function Home() {
     holidaysRef.current = customHolidays;
     firstDayRef.current = firstDayOfWeekIndex;
     monthlyDutyHoursRef.current = monthlyDutyHours;
-  }, [personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours]);
+    scheduleRef.current = schedule;
+    dismissedWarningsRef.current = dismissedWarnings;
+    lockedRowsRef.current = lockedRows;
+  }, [personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, schedule, dismissedWarnings, lockedRows]);
 
   // Load persisted selected month/year on mount to prevent defaulting to Khordad after resets
   useEffect(() => {
@@ -1306,6 +1318,137 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule, dismissedWarnings, currentYear, currentMonth, selectedDepartmentId]);
 
+  // ====== پایش پیوسته، جبران خودکار کمبود/مازاد و بازتولید پویای هشدارها ======
+  // این effect هر بار که برنامه (schedule) تغییر می‌کند:
+  //   ۱) ابتدا کمبود و مازاد نیرو را به‌صورت خودکار و زنجیره‌وار جبران می‌کند
+  //      (تا ۳ بار اجرا می‌شود تا اثرات آبشاری هم پوشش داده شوند)
+  //   ۲) سپس هشدارها را بازتولید می‌کند
+  //   ۳) در صورت تفاوت، schedule را به‌روزرسانی می‌کند
+  // قوانین:
+  //   - تغییر دستی سرپرستار حفظ می‌شود
+  //   - شیفت نفرات قفل‌شده (lockedRows) هرگز تغییر نمی‌کند
+  //   - فقط در صورتی که هیچ راهی نباشد، هشدار صادر می‌شود
+  const previousAssignmentsKeyRef = React.useRef<string>('');
+  const previousWarningsKeyRef = React.useRef<string>('');
+  const isReevaluatingRef = React.useRef<boolean>(false);
+
+  React.useEffect(() => {
+    if (!schedule || !settings) return;
+    if (isReevaluatingRef.current) return;
+
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentSettings = settingsRef.current;
+    const currentHolidays = holidaysRef.current;
+    const currentFirstDay = firstDayRef.current;
+    const currentLocked = lockedRowsRef.current;
+
+    if (!currentPersonnel.length || !currentSettings) return;
+
+    const assignmentsKey = JSON.stringify(schedule.assignments);
+    const assignmentsChanged = assignmentsKey !== previousAssignmentsKeyRef.current;
+    previousAssignmentsKeyRef.current = assignmentsKey;
+
+    // ====== گام ۱: جبران خودکار کمبود و مازاد نیرو (زنجیره‌وار) ======
+    let effectiveAssignments = schedule.assignments;
+    if (assignmentsChanged) {
+      const calendar = generateJalaliMonthCalendar(
+        currentYear, currentMonth, currentHolidays, currentFirstDay === -1 ? undefined : currentFirstDay
+      );
+      const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+      const protectedSet = protectedCellsRef.current;
+
+      const MAX_PASSES = 3;
+      let prevUnresolvedCount = Infinity;
+      for (let pass = 0; pass < MAX_PASSES; pass++) {
+        const staffingResult = reconcileStaffingCoverage(
+          effectiveAssignments,
+          currentPersonnel,
+          currentSettings,
+          calendarDays,
+          ['nurse', 'assistant'],
+          currentLocked, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
+          currentRequests,
+          protectedSet   // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
+        );
+        effectiveAssignments = staffingResult.assignments;
+        if (staffingResult.unresolvedGaps.length === 0) break;
+        if (staffingResult.unresolvedGaps.length >= prevUnresolvedCount) break;
+        prevUnresolvedCount = staffingResult.unresolvedGaps.length;
+      }
+    }
+
+    // ====== گام ۲: بازتولید هشدارها بر اساس assignments جبران‌شده ======
+    const verification = verifyCoverageAndLeaders(
+      currentYear,
+      currentMonth,
+      currentPersonnel,
+      effectiveAssignments,
+      currentSettings,
+      currentHolidays,
+      currentFirstDay === -1 ? undefined : currentFirstDay,
+      currentRequests
+    );
+
+    const freshWarnings = verification.warnings;
+    const currentWarnings = schedule.warnings || [];
+
+    const freshKey = [...freshWarnings].sort().join('|||');
+    const currentKey = [...currentWarnings].sort().join('|||');
+    const reconciledAssignmentsKey = JSON.stringify(effectiveAssignments);
+
+    const assignmentsActuallyChanged = reconciledAssignmentsKey !== JSON.stringify(schedule.assignments);
+    const warningsActuallyChanged = freshKey !== currentKey;
+
+    if (!assignmentsActuallyChanged && !warningsActuallyChanged) {
+      previousWarningsKeyRef.current = freshKey;
+      return;
+    }
+
+    if (!assignmentsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
+    previousWarningsKeyRef.current = freshKey;
+
+    isReevaluatingRef.current = true;
+
+    const updatedSchedule: MonthlySchedule = {
+      ...schedule,
+      assignments: effectiveAssignments,
+      warnings: freshWarnings,
+      shiftLeaders: verification.shiftLeaders,
+      dismissedWarnings: pruneDismissedWarnings(freshWarnings, schedule.dismissedWarnings || []),
+    };
+
+    setSchedule(updatedSchedule);
+    setDismissedAlertWarnings(prev => pruneDismissedWarningMap(freshWarnings, prev));
+    setDismissedWarnings(prev => pruneDismissedWarnings(freshWarnings, prev));
+
+    // ذخیره در پایگاه داده (بدون نمایش لایهٔ انتظار)
+    const key = `${currentYear}_${currentMonth}`;
+    const deptId = selectedDepartmentId || 'sepehr';
+    const nextDb = getFreshDbCopy();
+    const oldDept = nextDb?.deptData?.[deptId];
+    if (oldDept) {
+      nextDb.deptData[deptId] = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...updatedSchedule,
+            lockedRows: currentLocked,
+          },
+        },
+      };
+      void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
+        console.error('Error updating schedule after auto-reconciliation:', error);
+      }).finally(() => {
+        isReevaluatingRef.current = false;
+      });
+    } else {
+      isReevaluatingRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedule, currentYear, currentMonth, selectedDepartmentId, settings]);
+
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
     if (!displayedSchedule) return [];
     return generateSmartSuggestions(
@@ -1730,6 +1873,10 @@ export default function Home() {
   // Migrated to Facade pattern (Phase 3) — delegates to runOptimizerFacade
   const handleRunOptimizer = async (jobGroup: JobGroup) => {
     const deptId = selectedDepartmentId || 'sepehr';
+
+    // با اجرای بهینه‌ساز، برنامه از نو تولید می‌شود. سلول‌های محافظت‌شده قبلی
+    // دیگر معتبر نیستند چون برنامه کاملاً بازنویسی می‌شود.
+    protectedCellsRef.current.clear();
 
     // Never start with the initial/default state while the department or calendar
     // is still being loaded. Otherwise the delayed optimizer could capture old
@@ -2677,16 +2824,34 @@ export default function Home() {
   };
 
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
-    if (!schedule) return;
+    // ====== پویا‌سازی سیستم هشدار: همیشه از آخرین وضعیت تعهدشده استفاده کن ======
+    // optimisticDbRef به‌صورت همگام (synchronous) توسط saveDbState به‌روز می‌شود،
+    // در حالی که scheduleRef فقط پس از re-render به‌روز می‌شود. بنابراین برای
+    // جلوگیری از stale state، ابتدا optimisticDbRef خوانده می‌شود.
+    const deptId = selectedDepartmentId || 'sepehr';
+    const monthKey = `${currentYear}_${currentMonth}`;
+    const latestSchedule: MonthlySchedule | null =
+      optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[monthKey] ??
+      scheduleRef.current ??
+      null;
+
+    if (!latestSchedule) return;
+
+    // از refs برای خواندن آخرین وضعیت استفاده می‌کنیم تا از stale state جلوگیری شود
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentSettings = settingsRef.current;
+    const currentHolidays = holidaysRef.current;
+    const currentFirstDay = firstDayRef.current;
+    const currentDismissed = dismissedWarningsRef.current;
+    const currentLocked = lockedRowsRef.current;
 
     // گزینه یکپارچه «مرخصی» در منوی سلول: شماره روز مرخصی بر اساس روزهای پیاپی
     // قبلی تعیین می‌شود تا در لیست، روز اول عدد ۱، روز دوم عدد ۲ و الی آخر بیاید.
     const resolvedShift: ShiftType =
-      shift === 'L' ? resolveLeaveShiftAssignment(schedule.assignments, pId, day) : shift;
+      shift === 'L' ? resolveLeaveShiftAssignment(latestSchedule.assignments, pId, day) : shift;
 
     try {
-      const deptId = selectedDepartmentId || 'sepehr';
-
       // Create persistence adapter for the Facade
       const persistenceAdapter: SchedulePersistence = {
         saveSchedule: async (newSchedule) => {
@@ -2705,16 +2870,16 @@ export default function Home() {
 
           // هشدارهایی که با همین ویرایش رفع شده‌اند نباید در فهرست نادیده‌گرفته‌ها بمانند؛
           // facade فهرست هم‌ترازشده را روی newSchedule گذاشته است.
-          const prunedDismissed = newSchedule.dismissedWarnings ?? dismissedWarnings;
+          const prunedDismissed = newSchedule.dismissedWarnings ?? currentDismissed;
 
           const updatedDept = {
             ...oldDept,
             schedules: {
               ...oldDept.schedules,
-              [`${currentYear}_${currentMonth}`]: {
+              [monthKey]: {
                 ...newSchedule,
                 dismissedWarnings: prunedDismissed,
-                lockedRows: lockedRows,
+                lockedRows: currentLocked,
               },
             },
           };
@@ -2725,6 +2890,10 @@ export default function Home() {
       };
 
       // Use the Facade (delegates pure logic to domain layer)
+      // ====== نکته کلیدی: currentSchedule از آخرین وضعیت تعهدشده خوانده می‌شود ======
+      // ثبت سلول ویرایش‌شده در فهرست محافظت‌شده‌ها (سیستم هرگز این سلول را تغییر نمی‌دهد)
+      protectedCellsRef.current.add(`${pId}:${day}`);
+
       const result = await applyManualShiftChangeFacade(
         {
           personnelId: pId,
@@ -2732,18 +2901,19 @@ export default function Home() {
           shift: resolvedShift,
           year: currentYear,
           month: currentMonth,
-          currentSchedule: schedule,
-          personnel,
-          requests,
-          settings,
-          holidays: customHolidays,
-          firstDayOfWeek: firstDayOfWeekIndex,
+          currentSchedule: latestSchedule,
+          personnel: currentPersonnel,
+          requests: currentRequests,
+          settings: currentSettings,
+          holidays: currentHolidays,
+          firstDayOfWeek: currentFirstDay,
           lockState: {
             finalizedNursesMonths,
             finalizedAssistantsMonths,
-            lockedRows,
+            lockedRows: currentLocked,
           },
-          dismissedWarnings,
+          dismissedWarnings: currentDismissed,
+          protectedCells: Array.from(protectedCellsRef.current),
         },
         verifyCoverageAndLeaders,
         persistenceAdapter,
@@ -2752,13 +2922,61 @@ export default function Home() {
 
       if (!result.success) {
         alert('خطا در تغییر دستی شیفت: ' + result.error);
-      } else {
-        // هشدارِ رفع‌شده باید کاملاً از سیستم برود: هم از حالت موقتِ رابط کاربری و هم
-        // از فهرست ماندگارِ نادیده‌گرفته‌ها (که facade آن را هم‌تراز کرده است).
-        const remainingWarnings = result.schedule?.warnings ?? [];
+      } else if (result.schedule) {
+        // ====== به‌روزرسانی صریح schedule در UI برای پویا‌سازی فوری هشدارها ======
+        // پس از هر ویرایش دستی، هشدارها بازتولید می‌شوند و schedule باید فوراً
+        // به‌روزرسانی شود تا تغییرات در رابط کاربری منعکس گردد.
+        // lockedRows و سایر فیلدها هم باید حفظ شوند.
+        const finalSchedule: MonthlySchedule = {
+          ...result.schedule,
+          lockedRows: currentLocked,
+          dismissedWarnings: result.schedule.dismissedWarnings ?? currentDismissed,
+        };
+        setSchedule(finalSchedule);
+        const remainingWarnings = finalSchedule.warnings ?? [];
         setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
         setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         setEditingCell(null);
+
+        // ====== خروج از حالت نمایش سناریو پس از ویرایش دستی ======
+        // اگر سناریویی برای گروه شغلی این پرسنل فعال باشد، باید پاک شود
+        // تا displayedSchedule به برنامه اصلی برگردد و تغییرات قابل مشاهده باشند.
+        const editedPerson = currentPersonnel.find(pp => pp.id === pId);
+        if (editedPerson) {
+          const jobGroup = editedPerson.jobGroup;
+          const nextDb2 = getFreshDbCopy();
+          const dept2 = nextDb2?.deptData?.[deptId];
+          const activeScenarios = dept2?.activeScenarios?.[monthKey];
+          if (activeScenarios) {
+            let needsUpdate = false;
+            let newActiveScenarios = { ...(activeScenarios as any) };
+
+            // حالت قدیمی (flat)
+            if (newActiveScenarios.scenarios && Array.isArray(newActiveScenarios.scenarios)) {
+              if (newActiveScenarios.targetJobGroup === jobGroup) {
+                delete (nextDb2.deptData[deptId] as any).activeScenarios[monthKey];
+                needsUpdate = true;
+              }
+            } else {
+              // حالت جدید (nurse/assistant)
+              if (newActiveScenarios[jobGroup]) {
+                delete newActiveScenarios[jobGroup];
+                if (Object.keys(newActiveScenarios).length === 0) {
+                  delete (nextDb2.deptData[deptId] as any).activeScenarios[monthKey];
+                } else {
+                  (nextDb2.deptData[deptId] as any).activeScenarios[monthKey] = newActiveScenarios;
+                }
+                needsUpdate = true;
+              }
+            }
+
+            if (needsUpdate) {
+              void saveDbState(nextDb2, { showBusyOverlay: false }).catch(error => {
+                console.error('Error clearing scenarios after manual edit:', error);
+              });
+            }
+          }
+        }
       }
     } catch (error) {
       console.error('Error setting manual shift change:', error);
