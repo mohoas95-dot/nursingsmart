@@ -164,13 +164,16 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
       (sum, ch) => sum + (GHOST_CHAR_W_EM[ch] ?? DEFAULT_CHAR_W_EM) + GHOST_TRACKING_EM,
       0
     );
-  /** گلولهٔ مسئول شیفت با فونت ۰٫۶۲ برابر + فاصلهٔ ۰٫۲۵em، تقریباً ۰٫۶۵em عرض می‌گیرد */
-  const LEADER_W_EM = 0.65;
-  const heightCapPt = rowHeightMm * PT_PER_MM * 0.82;
+  /*
+   * گلولهٔ سرشیفتی در چیدمان absolute و زیر حروف است، پس عرضی اشغال نمی‌کند و
+   * در محاسبهٔ اندازهٔ فونت وارد نمی‌شود؛ به همین دلیل اندازهٔ حروف در سلول‌های
+   * دارای گلوله و بدون گلوله یکسان می‌ماند.
+   * ارتفاع هم کمی محافظه‌کارانه‌تر گرفته شده تا جای گلوله زیر حروف باز بماند.
+   */
+  const heightCapPt = rowHeightMm * PT_PER_MM * 0.72;
   /** ۰٫۹mm حاشیهٔ امن تا حروف به خطوط سلول نچسبند */
-  const widthCapFor = (letters: string, withLeader: boolean) =>
-    ((dayColMm - 0.9) * PT_PER_MM) /
-    Math.max(0.5, ghostWidthEm(letters) + (withLeader ? LEADER_W_EM : 0));
+  const widthCapFor = (letters: string) =>
+    ((dayColMm - 0.9) * PT_PER_MM) / Math.max(0.5, ghostWidthEm(letters));
 
   /**
    * اندازهٔ نام عمودی روز هفته: با دو قید محدود می‌شود —
@@ -205,13 +208,19 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
   };
 
   /**
+   * اندازهٔ گلولهٔ سرشیفتی فقط به ارتفاع سطر بستگی دارد (نه به طول حروف سلول)،
+   * تا همهٔ گلوله‌های برگه یک‌اندازه و یکدست دیده شوند.
+   */
+  const leaderDotPt = clamp(rowHeightMm * PT_PER_MM * 0.3, 2.6, 5);
+
+  /**
    * حروف طولانی‌تر شیفت (MEN، مME و…) کوچک‌تر می‌شوند تا در سلول جا شوند.
-   * اگر گلولهٔ مسئول شیفت هم باشد، عرض آن در محاسبه لحاظ می‌شود.
+   * گلولهٔ سرشیفتی عمداً در محاسبه نمی‌آید تا اندازهٔ حروف را تغییر ندهد.
    */
   const shiftFontSizeFor = (text: string): number => {
     const hasMark = text.startsWith(LEADER_MARK);
     const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
-    return clamp(Math.min(heightCapPt, widthCapFor(letters, hasMark)), 4.2, 12);
+    return clamp(Math.min(heightCapPt, widthCapFor(letters)), 4.2, 12);
   };
 
   const reportOf = (id: string) => reports.find((r) => r.personnelId === id);
@@ -259,11 +268,6 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             <td key={d.day} className={`ps-cell ps-day ${d.isHoliday ? 'ps-holiday' : ''}`}>
               {text && (
                 <span className="ps-cellbox">
-                  {hasMark && (
-                    <span className="ps-leader" style={{ fontSize: `${fontPt * 0.62}pt` }}>
-                      {LEADER_MARK}
-                    </span>
-                  )}
                   {leaveMark && (
                     <span className="ps-leave" style={{ fontSize: `${fontPt * 0.8}pt` }}>
                       {LEAVE_MARK}
@@ -272,6 +276,16 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                   {latinLetters && (
                     <span className="ps-ghost" style={{ fontSize: `${fontPt}pt` }}>
                       {latinLetters}
+                    </span>
+                  )}
+                  {/*
+                    گلولهٔ سرشیفتی زیر حروف و خارج از جریان چیدمان (absolute) قرار
+                    می‌گیرد تا عرضی اشغال نکند؛ در نتیجه اندازهٔ حروف در سلول‌های
+                    دارای گلوله و بدون گلوله دقیقاً یکسان می‌ماند.
+                  */}
+                  {hasMark && (
+                    <span className="ps-leader" style={{ fontSize: `${leaderDotPt}pt` }}>
+                      {LEADER_MARK}
                     </span>
                   )}
                 </span>
@@ -644,27 +658,35 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
          * مستقل از اینکه گلولهٔ مسئول شیفت باشد یا نه.
          */
         .ps-cellbox {
+          position: relative;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 0.25em;
+          gap: 0.12em;
           width: 100%;
           height: 100%;
           line-height: 1;
         }
-        /* گلولهٔ مسئول شیفت: توپر ولی خاکستری خیلی کم‌رنگ، هم‌خوان با حروف تریسینگ */
+        /*
+         * گلولهٔ مسئول شیفت: زیر حروف و خارج از جریان چیدمان.
+         * چون absolute است هیچ عرضی از سلول نمی‌گیرد، پس اندازهٔ حروف در
+         * سلول‌های دارای گلوله با بقیهٔ سلول‌ها یکسان می‌ماند.
+         */
         .ps-leader {
-          display: inline-block;
+          position: absolute;
+          left: 50%;
+          bottom: 0;
+          transform: translateX(-50%);
           color: #c2c2c2;
           -webkit-text-fill-color: #c2c2c2;
           line-height: 1;
-          flex: 0 0 auto;
+          pointer-events: none;
         }
         /*
          * ===== حروف انگلیسی شیفت: فونت تریسینگ (نقطه‌چین) و کم‌رنگ =====
-         * Handjet یک فونت متغیرِ element-based است: خودِ حروف از نقطه ساخته
-         * می‌شوند (نه ماسک CSS روی حروف توپر) و تراکم/شکل نقطه‌ها با محورهای
-         * ELGR و ELSH قابل تنظیم است. پرسنل روی نقطه‌ها را با مداد پررنگ می‌کنند.
+         * Raleway Dots یک فونت واقعی «tracing» است: خودِ حروف از نقطه‌های گرد
+         * ساخته شده‌اند (نه ماسک CSS روی حروف توپر) و پرسنل روی نقطه‌ها را با
+         * مداد پررنگ می‌کنند.
          * مجوز فونت: SIL OFL — از طریق next/font/google خودمیزبان می‌شود.
          * توجه: این فونت proportional است؛ جدول GHOST_CHAR_W_EM بر همین اساس تنظیم شده.
          */
@@ -681,14 +703,8 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         }
         .ps-ghost {
           display: inline-block;
-          font-family: var(--font-tracing), Handjet, 'Courier New', monospace;
-          font-weight: 500;
-          /*
-           * ELGR 1 → کمترین تعداد المان در هر خانهٔ شبکه ⇒ نقطه‌ها کم‌تراکم و بازتر
-           * ELSH 8 → شکل المان کاملاً گرد ⇒ نقطه‌های درشت و مجزا
-           * نتیجه: «M» به‌جای انبوه نقطه‌های ریز، نقطه‌های شمردنی و بافاصله دارد.
-           */
-          font-variation-settings: 'ELGR' 1, 'ELSH' 8, 'wght' 500;
+          font-family: var(--font-tracing), 'Raleway Dots', 'Courier New', monospace;
+          font-weight: 400;
           letter-spacing: 0.2pt;
           line-height: 1;
           vertical-align: middle;
