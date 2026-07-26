@@ -2883,6 +2883,46 @@ export default function Home() {
         setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
         setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         setEditingCell(null);
+
+        // ====== خروج از حالت نمایش سناریو پس از ویرایش دستی ======
+        // اگر سناریویی برای گروه شغلی این پرسنل فعال باشد، باید پاک شود
+        // تا displayedSchedule به برنامه اصلی برگردد و تغییرات قابل مشاهده باشند.
+        const editedPerson = currentPersonnel.find(pp => pp.id === pId);
+        if (editedPerson) {
+          const jobGroup = editedPerson.jobGroup;
+          const nextDb2 = getFreshDbCopy();
+          const dept2 = nextDb2?.deptData?.[deptId];
+          const activeScenarios = dept2?.activeScenarios?.[monthKey];
+          if (activeScenarios) {
+            let needsUpdate = false;
+            let newActiveScenarios = { ...(activeScenarios as any) };
+
+            // حالت قدیمی (flat)
+            if (newActiveScenarios.scenarios && Array.isArray(newActiveScenarios.scenarios)) {
+              if (newActiveScenarios.targetJobGroup === jobGroup) {
+                delete (nextDb2.deptData[deptId] as any).activeScenarios[monthKey];
+                needsUpdate = true;
+              }
+            } else {
+              // حالت جدید (nurse/assistant)
+              if (newActiveScenarios[jobGroup]) {
+                delete newActiveScenarios[jobGroup];
+                if (Object.keys(newActiveScenarios).length === 0) {
+                  delete (nextDb2.deptData[deptId] as any).activeScenarios[monthKey];
+                } else {
+                  (nextDb2.deptData[deptId] as any).activeScenarios[monthKey] = newActiveScenarios;
+                }
+                needsUpdate = true;
+              }
+            }
+
+            if (needsUpdate) {
+              void saveDbState(nextDb2, { showBusyOverlay: false }).catch(error => {
+                console.error('Error clearing scenarios after manual edit:', error);
+              });
+            }
+          }
+        }
       }
     } catch (error) {
       console.error('Error setting manual shift change:', error);
