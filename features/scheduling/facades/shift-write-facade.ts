@@ -303,11 +303,14 @@ export async function applyManualShiftChangeFacade(
     settings,
     holidays,
     firstDayOfWeek,
+    lockState,
     dismissedWarnings = currentSchedule.dismissedWarnings ?? [],
   } = input;
 
+  const lockedRows = lockState?.lockedRows ?? [];
+
   try {
-    // Step 1: Update the cell (pure domain logic)
+    // Step 1: Update the cell — تغییر دستی سرپرستار حفظ می‌شود
     const updatedAssignments = updateScheduleCell(
       currentSchedule.assignments,
       personnelId,
@@ -315,29 +318,45 @@ export async function applyManualShiftChangeFacade(
       shift
     );
 
-    // Step 2: Auto-reconcile staffing coverage — هوشمندانه کمبود و مازاد را جبران کن
-    // به‌محض اینکه سرپرستار سلولی را ویرایش می‌کند، سیستم به‌صورت خودکار تلاش می‌کند
-    // هر کمبود یا مازاد نیرویی را با جابه‌جایی شیفت نفرات دیگر (با رعایت قوانین) جبران کند.
-    // فقط اگر با تمام تلاش‌ها امکان جبران نباشد، هشدار صادر می‌شود.
+    // Step 2: Auto-reconcile — جبران خودکار کمبود و مازاد
+    // سیستم به‌صورت زنجیره‌وار تلاش می‌کند کمبود/مازاد را جبران کند.
+    // چندین بار اجرا می‌شود تا اثرات آبشاری (مثلاً آزاد شدن نفر از مازاد روز دیگر
+    // و استفاده از او برای جبران کمبود) هم پوشش داده شوند.
+    // قوانین:
+    //   - تغییر دستی سرپرستار هرگز لغو نمی‌شود (سلول ویرایش‌شده دست‌نخورده می‌ماند)
+    //   - شیفت نفرات قفل‌شده (lockedRows) هرگز تغییر نمی‌کند
+    //   - فقط در صورتی که هیچ راهی برای جبران نباشد، هشدار صادر می‌شود
     const editedPerson = personnel.find(p => p.id === personnelId);
     const targetJobGroups: Array<'nurse' | 'assistant'> = editedPerson
       ? [editedPerson.jobGroup]
       : ['nurse', 'assistant'];
 
     const calendar = generateJalaliMonthCalendar(year, month, holidays, firstDayOfWeek);
-    const staffingResult = reconcileStaffingCoverage(
-      updatedAssignments,
-      personnel,
-      settings,
-      calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday })),
-      targetJobGroups,
-      [], // در ویرایش دستی، ردیف‌ها قفل نیستند (سرپرستار خودش ویرایش کرده)
-      requests
-    );
-    const reconciledAssignments = staffingResult.assignments;
+    const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+
+    let reconciledAssignments = updatedAssignments;
+    const MAX_RECONCILE_PASSES = 3;
+    let prevUnresolvedCount = Infinity;
+
+    for (let pass = 0; pass < MAX_RECONCILE_PASSES; pass++) {
+      const staffingResult = reconcileStaffingCoverage(
+        reconciledAssignments,
+        personnel,
+        settings,
+        calendarDays,
+        targetJobGroups,
+        lockedRows, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
+        requests
+      );
+      reconciledAssignments = staffingResult.assignments;
+
+      // اگر تعداد gapها کمتر نشد یا صفر شد، توقف
+      if (staffingResult.unresolvedGaps.length === 0) break;
+      if (staffingResult.unresolvedGaps.length >= prevUnresolvedCount) break;
+      prevUnresolvedCount = staffingResult.unresolvedGaps.length;
+    }
 
     // Step 3: Verify coverage and leaders (on reconciled assignments)
-    // اگر reconcile نتوانسته gapها را حل کند، verifier آن‌ها را به‌عنوان هشدار گزارش می‌دهد.
     const verification = verifier(
       year,
       month,
@@ -350,8 +369,6 @@ export async function applyManualShiftChangeFacade(
     );
 
     // Step 4: Retire alerts that this edit actually resolved.
-    // اگر سرپرستار با همین ویرایش تخلفی را برطرف کند، هشدار آن دیگر تولید نمی‌شود؛
-    // پس رکورد «نادیده‌گرفتن»‌اش هم باید برود تا بروز دوبارهٔ آن در آینده پنهان نماند.
     const prunedDismissed = pruneDismissedWarnings(verification.warnings, dismissedWarnings);
     const resolvedWarnings = findResolvedWarnings(
       currentSchedule.warnings ?? [],

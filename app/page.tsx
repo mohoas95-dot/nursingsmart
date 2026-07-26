@@ -1315,10 +1315,14 @@ export default function Home() {
 
   // ====== پایش پیوسته، جبران خودکار کمبود/مازاد و بازتولید پویای هشدارها ======
   // این effect هر بار که برنامه (schedule) تغییر می‌کند:
-  //   ۱) ابتدا کمبود و مازاد نیرو را به‌صورت خودکار جبران می‌کند (reconcile)
+  //   ۱) ابتدا کمبود و مازاد نیرو را به‌صورت خودکار و زنجیره‌وار جبران می‌کند
+  //      (تا ۳ بار اجرا می‌شود تا اثرات آبشاری هم پوشش داده شوند)
   //   ۲) سپس هشدارها را بازتولید می‌کند
   //   ۳) در صورت تفاوت، schedule را به‌روزرسانی می‌کند
-  // این تضمین می‌کند که سیستم همواره هوشمند عمل کند و کمترین هشدار صادر شود.
+  // قوانین:
+  //   - تغییر دستی سرپرستار حفظ می‌شود
+  //   - شیفت نفرات قفل‌شده (lockedRows) هرگز تغییر نمی‌کند
+  //   - فقط در صورتی که هیچ راهی نباشد، هشدار صادر می‌شود
   const previousAssignmentsKeyRef = React.useRef<string>('');
   const previousWarningsKeyRef = React.useRef<string>('');
   const isReevaluatingRef = React.useRef<boolean>(false);
@@ -1340,23 +1344,31 @@ export default function Home() {
     const assignmentsChanged = assignmentsKey !== previousAssignmentsKeyRef.current;
     previousAssignmentsKeyRef.current = assignmentsKey;
 
-    // ====== گام ۱: جبران خودکار کمبود و مازاد نیرو ======
-    // هر بار که assignments تغییر می‌کند، سیستم تلاش می‌کند کمبود/مازاد را رفع کند.
+    // ====== گام ۱: جبران خودکار کمبود و مازاد نیرو (زنجیره‌وار) ======
     let effectiveAssignments = schedule.assignments;
     if (assignmentsChanged) {
       const calendar = generateJalaliMonthCalendar(
         currentYear, currentMonth, currentHolidays, currentFirstDay === -1 ? undefined : currentFirstDay
       );
-      const staffingResult = reconcileStaffingCoverage(
-        schedule.assignments,
-        currentPersonnel,
-        currentSettings,
-        calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday })),
-        ['nurse', 'assistant'],
-        currentLocked,
-        currentRequests
-      );
-      effectiveAssignments = staffingResult.assignments;
+      const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+
+      const MAX_PASSES = 3;
+      let prevUnresolvedCount = Infinity;
+      for (let pass = 0; pass < MAX_PASSES; pass++) {
+        const staffingResult = reconcileStaffingCoverage(
+          effectiveAssignments,
+          currentPersonnel,
+          currentSettings,
+          calendarDays,
+          ['nurse', 'assistant'],
+          currentLocked, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
+          currentRequests
+        );
+        effectiveAssignments = staffingResult.assignments;
+        if (staffingResult.unresolvedGaps.length === 0) break;
+        if (staffingResult.unresolvedGaps.length >= prevUnresolvedCount) break;
+        prevUnresolvedCount = staffingResult.unresolvedGaps.length;
+      }
     }
 
     // ====== گام ۲: بازتولید هشدارها بر اساس assignments جبران‌شده ======
@@ -1378,7 +1390,6 @@ export default function Home() {
     const currentKey = [...currentWarnings].sort().join('|||');
     const reconciledAssignmentsKey = JSON.stringify(effectiveAssignments);
 
-    // اگر نه assignments تغییر کرده و نه هشدارها، نیازی به به‌روزرسانی نیست
     const assignmentsActuallyChanged = reconciledAssignmentsKey !== JSON.stringify(schedule.assignments);
     const warningsActuallyChanged = freshKey !== currentKey;
 
@@ -1387,7 +1398,6 @@ export default function Home() {
       return;
     }
 
-    // محافظت در برابر حلقه بی‌نهایت: اگر همین هشدارها را قبلاً دیده‌ایم
     if (!assignmentsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
     previousWarningsKeyRef.current = freshKey;
 
@@ -1417,7 +1427,7 @@ export default function Home() {
           ...oldDept.schedules,
           [key]: {
             ...updatedSchedule,
-            lockedRows: schedule.lockedRows || [],
+            lockedRows: currentLocked,
           },
         },
       };
