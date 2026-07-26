@@ -26,6 +26,9 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  */
 const WEEKDAY_FULL = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
 
+/** نشانهٔ «مسئول شیفت» — گلولهٔ توپر مشکی */
+const LEADER_MARK = '●';
+
 const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
 const toFa = (value: number | string): string =>
   String(value).replace(/\d/g, (d) => FA_DIGITS[Number(d)]);
@@ -62,7 +65,8 @@ function displayShift(raw: ShiftType | undefined, isLeader: boolean): string {
   const clean = isLeave ? shift.substring(1) : shift;
   if (clean === 'OFF') return '';
   const label = isLeave ? `م${clean}` : clean;
-  return isLeader ? `${label}*` : label;
+  // نشانهٔ مسئول شیفت: گلولهٔ توپر مشکی (به‌جای ستاره)
+  return isLeader ? `${LEADER_MARK}${label}` : label;
 }
 
 /* ===== سنجه‌های چیدمان صفحه A4 لنداسکیپ (میلی‌متر) ===== */
@@ -140,9 +144,13 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
    * Courier New حدود 0.6em بر هر نویسه عرض می‌گیرد.
    */
   const CHAR_W_EM = 0.62;
+  /** گلولهٔ مسئول شیفت با فونت ۰٫۶۲ برابر + فاصلهٔ ۰٫۲۵em، تقریباً ۰٫۶۵em عرض می‌گیرد */
+  const LEADER_W_EM = 0.65;
   const heightCapPt = rowHeightMm * PT_PER_MM * 0.82;
-  const widthCapFor = (chars: number) =>
-    ((dayColMm - 0.5) * PT_PER_MM) / (Math.max(1, chars) * CHAR_W_EM);
+  /** ۰٫۹mm حاشیهٔ امن تا حروف به خطوط سلول نچسبند */
+  const widthCapFor = (chars: number, withLeader = false) =>
+    ((dayColMm - 0.9) * PT_PER_MM) /
+    (Math.max(1, chars) * CHAR_W_EM + (withLeader ? LEADER_W_EM : 0));
 
   /**
    * اندازهٔ نام عمودی روز هفته: با دو قید محدود می‌شود —
@@ -176,9 +184,15 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
     return Math.max(4.6, base * 0.68);
   };
 
-  /** حروف طولانی‌تر شیفت (MEN، مME و…) کوچک‌تر می‌شوند تا در سلول جا شوند */
-  const shiftFontSizeFor = (text: string): number =>
-    clamp(Math.min(heightCapPt, widthCapFor(text.length)), 4.2, 12);
+  /**
+   * حروف طولانی‌تر شیفت (MEN، مME و…) کوچک‌تر می‌شوند تا در سلول جا شوند.
+   * اگر گلولهٔ مسئول شیفت هم باشد، عرض آن در محاسبه لحاظ می‌شود.
+   */
+  const shiftFontSizeFor = (text: string): number => {
+    const hasMark = text.startsWith(LEADER_MARK);
+    const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
+    return clamp(Math.min(heightCapPt, widthCapFor(letters.length, hasMark)), 4.2, 12);
+  };
 
   const reportOf = (id: string) => reports.find((r) => r.personnelId === id);
 
@@ -214,11 +228,22 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             !!leaders &&
             (leaders.morning === p.id || leaders.afternoon === p.id || leaders.night === p.id);
           const text = displayShift(shift, isLeader);
+          // گلولهٔ مسئول شیفت پررنگ می‌ماند؛ فقط حروف شیفت نقطه‌چین و کم‌رنگ‌اند.
+          const hasMark = text.startsWith(LEADER_MARK);
+          const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
+          const fontPt = shiftFontSizeFor(text);
           return (
             <td key={d.day} className={`ps-cell ps-day ${d.isHoliday ? 'ps-holiday' : ''}`}>
               {text && (
-                <span className="ps-ghost" style={{ fontSize: `${shiftFontSizeFor(text)}pt` }}>
-                  {text}
+                <span className="ps-cellbox">
+                  {hasMark && (
+                    <span className="ps-leader" style={{ fontSize: `${fontPt * 0.62}pt` }}>
+                      {LEADER_MARK}
+                    </span>
+                  )}
+                  <span className="ps-ghost" style={{ fontSize: `${fontPt}pt` }}>
+                    {letters}
+                  </span>
                 </span>
               )}
             </td>
@@ -263,7 +288,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             )}
 
             <div className="ps-legend">
-              <span>* : مسئول شیفت</span>
+              <span>{LEADER_MARK} : مسئول شیفت</span>
               <span className="ps-legend-holiday">تعطیل / جمعه</span>
             </div>
           </div>
@@ -341,7 +366,15 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         </div>
       </div>
 
-      <style jsx>{`
+      {/*
+        مهم: این استایل باید global باشد.
+        styled-jsx معمولی (scoped) فقط به عناصری کلاسِ scope می‌دهد که مستقیماً در
+        همین JSX نوشته شده باشند؛ عناصری که داخل توابع کمکی مثل renderRow یا داخل
+        callbackهای map ساخته می‌شوند این کلاس را نمی‌گیرند و در نتیجه کل استایل
+        سلول‌های جدول (خطوط، وسط‌چینی، فونت) در خروجی واقعی حذف می‌شد.
+        همهٔ کلاس‌ها با پیشوند ps- هستند و برگه فقط هنگام چاپ دیده می‌شود.
+      */}
+      <style jsx global>{`
         .ps-sheet {
           width: 100%;
           font-family: var(--font-vazirmatn), Vazirmatn, Tahoma, sans-serif;
@@ -575,6 +608,27 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         .ps-day {
           text-align: center;
           vertical-align: middle;
+        }
+        /*
+         * وسط‌چینی قطعی حروف در سلول: با flex هم افقی و هم عمودی وسط می‌نشینند،
+         * مستقل از اینکه گلولهٔ مسئول شیفت باشد یا نه.
+         */
+        .ps-cellbox {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.25em;
+          width: 100%;
+          height: 100%;
+          line-height: 1;
+        }
+        /* گلولهٔ مسئول شیفت: توپر و مشکی (نقطه‌چین نمی‌شود) */
+        .ps-leader {
+          display: inline-block;
+          color: #000;
+          -webkit-text-fill-color: #000;
+          line-height: 1;
+          flex: 0 0 auto;
         }
         .ps-ghost {
           display: inline-block;
