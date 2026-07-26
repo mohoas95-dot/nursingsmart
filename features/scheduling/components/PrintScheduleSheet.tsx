@@ -9,11 +9,12 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  *
  * ویژگی‌ها (مطابق درخواست سرپرستار):
  *  - فقط جدول؛ بدون هدر/منو/حاشیه اضافی، A4 لنداسکیپ، تک‌صفحه
+ *  - جدول‌بندی کامل: خطوط افقی و عمودی برای تمام سلول‌ها
  *  - تمام روزهای ماه (۱ تا ۳۰/۳۱) با نام روز هفته زیر شماره روز
  *  - دو ستون پایانی: مجموع کارکرد «با بهره‌وری» و «بدون بهره‌وری»
- *  - تعطیلات و جمعه‌ها با ترام خاکستری و علامت متمایز (سیاه‌وسفید)
- *  - متن سلول‌ها کم‌رنگ و توخالی (نقطه‌چین‌مانند) برای پررنگ کردن با مداد
- *  - کادر تزئینی دور جدول + تیتر کوتاه با ماه و سال
+ *  - تعطیلات و جمعه‌ها با هاشور در کل ستون
+ *  - حروف شیفت به‌صورت نقطه‌چین و بسیار کم‌رنگ برای پررنگ‌کردن با مداد
+ *  - فونت Lalezar (تیتر فارسی) برای اسامی و عناوین
  */
 
 const WEEKDAY_SHORT = ['ش', '۱ش', '۲ش', '۳ش', '۴ش', '۵ش', 'ج'];
@@ -65,45 +66,50 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
   const rowCount = activePersonnel.length;
   // مقیاس‌بندی خودکار ارتفاع سطر تا همه پرسنل در یک صفحه A4 لنداسکیپ جا شوند
   const rowHeightMm = rowCount <= 14 ? 8 : rowCount <= 20 ? 6.2 : rowCount <= 28 ? 4.8 : rowCount <= 36 ? 3.8 : 3.1;
-  const cellFontPt = rowCount <= 20 ? 7.5 : rowCount <= 30 ? 6.5 : 5.8;
-  const nameFontPt = rowCount <= 20 ? 7.5 : rowCount <= 30 ? 6.8 : 6;
+  const cellFontPt = rowCount <= 20 ? 7.2 : rowCount <= 30 ? 6.4 : 5.6;
+  const nameFontPt = rowCount <= 20 ? 8 : rowCount <= 30 ? 7 : 6.2;
 
-  /**
-   * اندازه فونت نام را بر اساس طول نام کوچک می‌کند تا هر نام دقیقاً در یک خط
-   * و داخل سلول خودش جا شود و هیچ نامنظمی/شکست خط رخ ندهد.
-   */
+  /** اندازه فونت نام بر اساس طول نام، تا هر نام در یک خط و داخل سلول جا شود */
   const nameFontSizeFor = (fullName: string): number => {
     const len = fullName.trim().length;
     const base = nameFontPt;
-    if (len <= 16) return base;
-    if (len <= 20) return base - 0.6;
-    if (len <= 24) return base - 1.2;
-    if (len <= 28) return base - 1.7;
-    return Math.max(4.4, base - 2.2);
+    if (len <= 14) return base;
+    if (len <= 18) return base - 0.7;
+    if (len <= 22) return base - 1.3;
+    if (len <= 26) return base - 1.9;
+    return Math.max(4.6, base - 2.5);
   };
 
-  const groups: Array<{ key: 'nurse' | 'assistant'; title: string; rows: Personnel[] }> = [
-    { key: 'nurse', title: 'پرستاران', rows: activePersonnel.filter((p) => p.jobGroup === 'nurse') },
-    { key: 'assistant', title: 'کمک‌بهیاران', rows: activePersonnel.filter((p) => p.jobGroup === 'assistant') },
-  ].filter((g) => g.rows.length > 0) as Array<{ key: 'nurse' | 'assistant'; title: string; rows: Personnel[] }>;
+  /** حروف طولانی‌تر شیفت (MEN، مME و…) کوچک‌تر می‌شوند تا در سلول جا شوند */
+  const shiftFontSizeFor = (text: string): number => {
+    const len = text.length;
+    if (len <= 1) return cellFontPt;
+    if (len === 2) return cellFontPt - 0.6;
+    if (len === 3) return cellFontPt - 1.4;
+    return Math.max(3.6, cellFontPt - 2.1);
+  };
+
+  const groups = (
+    [
+      { key: 'nurse' as const, title: 'پرستاران', rows: activePersonnel.filter((p) => p.jobGroup === 'nurse') },
+      { key: 'assistant' as const, title: 'کمک‌بهیاران', rows: activePersonnel.filter((p) => p.jobGroup === 'assistant') },
+    ]
+  ).filter((g) => g.rows.length > 0);
 
   const reportOf = (id: string) => reports.find((r) => r.personnelId === id);
 
-  const renderRow = (p: Personnel, index: number) => {
+  const renderRow = (p: Personnel) => {
     const pAssignments = schedule?.assignments?.[p.id] || {};
     const rep = reportOf(p.id);
     const withoutProductivity = Number(rep?.workedHours || 0);
     const withProductivity = withoutProductivity + Number(rep?.productivityHours || 0);
+    const fullName = `${p.firstName} ${p.lastName}`;
 
     return (
       <tr key={p.id} style={{ height: `${rowHeightMm}mm` }}>
         <td className="ps-cell ps-name">
-          <span className="ps-idx">{toFa(index + 1)}</span>
-          <span
-            className="ps-name-text"
-            style={{ fontSize: `${nameFontSizeFor(`${p.firstName} ${p.lastName}`)}pt` }}
-          >
-            {p.firstName} {p.lastName}
+          <span className="ps-name-text" style={{ fontSize: `${nameFontSizeFor(fullName)}pt` }}>
+            {fullName}
           </span>
         </td>
         {calendarDays.map((d) => {
@@ -114,19 +120,20 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             (leaders.morning === p.id || leaders.afternoon === p.id || leaders.night === p.id);
           const text = displayShift(shift, isLeader);
           return (
-            <td
-              key={d.day}
-              className={`ps-cell ps-day ${d.isHoliday ? 'ps-holiday' : ''}`}
-            >
-              <span className="ps-ghost">{text}</span>
+            <td key={d.day} className={`ps-cell ps-day ${d.isHoliday ? 'ps-holiday' : ''}`}>
+              {text && (
+                <span className="ps-ghost" style={{ fontSize: `${shiftFontSizeFor(text)}pt` }}>
+                  {text}
+                </span>
+              )}
             </td>
           );
         })}
         <td className="ps-cell ps-sum-cell">
-          <span className="ps-sum">{toFa(withProductivity.toFixed(0))}</span>
+          <span className="ps-ghost ps-ghost-sum">{toFa(withProductivity.toFixed(0))}</span>
         </td>
         <td className="ps-cell ps-sum-cell ps-sum-cell-alt">
-          <span className="ps-sum">{toFa(withoutProductivity.toFixed(0))}</span>
+          <span className="ps-ghost ps-ghost-sum">{toFa(withoutProductivity.toFixed(0))}</span>
         </td>
       </tr>
     );
@@ -159,7 +166,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
               <tr className="ps-head-days">
                 <th className="ps-cell ps-head ps-name-head">نام و نام خانوادگی</th>
                 {calendarDays.map((d) => (
-                  <th key={d.day} className={`ps-cell ps-head ${d.isHoliday ? 'ps-holiday-head' : ''}`}>
+                  <th key={d.day} className={`ps-cell ps-head ${d.isHoliday ? 'ps-holiday' : ''}`}>
                     {toFa(d.day)}
                   </th>
                 ))}
@@ -175,11 +182,11 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                 </th>
               </tr>
               <tr className="ps-head-weekdays">
-                <th className="ps-cell ps-head ps-name-head ps-weekday-corner">روزهای ماه ↙</th>
+                <th className="ps-cell ps-head ps-name-head ps-weekday-corner">روزهای ماه</th>
                 {calendarDays.map((d) => (
                   <th
                     key={d.day}
-                    className={`ps-cell ps-head ps-weekday ${d.isHoliday ? 'ps-holiday-head' : ''}`}
+                    className={`ps-cell ps-head ps-weekday ${d.isHoliday ? 'ps-holiday' : ''}`}
                     title={d.holidayTitle || WEEKDAYS[d.dayOfWeek]}
                   >
                     {WEEKDAY_SHORT[d.dayOfWeek]}
@@ -197,7 +204,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                       </td>
                     </tr>
                   )}
-                  {g.rows.map((p, i) => renderRow(p, i))}
+                  {g.rows.map((p) => renderRow(p))}
                 </React.Fragment>
               ))}
               {rowCount === 0 && (
@@ -227,12 +234,12 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           background: #fff;
         }
         .ps-frame {
-          border: 1.6pt solid #111;
+          border: 2px solid #111;
           border-radius: 3mm;
           padding: 1mm;
         }
         .ps-frame-inner {
-          border: 0.5pt solid #7a7a7a;
+          border: 1px solid #8a8a8a;
           border-radius: 2mm;
           padding: 2mm 2.5mm 1.5mm;
         }
@@ -240,7 +247,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           display: flex;
           align-items: flex-end;
           justify-content: space-between;
-          border-bottom: 1pt solid #111;
+          border-bottom: 1px solid #111;
           padding-bottom: 1.2mm;
           margin-bottom: 1.6mm;
         }
@@ -250,8 +257,8 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           gap: 3mm;
         }
         .ps-title {
-          font-size: 14pt;
           font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
+          font-size: 14pt;
           font-weight: 400;
           letter-spacing: -0.3pt;
           margin: 0;
@@ -260,7 +267,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           font-size: 9pt;
           font-weight: 700;
           color: #333;
-          border-right: 1pt solid #999;
+          border-right: 1px solid #999;
           padding-right: 3mm;
         }
         .ps-legend {
@@ -271,152 +278,128 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           color: #444;
         }
         .ps-legend-holiday {
-          background: repeating-linear-gradient(
+          background-image: repeating-linear-gradient(
             45deg,
-            #d9d9d9,
-            #d9d9d9 1px,
-            #fff 1px,
-            #fff 3px
+            #c8c8c8,
+            #c8c8c8 1px,
+            #ffffff 1px,
+            #ffffff 3px
           );
           padding: 0 1.2mm;
-          border: 0.4pt solid #888;
+          border: 1px solid #888;
           border-radius: 1mm;
         }
+
+        /* ===== جدول‌بندی کامل: خطوط افقی و عمودی برای همه سلول‌ها ===== */
         .ps-table {
           width: 100%;
           table-layout: fixed;
           border-collapse: collapse;
-          border: 1pt solid #222;
+          border: 1.5px solid #000;
         }
-        /* خطوط کامل جدول: همه سلول‌ها در هر چهار جهت خط دارند */
         .ps-cell {
-          border: 0.5pt solid #4d4d4d;
+          border: 1px solid #000 !important;
           text-align: center;
           vertical-align: middle;
           padding: 0;
           overflow: hidden;
-        }
-        .ps-table thead .ps-cell {
-          border: 0.7pt solid #222;
-        }
-        .ps-table tbody tr:nth-child(even) .ps-cell {
-          background-color: #fcfcfc;
+          line-height: 1.1;
         }
         .ps-head {
-          font-size: 6.6pt;
-          font-weight: 900;
           font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
-          background: #eeeeee;
-          line-height: 1.15;
+          font-size: 6.8pt;
+          font-weight: 400;
+          background-color: #ededed;
           padding: 0.6mm 0;
         }
         .ps-name-head {
           width: 34mm;
-          font-size: 7pt;
+          font-size: 7.2pt;
         }
         .ps-weekday-corner {
-          font-size: 5.6pt;
-          color: #555;
+          font-size: 5.8pt;
+          color: #444;
         }
         .ps-weekday {
           font-size: 5.8pt;
-          color: #222;
-          background: #f7f7f7;
+          color: #111;
+          background-color: #f6f6f6;
         }
         .ps-sum-head {
           width: 13mm;
-          font-size: 5.9pt;
-          background: #e2e2e2;
+          font-size: 6pt;
+          background-color: #e0e0e0;
         }
         .ps-sum-head-note {
-          font-size: 5.3pt;
-          color: #333;
+          font-size: 5.4pt;
         }
-        /* هاشور کامل ستون تعطیل/جمعه (سربرگ + همه سلول‌های آن ستون) */
-        .ps-holiday-head,
-        .ps-table tbody tr .ps-cell.ps-holiday,
-        .ps-table tbody tr:nth-child(even) .ps-cell.ps-holiday {
+
+        /* هاشور کل ستون تعطیل/جمعه (سربرگ + همه سلول‌ها) */
+        .ps-holiday {
           background-image: repeating-linear-gradient(
             45deg,
-            #cfcfcf,
-            #cfcfcf 0.5px,
-            rgba(255, 255, 255, 0) 0.5px,
-            rgba(255, 255, 255, 0) 3px
+            #c4c4c4,
+            #c4c4c4 1px,
+            #ffffff 1px,
+            #ffffff 3.5px
           );
-          background-color: #fbfbfb;
         }
+
         .ps-name {
           text-align: right;
-          padding: 0 1.2mm;
+          padding: 0 1.4mm;
           white-space: nowrap;
-          line-height: 1;
         }
         .ps-name-text {
           font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
           font-weight: 400;
           letter-spacing: -0.1pt;
           display: inline-block;
-          max-width: 27mm;
+          max-width: 31mm;
           overflow: hidden;
           white-space: nowrap;
           vertical-align: middle;
         }
-        .ps-idx {
-          display: inline-block;
-          min-width: 4mm;
-          color: #999;
-          font-weight: 700;
-          font-size: 5.4pt;
-          vertical-align: middle;
-        }
-        .ps-day {
-          font-size: ${cellFontPt}pt;
-        }
-        /* حروف شیفت: توخالی، بسیار کم‌رنگ و نقطه‌چین‌مانند برای پررنگ‌کردن با مداد */
+
+        /* ===== حروف شیفت: نقطه‌چین و بسیار کم‌رنگ (قابل پررنگ‌کردن با مداد) ===== */
         .ps-ghost {
-          font-weight: 900;
-          font-size: ${cellFontPt}pt;
-          letter-spacing: 0.3pt;
-          color: #dcdcdc;
-          -webkit-text-stroke: 0.18pt #c9c9c9;
-          text-shadow: none;
-          background-image: repeating-linear-gradient(
-            0deg,
-            #bdbdbd,
-            #bdbdbd 0.6px,
-            rgba(255, 255, 255, 0) 0.6px,
-            rgba(255, 255, 255, 0) 1.4px
-          );
-          -webkit-background-clip: text;
-          background-clip: text;
-          opacity: 0.85;
+          display: inline-block;
+          font-family: 'Courier New', var(--font-vazirmatn), monospace;
+          font-weight: 700;
+          letter-spacing: 0.4pt;
+          color: #d8d8d8;
+          text-decoration: none;
+          -webkit-text-stroke: 0.15px #cfcfcf;
+          -webkit-text-fill-color: #d8d8d8;
         }
-        .ps-sum {
+        .ps-ghost-sum {
           font-size: ${cellFontPt + 0.4}pt;
-          font-weight: 900;
-          color: #d5d5d5;
-          -webkit-text-stroke: 0.18pt #bdbdbd;
-          background-image: repeating-linear-gradient(
-            0deg,
-            #b5b5b5,
-            #b5b5b5 0.6px,
-            rgba(255, 255, 255, 0) 0.6px,
-            rgba(255, 255, 255, 0) 1.4px
-          );
-          -webkit-background-clip: text;
-          background-clip: text;
         }
+        /* در مرورگرهای مدرن، حروف با ماسکِ نقطه‌چین رندر می‌شوند */
+        @supports ((-webkit-mask-image: radial-gradient(#000, #000)) or (mask-image: radial-gradient(#000, #000))) {
+          .ps-ghost {
+            color: #b8b8b8;
+            -webkit-text-fill-color: #b8b8b8;
+            -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 45%, transparent 46%);
+            mask-image: radial-gradient(circle at 50% 50%, #000 45%, transparent 46%);
+            -webkit-mask-size: 1.1px 1.1px;
+            mask-size: 1.1px 1.1px;
+            -webkit-mask-repeat: repeat;
+            mask-repeat: repeat;
+          }
+        }
+
         .ps-sum-cell {
           background-color: #fdfdfd;
         }
         .ps-sum-cell-alt {
-          background-color: #f6f6f6;
+          background-color: #f5f5f5;
         }
         .ps-group {
           text-align: right;
-          font-size: 6.6pt;
           font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
-          background: #e4e4e4 !important;
+          font-size: 7pt;
+          background-color: #dedede;
           padding: 0.3mm 1.5mm;
           letter-spacing: 0.3pt;
         }
@@ -435,32 +418,29 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           font-weight: 700;
           color: #444;
           margin-top: 1.2mm;
-          border-top: 0.5pt solid #b5b5b5;
+          border-top: 1px solid #b5b5b5;
           padding-top: 0.8mm;
         }
         .ps-sign {
           color: #666;
         }
-        /* اگر مرورگر background-clip:text را پشتیبانی کند، حروف واقعاً نقطه‌چین می‌شوند */
-        @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-          .ps-ghost,
-          .ps-sum {
-            color: transparent;
-          }
-        }
+
         @media print {
           .ps-sheet {
             page-break-inside: avoid;
           }
-          .ps-holiday,
-          .ps-holiday-head,
+          .ps-sheet,
+          .ps-table,
+          .ps-cell,
           .ps-head,
+          .ps-holiday,
           .ps-group,
+          .ps-ghost,
           .ps-sum-cell,
           .ps-sum-cell-alt,
           .ps-legend-holiday {
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
         }
       `}</style>
