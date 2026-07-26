@@ -145,18 +145,18 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
   /**
    * اندازهٔ حروف با هر دو قید محدود می‌شود: ارتفاع سطر و عرض ستون.
    *
-   * عرض واقعی هر نویسه در فونت تریسینگ (Raleway Dots) بر حسب em — اندازه‌گیری‌شده
-   * از خود فونت. چون این فونت proportional است، به‌جای میانگین، عرض دقیقِ همان
-   * نویسه‌ها جمع زده می‌شود تا «MN» (پهن‌ترین ترکیب) هم از سلول بیرون نزند.
+   * عرض هر نویسه در فونت مونوی Courier Prime برابر ۰٫۶em است (اندازه‌گیری‌شده
+   * از خود فونت). چون فونت monospace است همهٔ نویسه‌ها یک عرض دارند؛ جدول را
+   * نگه می‌داریم تا اگر بعداً فونت proportional شد، محاسبه همچنان درست بماند.
    */
   const GHOST_CHAR_W_EM: Record<string, number> = {
-    M: 0.87,
-    N: 0.76,
-    E: 0.64,
-    L: 0.57,
+    M: 0.6,
+    N: 0.6,
+    E: 0.6,
+    L: 0.6,
     م: 0.64,
   };
-  const DEFAULT_CHAR_W_EM = 0.87;
+  const DEFAULT_CHAR_W_EM = 0.6;
   /** letter-spacing سلول‌ها (۰٫۲pt) هم به عرض هر نویسه اضافه می‌شود */
   const GHOST_TRACKING_EM = 0.03;
   const ghostWidthEm = (text: string): number =>
@@ -703,15 +703,40 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         }
         .ps-ghost {
           display: inline-block;
-          font-family: var(--font-tracing), 'Raleway Dots', 'Courier New', monospace;
-          font-weight: 400;
+          /*
+           * فونت مونو (Courier) با الگوی نقطه‌چین CSS — مطابق نمونه‌ای که
+           * سرپرستار تأیید کرد: حروف سریف و مونو، ساخته‌شده از نقطه‌های ریز.
+           * زنجیره فقط mono است؛ ثابت‌های GHOST_CHAR_W_EM بر همین اساس تنظیم شده.
+           */
+          font-family: var(--font-tracing), 'Courier Prime', 'Courier New', Courier, monospace;
+          font-weight: 700;
           letter-spacing: 0.2pt;
           line-height: 1;
           vertical-align: middle;
           text-align: center;
-          /* یک درجه پررنگ‌تر از قبل (#9a9a9a) تا در چاپ محو نشود */
+          /* fallback برای مرورگرهای بدون background-clip:text */
           color: #8a8a8a;
           -webkit-text-fill-color: #8a8a8a;
+        }
+        /*
+         * نقطه‌چین واقعی: نقطه‌های ریز از داخل حروف بریده می‌شوند.
+         * واحد em است تا الگو با هر اندازهٔ فونت هم‌مقیاس بماند.
+         * رنگ #8a8a8a همان رنگ فعلی مورد تأیید است.
+         */
+        @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+          .ps-ghost {
+            color: transparent;
+            -webkit-text-fill-color: transparent;
+            background-image: radial-gradient(
+              circle at 50% 50%,
+              #8a8a8a 0.042em,
+              rgba(255, 255, 255, 0) 0.049em
+            );
+            background-size: 0.13em 0.13em;
+            background-repeat: repeat;
+            -webkit-background-clip: text;
+            background-clip: text;
+          }
         }
 
         /* ===== اعداد کارکرد: خاکستری تیره، خوانا و وسط‌چین ===== */
