@@ -49,7 +49,7 @@ export interface AlertCenterProps {
 
   // Handlers
   onDismissAlert: (warningText: string) => void;
-  onAlertClick: (personnelId: string, day: number) => void;
+  onAlertClick: (personnelId: string, day: number, warningText?: string) => void;
 
   // Helper
   extractWarningDay: (warningText: string) => number | null;
@@ -393,7 +393,7 @@ interface AlertSectionProps {
   onToggle: () => void;
   dismissedAlertWarnings: Record<string, boolean>;
   onDismissAlert: (warningText: string) => void;
-  onAlertClick: (personnelId: string, day: number) => void;
+  onAlertClick: (personnelId: string, day: number, warningText?: string) => void;
   extractWarningDay: (warningText: string) => number | null;
   colorScheme: 'indigo' | 'amber';
   badgeText: string;
@@ -521,7 +521,7 @@ function AlertSection(props: AlertSectionProps) {
                     <div className="flex items-center gap-2 shrink-0">
                       {canNavigateToCell && day !== null && !isDismissed ? (
                         <button
-                          onClick={() => onAlertClick(alert.personnelId, day)}
+                          onClick={() => onAlertClick(alert.personnelId, day, warn)}
                           className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
                         >
                           رفتن به سلول
