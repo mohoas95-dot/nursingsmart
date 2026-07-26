@@ -344,6 +344,8 @@ export default function Home() {
   const [pendingJobGroupForScenarios, setPendingJobGroupForScenarios] = useState<JobGroup | null>(null);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean, generalNurse: boolean, generalAssistant: boolean, generalOther: boolean}>({general: true, personnel: true, generalNurse: true, generalAssistant: true, generalOther: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
+  // هایلایت کل ستون یک روز (برای هشدارهای عمومی مانند کمبود/مازاد نیرو)
+  const [highlightedDay, setHighlightedDay] = useState<number | null>(null);
 
   // ====== بازگشت خودکار به موقعیت هشدار پس از رفع آن ======
   // وقتی کاربر از پنجره هشدارها روی «رفتن به سلول» می‌زند، موقعیت اسکرول صفحه
@@ -351,7 +353,7 @@ export default function Home() {
   // نقطه بازمی‌گردد و پنجره هشدارها دوباره باز می‌شود.
   const alertReturnRef = React.useRef<{
     warningText: string;
-    cellId: string;
+    targetId: string;
     snapshot: ScrollSnapshot;
     reopenAlertCenter: boolean;
   } | null>(null);
@@ -1202,7 +1204,7 @@ export default function Home() {
         if (warningText) {
           alertReturnRef.current = {
             warningText,
-            cellId,
+            targetId: cellId,
             snapshot,
             reopenAlertCenter: wasAlertCenterOpen,
           };
@@ -1217,11 +1219,47 @@ export default function Home() {
     }, 100);
   };
 
+  // ====== پرش به کل ستون یک روز (هشدارهای عمومی: کمبود/مازاد نیرو) ======
+  // برخلاف هشدارهای پرسنلی، این هشدارها به یک سلول مشخص وصل نیستند؛ بنابراین
+  // به سربرگ آن روز اسکرول می‌کنیم و کل ستون آن روز هایلایت می‌شود.
+  const handleDayAlertClick = (day: number, warningText?: string) => {
+    const headerId = `day-header-${day}`;
+    const wasAlertCenterOpen = showAlertCenter;
+    const snapshot = captureScrollSnapshot(document.getElementById(headerId));
+
+    setShowAlertCenter(false);
+
+    setTimeout(() => {
+      const element = document.getElementById(headerId);
+      if (element) {
+        if (warningText) {
+          alertReturnRef.current = {
+            warningText,
+            targetId: headerId,
+            snapshot,
+            reopenAlertCenter: wasAlertCenterOpen,
+          };
+          setAlertReturnAvailable(true);
+        }
+        setHighlightedDay(day);
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        // اگر بازگشت خودکار ثبت شده باشد، هایلایت تا رفع هشدار (یا انصراف کاربر)
+        // باقی می‌ماند تا سرپرستار ستون را گم نکند؛ در غیر این صورت پس از ۶ ثانیه پاک می‌شود.
+        if (!warningText) {
+          setTimeout(() => {
+            setHighlightedDay(current => (current === day ? null : current));
+          }, 6000);
+        }
+      }
+    }, 100);
+  };
+
   // بازگشت دستی/خودکار به موقعیت ثبت‌شده‌ی هشدار
   const returnToAlertPosition = React.useCallback((options: { reopenAlertCenter?: boolean } = {}) => {
     const pending = alertReturnRef.current;
     alertReturnRef.current = null;
     setAlertReturnAvailable(false);
+    setHighlightedDay(null);
     if (!pending) return;
 
     restoreScrollSnapshot(pending.snapshot, { behavior: 'smooth' });
@@ -1236,6 +1274,7 @@ export default function Home() {
   const cancelAlertReturn = React.useCallback(() => {
     alertReturnRef.current = null;
     setAlertReturnAvailable(false);
+    setHighlightedDay(null);
   }, []);
 
   // ====== درخواست ۵: توابع مدیریت هشدارها ======
@@ -1363,6 +1402,7 @@ export default function Home() {
       alertReturnRef.current = null;
       setAlertReturnAvailable(false);
       setAlertReturnToast(null);
+      setHighlightedDay(null);
     };
   }, [selectedDepartmentId, currentYear, currentMonth]);
 
@@ -4754,7 +4794,8 @@ export default function Home() {
                         {calendarDays.map(d => (
                           <th
                             key={d.day}
-                            className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b border-slate-200 min-w-[34px] ${d.isHoliday ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800' : 'bg-slate-50 text-slate-600'}`}
+                            id={`day-header-${d.day}`}
+                            className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b border-slate-200 min-w-[34px] ${d.isHoliday ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800' : 'bg-slate-50 text-slate-600'} ${highlightedDay === d.day ? 'outline-2 outline-indigo-500 outline-offset-[-2px] !bg-indigo-100 !text-indigo-900 animate-[pulse_1.1s_ease-in-out_5]' : ''}`}
                             title={d.holidayTitle || 'روز عادی'}
                           >
                             <div>{d.day}</div>
@@ -4887,7 +4928,7 @@ export default function Home() {
                                 return (
                                   <td
                                     key={d.day}
-                                    className={`px-0.5 py-1 text-center border-l border-slate-100 relative ${d.isHoliday ? 'bg-rose-50/10' : ''}`}
+                                    className={`px-0.5 py-1 text-center border-l border-slate-100 relative ${d.isHoliday ? 'bg-rose-50/10' : ''} ${highlightedDay === d.day ? 'bg-indigo-100/70 shadow-[inset_1px_0_0_0_rgb(99_102_241),inset_-1px_0_0_0_rgb(99_102_241)]' : ''}`}
                                   >
                                     {isEditingThis ? (
                                       <select
@@ -6854,6 +6895,7 @@ export default function Home() {
         onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
         onDismissAlert={handleDismissAlert}
         onAlertClick={handleAlertClick}
+        onDayAlertClick={handleDayAlertClick}
         extractWarningDay={extractWarningDay}
       />
 
