@@ -984,9 +984,9 @@ export function solveNursingSchedule(
           if (currentShift === 'ME' && shiftChar === 'N') prospectiveShift = 'MEN';
         }
 
-        // قانون سقف ۵ شیفت متوالی (اسلات‌محور: M,E,N,M,E,N,…) و استراحت اجباری پس از آن:
+        // قانون سقف ۵ شیفت متوالی (اسلات‌محور و وزن‌دار: M=۱، E=۱، N=۲) و استراحت اجباری:
         // هر تخصیصی که زنجیرهٔ جایگاه‌های کاریِ پشت‌سرهم را به ۵ برساند غیرمجاز است
-        // (حداکثر مجاز ۴ شیفت متوالی). جایگاه خالی بین دو شیفت، زنجیره را قطع می‌کند.
+        // (تا ۵ واحد مجاز، بیشتر ممنوع). جایگاه خالی بین دو شیفت، زنجیره را قطع می‌کند.
         if (wouldBreachConsecutiveCap(assignments, p.id, d, prospectiveShift, totalDays)) {
           return false;
         }
@@ -1748,20 +1748,20 @@ export function verifyCoverageAndLeaders(
   activePersonnel.forEach(p => {
     const fullName = `${p.firstName} ${p.lastName}`;
 
-    // ۱) سقف ۵ شیفت متوالی: جایگاه‌های کاریِ پشت‌سرهم در دنبالهٔ M,E,N,M,E,N,… نباید به ۵ برسد
-    //    (حداکثر مجاز ۴ شیفت متوالی است). هر جایگاه خالی زنجیره را قطع می‌کند.
+    // ۱) سقف ۵ شیفت متوالی: مجموع واحدهای کاریِ پشت‌سرهم (M=۱، E=۱، N=۲) نباید از ۵ بگذرد
+    //    (تا ۵ واحد مجاز است). هر جایگاه خالی زنجیره را قطع می‌کند.
     const capViolations = findConsecutiveCapViolations(assignments, p.id, totalDays);
     capViolations.forEach(violation => {
       warnings.push(
-        `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} (${violation.startPeriod}) تا روز ${violation.endDay} (${violation.endPeriod}) — ${violation.length} شیفت متوالی پشت‌سرهم؛ حداکثر مجاز ۴ شیفت متوالی است`
+        `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} (${violation.startPeriod}) تا روز ${violation.endDay} (${violation.endPeriod}) — ${violation.length} شیفت متوالی پشت‌سرهم بدون استراحت (شب ۲ شیفت حساب می‌شود)؛ حداکثر مجاز ۵ شیفت متوالی است`
       );
     });
 
-    // ۲) استراحت اجباری: اگر زنجیرهٔ متوالی در پایان ماه به سقف ۴ شیفت رسیده و تا شبِ آخرین روز
-    //    ادامه داشته باشد، ابتدای ماه بعد آف اجباری است (هر شیفت دیگر آن را به ۵ می‌رساند).
+    // ۲) استراحت اجباری: اگر زنجیرهٔ متوالی در پایان ماه به سقف ۵ واحد رسیده و تا شبِ آخرین روز
+    //    ادامه داشته باشد، ابتدای ماه بعد آف اجباری است (هر شیفت دیگر آن را از ۵ فراتر می‌برد).
     if (endsMonthAtCapWithoutRest(assignments, p.id, totalDays)) {
       warnings.push(
-        `Mandatory Rest: پرسنل ${fullName} در پایان این ماه به سقف ۴ شیفت متوالی رسیده است؛ حداقل یک روز استراحت/آف اجباری در ابتدای ماه آینده برای ایشان لحاظ شود`
+        `Mandatory Rest: پرسنل ${fullName} در پایان این ماه به سقف ۵ شیفت متوالی رسیده است؛ حداقل یک روز استراحت/آف اجباری در ابتدای ماه آینده برای ایشان لحاظ شود`
       );
     }
 

@@ -59,12 +59,19 @@ export interface ManualShiftChangeInput {
   holidays: Readonly<Record<number, string>>;
   firstDayOfWeek: number | undefined;
   lockState: ScheduleLockState;
+  /**
+   * فهرست هشدارهای نادیده‌گرفته‌شده پیش از این ویرایش. پس از اعمال تغییر، هشدارهایی
+   * که دیگر مصداق ندارند از این فهرست حذف می‌شوند تا کاملاً از سیستم پاک شوند.
+   */
+  dismissedWarnings?: ReadonlyArray<string>;
 }
 
 export interface ManualShiftChangeResult {
   success: boolean;
   schedule: MonthlySchedule | null;
   error?: string;
+  /** هشدارهایی که با این ویرایش رفع شدند و باید از وضعیت نادیده‌گرفتن هم پاک شوند. */
+  resolvedWarnings?: ReadonlyArray<string>;
 }
 
 // ============================================================================

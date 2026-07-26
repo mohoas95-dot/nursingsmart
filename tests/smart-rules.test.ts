@@ -93,63 +93,112 @@ function settingsWithDemand(
 }
 
 // ============================================================================
-// قانون ۱ و ۲: سقف ۵ شیفت متوالی (اسلات‌محور: M,E,N,M,E,N,…) و استراحت اجباری
+// قانون ۱ و ۲: سقف ۵ شیفت متوالی (وزن‌دار: M=۱، E=۱، N=۲ — تا ۵ مجاز، بیشتر ممنوع)
 // ============================================================================
 
-test('the consecutive cap is 4 shifts: reaching 5 consecutive is forbidden', () => {
-  assert.equal(MAX_CONSECUTIVE_SHIFTS, 4);
+test('the consecutive cap is 5 units: 5 is allowed, more than 5 is forbidden', () => {
+  assert.equal(MAX_CONSECUTIVE_SHIFTS, 5);
 });
 
-test('consecutive runs are counted by adjacent occupied time slots (M,E,N per day)', () => {
-  // یک روز کامل MEN = سه جایگاه کاری متوالی (M,E,N)
+test('a night slot weighs 2 shift units, a morning/afternoon slot weighs 1', () => {
+  // یک روز کامل MEN = M(۱) + E(۱) + N(۲) = ۴ واحد شیفت متوالی (معادل بلوک ۲۴ساعته)
   assert.deepEqual(
     findConsecutiveRuns({ p1: { 1: 'MEN' } }, 'p1', TOTAL_DAYS),
-    [{ startDay: 1, endDay: 1, startPeriod: 'M', endPeriod: 'N', length: 3 }]
+    [{ startDay: 1, endDay: 1, startPeriod: 'M', endPeriod: 'N', length: 4, slotCount: 3 }]
   );
-  // MN = صبح و شب با جای خالیِ عصر بینشان → دو زنجیرهٔ جداگانهٔ ۱تایی
+  // MN = صبح و شب با جای خالیِ عصر بینشان → دو زنجیرهٔ جداگانه (۱ واحد و ۲ واحد)
   assert.deepEqual(
     findConsecutiveRuns({ p1: { 1: 'MN' } }, 'p1', TOTAL_DAYS),
     [
-      { startDay: 1, endDay: 1, startPeriod: 'M', endPeriod: 'M', length: 1 },
-      { startDay: 1, endDay: 1, startPeriod: 'N', endPeriod: 'N', length: 1 },
+      { startDay: 1, endDay: 1, startPeriod: 'M', endPeriod: 'M', length: 1, slotCount: 1 },
+      { startDay: 1, endDay: 1, startPeriod: 'N', endPeriod: 'N', length: 2, slotCount: 1 },
     ]
   );
-  // ME امروز و EN فردا: جای خالیِ شبِ امروز زنجیره را قطع می‌کند → دو زنجیرهٔ ۲تایی
+  // ME امروز و EN فردا: جای خالیِ شبِ امروز زنجیره را قطع می‌کند → ۲ واحد و ۳ واحد
   assert.deepEqual(
     findConsecutiveRuns({ p1: { 1: 'ME', 2: 'EN' } }, 'p1', TOTAL_DAYS),
     [
-      { startDay: 1, endDay: 1, startPeriod: 'M', endPeriod: 'E', length: 2 },
-      { startDay: 2, endDay: 2, startPeriod: 'E', endPeriod: 'N', length: 2 },
+      { startDay: 1, endDay: 1, startPeriod: 'M', endPeriod: 'E', length: 2, slotCount: 2 },
+      { startDay: 2, endDay: 2, startPeriod: 'E', endPeriod: 'N', length: 3, slotCount: 2 },
     ]
   );
 });
 
-test('a full day (MEN) plus the next morning (M) is 4 consecutive shifts and is allowed', () => {
-  // M,E,N (روز ۱) + M (روز ۲) = ۴ شیفت متوالی → مجاز
+test('the rule is shift-agnostic: EVERY combination beyond 5 consecutive units is forbidden', () => {
+  // قانون به هیچ شیفت خاصی وابسته نیست؛ فقط مجموع واحدهای متوالی مهم است.
+  // تا ۵ واحد مجاز، بیشتر از ۵ واحد ممنوع.
+  const forbidden: Array<[string, Record<number, string>]> = [
+    ['MEN + ME (۱+۱+۲+۱+۱ = ۶)', { 1: 'MEN', 2: 'ME' }],
+    ['N + MEN  (۲+۱+۱+۲ = ۶)', { 1: 'N', 2: 'MEN' }],
+    ['EN + MEN (۱+۲+۱+۱+۲ = ۷)', { 1: 'EN', 2: 'MEN' }],
+    ['MEN + MEN (۸)', { 1: 'MEN', 2: 'MEN' }],
+    ['MEN + MEN + MEN (۱۲)', { 1: 'MEN', 2: 'MEN', 3: 'MEN' }],
+  ];
+
+  for (const [label, days] of forbidden) {
+    assert.equal(
+      findConsecutiveCapViolations({ p1: days }, 'p1', TOTAL_DAYS).length > 0,
+      true,
+      `${label} باید نقض سقف شیفت متوالی باشد`
+    );
+  }
+
+  const allowed: Array<[string, Record<number, string>]> = [
+    ['MEN تنها (۲۴ ساعت = ۴ واحد)', { 1: 'MEN' }],
+    ['EN + M (۲۴ ساعت = ۴ واحد)', { 1: 'EN', 2: 'M' }],
+    ['MEN + M (۱+۱+۲+۱ = ۵ → دقیقاً روی حد)', { 1: 'MEN', 2: 'M' }],
+    ['EN + ME (۱+۲+۱+۱ = ۵ → دقیقاً روی حد)', { 1: 'EN', 2: 'ME' }],
+    ['N + ME (۲+۱+۱ = ۴)', { 1: 'N', 2: 'ME' }],
+    ['N + M  (۲+۱ = ۳)', { 1: 'N', 2: 'M' }],
+    ['ME + EN (زنجیره با شبِ خالی قطع می‌شود)', { 1: 'ME', 2: 'EN' }],
+    ['N + N (شبِ پیاپی با صبح/عصرِ خالی)', { 1: 'N', 2: 'N' }],
+  ];
+
+  for (const [label, days] of allowed) {
+    assert.equal(
+      findConsecutiveCapViolations({ p1: days }, 'p1', TOTAL_DAYS).length,
+      0,
+      `${label} نباید نقض شمرده شود`
+    );
+  }
+});
+
+test('a full day (MEN) plus the next morning (M) is exactly 5 units and is allowed', () => {
+  // M,E,N (روز۱) + M (روز۲) = ۱+۱+۲+۱ = ۵ واحد → دقیقاً روی حد مجاز
   const assignments = { p1: { 1: 'MEN' } };
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'M', TOTAL_DAYS), false);
   assert.deepEqual(
     findConsecutiveRuns({ p1: { 1: 'MEN', 2: 'M' } }, 'p1', TOTAL_DAYS),
-    [{ startDay: 1, endDay: 2, startPeriod: 'M', endPeriod: 'M', length: 4 }]
+    [{ startDay: 1, endDay: 2, startPeriod: 'M', endPeriod: 'M', length: 5, slotCount: 4 }]
   );
+  assert.equal(findConsecutiveCapViolations({ p1: { 1: 'MEN', 2: 'M' } }, 'p1', TOTAL_DAYS).length, 0);
 });
 
-test('a full day (MEN) plus the next morning AND afternoon (ME) is 5 consecutive and forbidden', () => {
-  // M,E,N (روز ۱) + M,E (روز ۲) = ۵ شیفت متوالی → ممنوع
+test('a full day (MEN) plus the next morning AND afternoon (ME) is 6 consecutive and forbidden', () => {
   const assignments = { p1: { 1: 'MEN' } };
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'ME', TOTAL_DAYS), true);
 });
 
-test('an evening then a night then next morning then next afternoon (EN + ME) is 4 and allowed', () => {
-  // E,N (روز ۱) + M,E (روز ۲): چون شبِ روز ۱ به صبحِ روز ۲ می‌رسد → E,N,M,E = ۴ متوالی → مجاز
+test('evening+night then the next morning (EN + M) is 4 units and stays allowed', () => {
+  // E,N (روز۱) + M (روز۲) = ۱+۲+۱ = ۴ واحد → همان بلوک ۲۴ساعته → مجاز
   const assignments = { p1: { 1: 'EN' } };
+  assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'M', TOTAL_DAYS), false);
+  // افزودن عصرِ روز ۲ (ME) می‌شود ۵ واحد → هنوز مجاز (دقیقاً روی حد)
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'ME', TOTAL_DAYS), false);
-  // اما اضافه شدن شبِ روز ۲ (MEN) می‌شود E,N,M,E,N = ۵ متوالی → ممنوع
+  // اما MEN روز ۲ می‌شود ۷ واحد → ممنوع
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'MEN', TOTAL_DAYS), true);
 });
 
+test('a night followed by the next full day (N + MEN) is 6 units and forbidden', () => {
+  // N (روز۱) + M,E,N (روز۲) = ۲+۱+۱+۲ = ۶ واحد → ممنوع
+  const assignments = { p1: { 1: 'N' } };
+  assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'MEN', TOTAL_DAYS), true);
+  // ولی N + ME دقیقاً ۴ واحد است → مجاز
+  assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'ME', TOTAL_DAYS), false);
+});
+
 test('five M-only days are NOT consecutive (empty E and N separate them)', () => {
-  // هر M یک زنجیرهٔ مستقلِ ۱تایی است؛ چون بین دو M، یک E و یک Nِ خالی وجود دارد.
+  // هر M یک زنجیرهٔ مستقلِ ۱واحدی است؛ چون بین دو M، یک E و یک Nِ خالی وجود دارد.
   const assignments = { p1: { 1: 'M', 2: 'M', 3: 'M', 4: 'M', 5: 'M' } };
   const runs = findConsecutiveRuns(assignments, 'p1', TOTAL_DAYS);
   assert.equal(runs.length, 5, 'هر روز فقط M باید یک زنجیرهٔ جداگانه باشد');
@@ -161,8 +210,8 @@ test('five M-only days are NOT consecutive (empty E and N separate them)', () =>
   assert.equal(findConsecutiveCapViolations(assignments, 'p1', TOTAL_DAYS).length, 0);
 });
 
-test('after 4 consecutive shifts the next adjacent shift forces a rest (mandatory rest)', () => {
-  // M,E,N (روز ۱) + M (روز ۲) = ۴ متوالی؛ حال افزودن E به روز ۲ می‌شود ۵ → ممنوع
+test('after reaching the 5-unit cap the next adjacent shift forces a rest (mandatory rest)', () => {
+  // M,E,N (روز۱) + M (روز۲) = ۵ واحد (دقیقاً سقف)؛ افزودن عصرِ روز ۲ آن را به ۶ می‌برد → ممنوع
   const atCap = { p1: { 1: 'MEN', 2: 'M' } };
   assert.equal(wouldBreachConsecutiveCap(atCap, 'p1', 2, 'ME', TOTAL_DAYS), true);
   // آف همیشه مجاز است و زنجیره را قطع می‌کند
@@ -174,29 +223,29 @@ test('after 4 consecutive shifts the next adjacent shift forces a rest (mandator
 
 test('cap evaluation counts both backward and forward slots when editing inside a filled month', () => {
   // شبِ روز ۱ و صبحِ روز ۳ از قبل پر شده‌اند؛ درج MEN در روز ۲ این‌ها را به هم وصل می‌کند:
-  // N (روز۱) + M,E,N (روز۲) + M (روز۳) = ۵ شیفت متوالی → ممنوع
+  // N (روز۱) + M,E,N (روز۲) + M (روز۳) = ۲+۱+۱+۲+۱ = ۷ واحد → ممنوع
   const assignments = { p1: { 1: 'N', 3: 'M' } };
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'MEN', TOTAL_DAYS), true);
-  // درج M تنها در روز ۲ فقط N,M می‌سازد (۲ متوالی) → مجاز
+  // درج M تنها در روز ۲ فقط N,M می‌سازد (۳ واحد) → مجاز
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'M', TOTAL_DAYS), false);
   // درج OFF همیشه مجاز است
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p1', 2, 'OFF', TOTAL_DAYS), false);
 });
 
-test('findConsecutiveCapViolations reports the violating run bounds and length', () => {
-  // M,E,N (روز۲) + M,E (روز۳) = ۵ شیفت متوالی از صبح روز ۲ تا عصر روز ۳
+test('findConsecutiveCapViolations reports the violating run bounds and weighted length', () => {
+  // M,E,N (روز۲) + M,E (روز۳) = ۱+۱+۲+۱+۱ = ۶ واحد از صبح روز ۲ تا عصر روز ۳
   const assignments = { p1: { 2: 'MEN', 3: 'ME' } };
   const violations = findConsecutiveCapViolations(assignments, 'p1', TOTAL_DAYS);
   assert.deepEqual(violations, [
-    { startDay: 2, endDay: 3, startPeriod: 'M', endPeriod: 'E', length: 5 },
+    { startDay: 2, endDay: 3, startPeriod: 'M', endPeriod: 'E', length: 6, slotCount: 5 },
   ]);
 });
 
-test('endsMonthAtCapWithoutRest flags a 4-shift run that reaches the night of the last day', () => {
-  // N (روز۳۰) + M,E,N (روز۳۱) = ۴ شیفت متوالی که تا شبِ آخرین روز ماه ادامه دارد → نیاز به استراحت
+test('endsMonthAtCapWithoutRest flags a run at the 5-unit cap reaching the last night', () => {
+  // E (روز۳۰) + M,E,N (روز۳۱)؟ ساده‌تر: N(روز۳۰)+M,E,N(روز۳۱) = ۲+۱+۱+۲ = ۶ → تا شبِ آخر
   const atCap = { p1: { 30: 'N', 31: 'MEN' } };
   assert.equal(endsMonthAtCapWithoutRest(atCap, 'p1', TOTAL_DAYS), true);
-  // فقط یک روز کامل MEN در پایان ماه = ۳ شیفت متوالی → هنوز به سقف نرسیده
+  // فقط MEN روز آخر = ۴ واحد → هنوز به سقف ۵ نرسیده
   const belowCap = { p1: { 31: 'MEN' } };
   assert.equal(endsMonthAtCapWithoutRest(belowCap, 'p1', TOTAL_DAYS), false);
   // اگر آخرین روز آف باشد، زنجیره تا پایان ماه ادامه ندارد → بدون نیاز به استراحت
@@ -253,8 +302,8 @@ test('work-routine tags match only their declared continuous patterns', () => {
 // هشدارهای verifier برای قوانین جدید
 // ============================================================================
 
-test('verifier reports a Max Consecutive warning for a run of 5 consecutive shifts', () => {
-  // M,E,N (روز۱) + M,E (روز۲) = ۵ شیفت متوالی → نقض
+test('verifier reports a Max Consecutive warning for a run beyond 5 consecutive units', () => {
+  // M,E,N (روز۱) + M,E (روز۲) = ۱+۱+۲+۱+۱ = ۶ واحد → نقض
   const assignments = { p1: { 1: 'MEN', 2: 'ME' } };
   const result = verifyCoverageAndLeaders(
     1404, 2, [person('p1', 'nurse')], assignments, settingsWithDemand({}), {}, undefined, []
@@ -262,26 +311,42 @@ test('verifier reports a Max Consecutive warning for a run of 5 consecutive shif
   const warning = result.warnings.find(w => w.startsWith('Max Consecutive:'));
   assert.ok(warning, 'expected a Max Consecutive warning');
   assert.match(warning!, /از روز 1 \(M\) تا روز 2 \(E\)/);
-  assert.match(warning!, /5 شیفت متوالی/);
+  assert.match(warning!, /6 شیفت متوالی/);
 });
 
-test('verifier does not flag a full day plus next morning (4 consecutive is legal)', () => {
-  // M,E,N (روز۱) + M (روز۲) = ۴ شیفت متوالی → مجاز، بدون هشدار
+test('verifier does NOT flag a full day plus the next morning (MEN + M = exactly 5 units)', () => {
+  // M,E,N (روز۱) + M (روز۲) = ۵ واحد → دقیقاً روی حد → بدون هشدار
   const assignments = { p1: { 1: 'MEN', 2: 'M' } };
   const result = verifyCoverageAndLeaders(
     1404, 2, [person('p1', 'nurse')], assignments, settingsWithDemand({}), {}, undefined, []
   );
-  assert.equal(result.warnings.some(w => w.startsWith('Max Consecutive:')), false, 'a 4-shift run is legal');
+  assert.equal(
+    result.warnings.some(w => w.startsWith('Max Consecutive:')),
+    false,
+    'MEN + M دقیقاً ۵ واحد است و مجاز شمرده می‌شود'
+  );
 });
 
-test('verifier reports a Mandatory Rest reminder when the month ends at the 4-shift cap', () => {
-  // N (روز۳۰) + M,E,N (روز۳۱) = ۴ شیفت متوالی که تا شبِ آخرین روز ادامه دارد
+test('verifier does not flag a 24-hour block assembled as EN + M (4 units)', () => {
+  // E,N (روز۱) + M (روز۲) = ۱+۲+۱ = ۴ واحد → مجاز، بدون هشدار
+  const assignments = { p1: { 1: 'EN', 2: 'M' } };
+  const result = verifyCoverageAndLeaders(
+    1404, 2, [person('p1', 'nurse')], assignments, settingsWithDemand({}), {}, undefined, []
+  );
+  assert.equal(
+    result.warnings.some(w => w.startsWith('Max Consecutive:')),
+    false,
+    'یک بلوک ۲۴ساعته (۴ واحد) مجاز است'
+  );
+});
+
+test('verifier reports a Mandatory Rest reminder when the month ends at the 5-unit cap', () => {
+  // N (روز۳۰) + M,E,N (روز۳۱) = ۶ واحد که تا شبِ آخرین روز ادامه دارد
   const assignments = { p1: { 30: 'N', 31: 'MEN' } };
   const result = verifyCoverageAndLeaders(
     1404, 2, [person('p1', 'nurse')], assignments, settingsWithDemand({}), {}, undefined, []
   );
   assert.ok(result.warnings.some(w => w.startsWith('Mandatory Rest:')), 'expected a Mandatory Rest warning');
-  assert.equal(result.warnings.some(w => w.startsWith('Max Consecutive:')), false, 'a 4-shift run is still legal');
 });
 
 test('verifier reports an Isolated Shift warning for a single E among working days', () => {
@@ -365,7 +430,7 @@ test('solver marks a leave day on an official holiday with the LH holiday-leave 
 // اتصال قوانین به بازتولید هوشمند (مسیر دکمه «بازتولید هوشمند»)
 // ============================================================================
 
-test('regeneration never builds a run of 5 or more consecutive shifts', () => {
+test('regeneration never builds a run beyond 5 consecutive shift units', () => {
   const personnel = [person('a1', 'assistant'), person('a2', 'assistant'), person('a3', 'assistant')];
   const result = solveWithPriority(
     1404, 2, personnel, [],
@@ -377,7 +442,7 @@ test('regeneration never builds a run of 5 or more consecutive shifts', () => {
     assert.deepEqual(
       findConsecutiveCapViolations(result.assignments, p.id, TOTAL_DAYS),
       [],
-      `${p.id} must not reach 5 consecutive shifts (max 4)`
+      `${p.id} must not exceed 5 consecutive shift units`
     );
   }
   assert.equal(
@@ -387,7 +452,7 @@ test('regeneration never builds a run of 5 or more consecutive shifts', () => {
   );
 });
 
-test('two nurses can rotate three daily posts without ever reaching 5 consecutive shifts', () => {
+test('two nurses can rotate three daily posts without ever exceeding 5 consecutive units', () => {
   // با ۲ پرستار و ۳ پست روزانه، چرخش MEN/آف زنجیره‌ها را کوتاه نگه می‌دارد → بدون نقض
   const personnel = [person('n1', 'nurse'), person('n2', 'nurse')];
   const result = solveWithPriority(
@@ -399,7 +464,7 @@ test('two nurses can rotate three daily posts without ever reaching 5 consecutiv
     assert.deepEqual(
       findConsecutiveCapViolations(result.assignments, p.id, TOTAL_DAYS),
       [],
-      `${p.id} must not reach 5 consecutive shifts`
+      `${p.id} must not exceed 5 consecutive shift units`
     );
   }
   assert.equal(result.warnings.some(w => w.startsWith('Max Consecutive:')), false);
