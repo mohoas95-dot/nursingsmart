@@ -20,7 +20,11 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  *  - تعداد روزهای ماه و تعداد تعطیلات ماه در پانویس
  */
 
-const WEEKDAY_SHORT = ['ش', '۱ش', '۲ش', '۳ش', '۴ش', '۵ش', 'ج'];
+/**
+ * نام کامل روزهای هفته (شنبه … جمعه) برای سربرگ جدول.
+ * چون عرض هر ستون روز حدود ۷ میلی‌متر است، این نام‌ها به‌صورت عمودی چاپ می‌شوند.
+ */
+const WEEKDAY_FULL = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
 
 const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
 const toFa = (value: number | string): string =>
@@ -70,8 +74,10 @@ const FRAME_CHROME_MM = 7.6;
 const HEADER_MM = 12.4;
 /** پانویس امضا/شمارش روزها */
 const FOOTER_MM = 7;
-/** دو ردیف سربرگ جدول (شماره روز + نام روز هفته) */
-const THEAD_MM = 10;
+/** ردیف نام کامل روز هفته (عمودی نوشته می‌شود، پس بلندتر است) */
+const WEEKDAY_ROW_MM = 15;
+/** دو ردیف سربرگ جدول (شماره روز + نام کامل روز هفته به‌صورت عمودی) */
+const THEAD_MM = 6 + WEEKDAY_ROW_MM;
 /** ردیف عنوان هر گروه شغلی */
 const GROUP_ROW_MM = 4.8;
 
@@ -137,6 +143,24 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
   const heightCapPt = rowHeightMm * PT_PER_MM * 0.82;
   const widthCapFor = (chars: number) =>
     ((dayColMm - 0.5) * PT_PER_MM) / (Math.max(1, chars) * CHAR_W_EM);
+
+  /**
+   * اندازهٔ نام عمودی روز هفته: با دو قید محدود می‌شود —
+   * طول رشته (بلندترین نام «چهارشنبه» با ۹ نویسه) نباید از ارتفاع ردیف بیشتر شود،
+   * و ضخامت خط نوشته نباید از عرض ستون بزند.
+   */
+  const longestWeekdayChars = Math.max(
+    ...calendarDays.map((d) => WEEKDAY_FULL[d.dayOfWeek]?.length ?? 0),
+    1
+  );
+  const weekdayFontPt = clamp(
+    Math.min(
+      ((WEEKDAY_ROW_MM - 1.2) * PT_PER_MM) / (longestWeekdayChars * 0.58),
+      dayColMm * PT_PER_MM * 0.72
+    ),
+    4.2,
+    8
+  );
 
   const nameFontPt = clamp(rowHeightMm * PT_PER_MM * 0.62, 5, 11);
   const sumFontPt = clamp(Math.min(heightCapPt, SUM_COL_MM * PT_PER_MM * 0.28), 5.6, 11);
@@ -266,7 +290,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                     <span className="ps-sum-head-note">بدون بهره‌وری</span>
                   </th>
                 </tr>
-                <tr className="ps-head-weekdays">
+                <tr className="ps-head-weekdays" style={{ height: `${WEEKDAY_ROW_MM}mm` }}>
                   <th className="ps-cell ps-head ps-name-head ps-weekday-corner">روزهای ماه</th>
                   {calendarDays.map((d) => (
                     <th
@@ -274,7 +298,8 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                       className={`ps-cell ps-head ps-weekday ${d.isHoliday ? 'ps-holiday' : ''}`}
                       title={d.holidayTitle || WEEKDAYS[d.dayOfWeek]}
                     >
-                      {WEEKDAY_SHORT[d.dayOfWeek]}
+                      {/* نام کامل روز، عمودی چاپ می‌شود تا در عرض ~۷ میلی‌متری ستون جا شود */}
+                      <span className="ps-weekday-text">{WEEKDAY_FULL[d.dayOfWeek]}</span>
                     </th>
                   ))}
                 </tr>
@@ -452,7 +477,8 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           border: 1.5px solid #000;
         }
         .ps-cell {
-          border: 0.8px solid #000 !important;
+          /* خطوط پررنگ و یکدست، مطابق نمونهٔ مورد نظر سرپرستار */
+          border: 1px solid #000 !important;
           text-align: center;
           vertical-align: middle;
           padding: 0;
@@ -485,10 +511,26 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           font-size: 5.8pt;
           color: #444;
         }
+        /* نام کامل روز هفته: عمودی، تا «چهارشنبه» هم در ستون ~۷ میلی‌متری جا شود */
         .ps-weekday {
-          font-size: 5.8pt;
           color: #111;
           background-color: #f6f6f6;
+          padding: 0.4mm 0;
+          font-size: 0;
+          line-height: 0;
+        }
+        .ps-weekday-text {
+          display: inline-block;
+          writing-mode: vertical-rl;
+          -webkit-writing-mode: vertical-rl;
+          transform: rotate(180deg);
+          white-space: nowrap;
+          font-family: var(--font-titr), Lalezar, var(--font-vazirmatn), Tahoma, sans-serif;
+          font-size: ${weekdayFontPt}pt;
+          font-weight: 400;
+          line-height: 1;
+          letter-spacing: -0.1pt;
+          vertical-align: middle;
         }
         .ps-sum-head {
           width: 13mm;
