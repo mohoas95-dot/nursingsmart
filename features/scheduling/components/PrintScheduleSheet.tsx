@@ -26,8 +26,11 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  */
 const WEEKDAY_FULL = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
 
-/** نشانهٔ «مسئول شیفت» — گلولهٔ توپر مشکی */
+/** نشانهٔ «مسئول شیفت» — گلولهٔ توپر (خاکستری بسیار کم‌رنگ در چاپ) */
 const LEADER_MARK = '●';
+
+/** پیشوند فارسی «مرخصی» که پیش از حروف شیفت می‌آید */
+const LEAVE_MARK = 'م';
 
 const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
 const toFa = (value: number | string): string =>
@@ -141,16 +144,33 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
 
   /**
    * اندازهٔ حروف با هر دو قید محدود می‌شود: ارتفاع سطر و عرض ستون.
-   * Courier New حدود 0.6em بر هر نویسه عرض می‌گیرد.
+   *
+   * عرض واقعی هر نویسه در فونت تریسینگ (Raleway Dots) بر حسب em — اندازه‌گیری‌شده
+   * از خود فونت. چون این فونت proportional است، به‌جای میانگین، عرض دقیقِ همان
+   * نویسه‌ها جمع زده می‌شود تا «MN» (پهن‌ترین ترکیب) هم از سلول بیرون نزند.
    */
-  const CHAR_W_EM = 0.62;
+  const GHOST_CHAR_W_EM: Record<string, number> = {
+    M: 0.87,
+    N: 0.76,
+    E: 0.64,
+    L: 0.57,
+    م: 0.64,
+  };
+  const DEFAULT_CHAR_W_EM = 0.87;
+  /** letter-spacing سلول‌ها (۰٫۲pt) هم به عرض هر نویسه اضافه می‌شود */
+  const GHOST_TRACKING_EM = 0.03;
+  const ghostWidthEm = (text: string): number =>
+    [...text].reduce(
+      (sum, ch) => sum + (GHOST_CHAR_W_EM[ch] ?? DEFAULT_CHAR_W_EM) + GHOST_TRACKING_EM,
+      0
+    );
   /** گلولهٔ مسئول شیفت با فونت ۰٫۶۲ برابر + فاصلهٔ ۰٫۲۵em، تقریباً ۰٫۶۵em عرض می‌گیرد */
   const LEADER_W_EM = 0.65;
   const heightCapPt = rowHeightMm * PT_PER_MM * 0.82;
   /** ۰٫۹mm حاشیهٔ امن تا حروف به خطوط سلول نچسبند */
-  const widthCapFor = (chars: number, withLeader = false) =>
+  const widthCapFor = (letters: string, withLeader: boolean) =>
     ((dayColMm - 0.9) * PT_PER_MM) /
-    (Math.max(1, chars) * CHAR_W_EM + (withLeader ? LEADER_W_EM : 0));
+    Math.max(0.5, ghostWidthEm(letters) + (withLeader ? LEADER_W_EM : 0));
 
   /**
    * اندازهٔ نام عمودی روز هفته: با دو قید محدود می‌شود —
@@ -191,7 +211,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
   const shiftFontSizeFor = (text: string): number => {
     const hasMark = text.startsWith(LEADER_MARK);
     const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
-    return clamp(Math.min(heightCapPt, widthCapFor(letters.length, hasMark)), 4.2, 12);
+    return clamp(Math.min(heightCapPt, widthCapFor(letters, hasMark)), 4.2, 12);
   };
 
   const reportOf = (id: string) => reports.find((r) => r.personnelId === id);
@@ -228,9 +248,12 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             !!leaders &&
             (leaders.morning === p.id || leaders.afternoon === p.id || leaders.night === p.id);
           const text = displayShift(shift, isLeader);
-          // گلولهٔ مسئول شیفت پررنگ می‌ماند؛ فقط حروف شیفت نقطه‌چین و کم‌رنگ‌اند.
           const hasMark = text.startsWith(LEADER_MARK);
           const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
+          // «م» مرخصی در فونت تریسینگ لاتین وجود ندارد؛ جدا می‌شود تا با فونت
+          // فارسیِ کم‌رنگ رندر شود و به گلیفِ توپرِ پیش‌فرض برنگردد.
+          const leaveMark = letters.startsWith(LEAVE_MARK);
+          const latinLetters = leaveMark ? letters.slice(LEAVE_MARK.length) : letters;
           const fontPt = shiftFontSizeFor(text);
           return (
             <td key={d.day} className={`ps-cell ps-day ${d.isHoliday ? 'ps-holiday' : ''}`}>
@@ -241,9 +264,16 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                       {LEADER_MARK}
                     </span>
                   )}
-                  <span className="ps-ghost" style={{ fontSize: `${fontPt}pt` }}>
-                    {letters}
-                  </span>
+                  {leaveMark && (
+                    <span className="ps-leave" style={{ fontSize: `${fontPt * 0.8}pt` }}>
+                      {LEAVE_MARK}
+                    </span>
+                  )}
+                  {latinLetters && (
+                    <span className="ps-ghost" style={{ fontSize: `${fontPt}pt` }}>
+                      {latinLetters}
+                    </span>
+                  )}
                 </span>
               )}
             </td>
@@ -622,50 +652,43 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           height: 100%;
           line-height: 1;
         }
-        /* گلولهٔ مسئول شیفت: توپر و مشکی (نقطه‌چین نمی‌شود) */
+        /* گلولهٔ مسئول شیفت: توپر ولی خاکستری خیلی کم‌رنگ، هم‌خوان با حروف تریسینگ */
         .ps-leader {
           display: inline-block;
-          color: #000;
-          -webkit-text-fill-color: #000;
+          color: #c2c2c2;
+          -webkit-text-fill-color: #c2c2c2;
           line-height: 1;
+          flex: 0 0 auto;
+        }
+        /*
+         * ===== حروف انگلیسی شیفت: فونت تریسینگ (نقطه‌چین) و کم‌رنگ =====
+         * Raleway Dots یک فونت واقعی «tracing» است: خودِ حروف از نقطه‌های گرد
+         * ساخته شده‌اند (نه ماسک CSS روی حروف توپر). نتیجه در چاپ تمیزتر است و
+         * پرسنل می‌توانند روی نقطه‌ها را با مداد پررنگ کنند.
+         * مجوز فونت: SIL OFL — از طریق next/font/google خودمیزبان می‌شود.
+         * توجه: این فونت proportional است؛ ثابت CHAR_W_EM بر همین اساس تنظیم شده.
+         */
+        /* «م» مرخصی: فونت فارسی، هم‌رنگ حروف تریسینگ (فونت لاتین «م» ندارد) */
+        .ps-leave {
+          display: inline-block;
+          font-family: var(--font-vazirmatn), Vazirmatn, Tahoma, sans-serif;
+          font-weight: 400;
+          line-height: 1;
+          vertical-align: middle;
+          color: #b0b0b0;
+          -webkit-text-fill-color: #b0b0b0;
           flex: 0 0 auto;
         }
         .ps-ghost {
           display: inline-block;
-          /*
-           * فقط فونت‌های mono؛ عرض هر نویسه ۰٫۶em است و محاسبهٔ اندازهٔ حروف به آن تکیه دارد.
-           * هیچ فونت متناسب (proportional) نباید در این زنجیره باشد وگرنه «MEN» از سلول بیرون می‌زند.
-           * حرف «م» مرخصی با fallback خودکار مرورگر از فونت فارسی سیستم رندر می‌شود.
-           */
-          font-family: 'Courier New', Courier, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-          font-weight: 700;
-          letter-spacing: 0.3pt;
+          font-family: var(--font-tracing), 'Raleway Dots', 'Courier New', monospace;
+          font-weight: 400;
+          letter-spacing: 0.2pt;
           line-height: 1;
           vertical-align: middle;
           text-align: center;
-          /* fallback: مرورگرهای بدون background-clip:text حروف را کم‌رنگ ساده می‌بینند */
-          color: #cfcfcf;
-          -webkit-text-fill-color: #cfcfcf;
-        }
-        /*
-         * الگوی نقطه‌چین واقعی: نقطه‌های ریز از داخل حروف بریده می‌شوند.
-         * واحدها em است تا الگو با هر اندازهٔ فونت (۴٫۵pt تا ۱۲pt) هم‌مقیاس بماند
-         * و در هر تراکم پرسنلی «نقطه‌چین» دیده شود، نه لکهٔ توپر یا خالی.
-         */
-        @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-          .ps-ghost {
-            color: transparent;
-            -webkit-text-fill-color: transparent;
-            background-image: radial-gradient(
-              circle at 50% 50%,
-              #8f8f8f 0.036em,
-              rgba(255, 255, 255, 0) 0.043em
-            );
-            background-size: 0.11em 0.11em;
-            background-repeat: repeat;
-            -webkit-background-clip: text;
-            background-clip: text;
-          }
+          color: #9a9a9a;
+          -webkit-text-fill-color: #9a9a9a;
         }
 
         /* ===== اعداد کارکرد: خاکستری تیره، خوانا و وسط‌چین ===== */
@@ -737,6 +760,8 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           .ps-holiday,
           .ps-group,
           .ps-ghost,
+          .ps-leader,
+          .ps-leave,
           .ps-sum-cell,
           .ps-sum-cell-alt,
           .ps-sum-text,

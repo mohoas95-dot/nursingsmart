@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Vazirmatn, Lalezar } from 'next/font/google';
+import { Vazirmatn, Lalezar, Raleway_Dots } from 'next/font/google';
 import './globals.css';
 
 const vazirmatn = Vazirmatn({
@@ -13,6 +13,15 @@ const lalezar = Lalezar({
   subsets: ['arabic', 'latin'],
   weight: '400',
   variable: '--font-titr',
+  display: 'swap',
+});
+
+// فونت «تریسینگ» (نقطه‌چین) برای حروف انگلیسی شیفت در برگهٔ چاپ،
+// تا پرسنل بتوانند روی نقطه‌ها را با مداد پررنگ کنند. مجوز: SIL OFL.
+const ralewayDots = Raleway_Dots({
+  subsets: ['latin'],
+  weight: '400',
+  variable: '--font-tracing',
   display: 'swap',
 });
 
@@ -33,7 +42,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fa" dir="rtl" className={`${vazirmatn.variable} ${lalezar.variable} scroll-smooth`}>
+    <html lang="fa" dir="rtl" className={`${vazirmatn.variable} ${lalezar.variable} ${ralewayDots.variable} scroll-smooth`}>
       <head>
         <link rel="icon" type="image/png" sizes="192x192" href="/icon-192x192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icon-512x512.png" />
