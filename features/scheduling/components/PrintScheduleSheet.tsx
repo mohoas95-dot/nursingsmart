@@ -68,6 +68,20 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
   const cellFontPt = rowCount <= 20 ? 7.5 : rowCount <= 30 ? 6.5 : 5.8;
   const nameFontPt = rowCount <= 20 ? 7.5 : rowCount <= 30 ? 6.8 : 6;
 
+  /**
+   * اندازه فونت نام را بر اساس طول نام کوچک می‌کند تا هر نام دقیقاً در یک خط
+   * و داخل سلول خودش جا شود و هیچ نامنظمی/شکست خط رخ ندهد.
+   */
+  const nameFontSizeFor = (fullName: string): number => {
+    const len = fullName.trim().length;
+    const base = nameFontPt;
+    if (len <= 16) return base;
+    if (len <= 20) return base - 0.6;
+    if (len <= 24) return base - 1.2;
+    if (len <= 28) return base - 1.7;
+    return Math.max(4.4, base - 2.2);
+  };
+
   const groups: Array<{ key: 'nurse' | 'assistant'; title: string; rows: Personnel[] }> = [
     { key: 'nurse', title: 'پرستاران', rows: activePersonnel.filter((p) => p.jobGroup === 'nurse') },
     { key: 'assistant', title: 'کمک‌بهیاران', rows: activePersonnel.filter((p) => p.jobGroup === 'assistant') },
@@ -85,7 +99,12 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
       <tr key={p.id} style={{ height: `${rowHeightMm}mm` }}>
         <td className="ps-cell ps-name">
           <span className="ps-idx">{toFa(index + 1)}</span>
-          {p.firstName} {p.lastName}
+          <span
+            className="ps-name-text"
+            style={{ fontSize: `${nameFontSizeFor(`${p.firstName} ${p.lastName}`)}pt` }}
+          >
+            {p.firstName} {p.lastName}
+          </span>
         </td>
         {calendarDays.map((d) => {
           const shift = pAssignments[d.day] as ShiftType | undefined;
@@ -103,8 +122,12 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             </td>
           );
         })}
-        <td className="ps-cell ps-sum">{toFa(withProductivity.toFixed(0))}</td>
-        <td className="ps-cell ps-sum ps-sum-alt">{toFa(withoutProductivity.toFixed(0))}</td>
+        <td className="ps-cell ps-sum-cell">
+          <span className="ps-sum">{toFa(withProductivity.toFixed(0))}</span>
+        </td>
+        <td className="ps-cell ps-sum-cell ps-sum-cell-alt">
+          <span className="ps-sum">{toFa(withoutProductivity.toFixed(0))}</span>
+        </td>
       </tr>
     );
   };
@@ -125,10 +148,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
               </span>
             </div>
             <div className="ps-legend">
-              <span>ص: صبح</span>
-              <span>ع: عصر</span>
-              <span>ش: شب</span>
-              <span>* مسئول شیفت</span>
+              <span>* : مسئول شیفت</span>
               <span className="ps-legend-holiday">تعطیل / جمعه</span>
             </div>
           </div>
@@ -230,8 +250,9 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           gap: 3mm;
         }
         .ps-title {
-          font-size: 13pt;
-          font-weight: 900;
+          font-size: 14pt;
+          font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
+          font-weight: 400;
           letter-spacing: -0.3pt;
           margin: 0;
         }
@@ -265,97 +286,137 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           width: 100%;
           table-layout: fixed;
           border-collapse: collapse;
+          border: 1pt solid #222;
         }
+        /* خطوط کامل جدول: همه سلول‌ها در هر چهار جهت خط دارند */
         .ps-cell {
-          border: 0.4pt solid #9a9a9a;
+          border: 0.5pt solid #4d4d4d;
           text-align: center;
           vertical-align: middle;
           padding: 0;
           overflow: hidden;
         }
+        .ps-table thead .ps-cell {
+          border: 0.7pt solid #222;
+        }
+        .ps-table tbody tr:nth-child(even) .ps-cell {
+          background-color: #fcfcfc;
+        }
         .ps-head {
           font-size: 6.6pt;
           font-weight: 900;
-          background: #f1f1f1;
-          border-color: #6f6f6f;
+          font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
+          background: #eeeeee;
           line-height: 1.15;
           padding: 0.6mm 0;
         }
         .ps-name-head {
-          width: 32mm;
+          width: 34mm;
           font-size: 7pt;
         }
         .ps-weekday-corner {
           font-size: 5.6pt;
-          font-weight: 700;
           color: #555;
         }
         .ps-weekday {
-          font-size: 5.6pt;
-          font-weight: 700;
-          color: #333;
-          background: #fafafa;
+          font-size: 5.8pt;
+          color: #222;
+          background: #f7f7f7;
         }
         .ps-sum-head {
           width: 13mm;
-          font-size: 6pt;
-          background: #e6e6e6;
+          font-size: 5.9pt;
+          background: #e2e2e2;
         }
         .ps-sum-head-note {
-          font-size: 5.4pt;
-          font-weight: 700;
-          color: #444;
+          font-size: 5.3pt;
+          color: #333;
         }
+        /* هاشور کامل ستون تعطیل/جمعه (سربرگ + همه سلول‌های آن ستون) */
         .ps-holiday-head,
-        .ps-holiday {
-          background: repeating-linear-gradient(
+        .ps-table tbody tr .ps-cell.ps-holiday,
+        .ps-table tbody tr:nth-child(even) .ps-cell.ps-holiday {
+          background-image: repeating-linear-gradient(
             45deg,
-            #dcdcdc,
-            #dcdcdc 1px,
-            #fff 1px,
-            #fff 3px
+            #cfcfcf,
+            #cfcfcf 0.5px,
+            rgba(255, 255, 255, 0) 0.5px,
+            rgba(255, 255, 255, 0) 3px
           );
+          background-color: #fbfbfb;
         }
         .ps-name {
           text-align: right;
-          padding: 0 1.4mm;
-          font-size: ${nameFontPt}pt;
-          font-weight: 700;
+          padding: 0 1.2mm;
           white-space: nowrap;
-          text-overflow: ellipsis;
+          line-height: 1;
+        }
+        .ps-name-text {
+          font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
+          font-weight: 400;
+          letter-spacing: -0.1pt;
+          display: inline-block;
+          max-width: 27mm;
+          overflow: hidden;
+          white-space: nowrap;
+          vertical-align: middle;
         }
         .ps-idx {
           display: inline-block;
           min-width: 4mm;
-          color: #888;
+          color: #999;
           font-weight: 700;
-          font-size: ${nameFontPt - 1}pt;
+          font-size: 5.4pt;
+          vertical-align: middle;
         }
         .ps-day {
           font-size: ${cellFontPt}pt;
         }
-        /* متن کم‌رنگ و توخالی (نقطه‌چین‌مانند) برای پررنگ‌کردن با مداد */
+        /* حروف شیفت: توخالی، بسیار کم‌رنگ و نقطه‌چین‌مانند برای پررنگ‌کردن با مداد */
         .ps-ghost {
-          font-weight: 800;
-          color: #cfcfcf;
-          -webkit-text-stroke: 0.22pt #9e9e9e;
-          letter-spacing: 0.2pt;
+          font-weight: 900;
+          font-size: ${cellFontPt}pt;
+          letter-spacing: 0.3pt;
+          color: #dcdcdc;
+          -webkit-text-stroke: 0.18pt #c9c9c9;
+          text-shadow: none;
+          background-image: repeating-linear-gradient(
+            0deg,
+            #bdbdbd,
+            #bdbdbd 0.6px,
+            rgba(255, 255, 255, 0) 0.6px,
+            rgba(255, 255, 255, 0) 1.4px
+          );
+          -webkit-background-clip: text;
+          background-clip: text;
+          opacity: 0.85;
         }
         .ps-sum {
           font-size: ${cellFontPt + 0.4}pt;
-          font-weight: 800;
-          color: #9c9c9c;
-          -webkit-text-stroke: 0.2pt #8a8a8a;
-          background: #fbfbfb;
+          font-weight: 900;
+          color: #d5d5d5;
+          -webkit-text-stroke: 0.18pt #bdbdbd;
+          background-image: repeating-linear-gradient(
+            0deg,
+            #b5b5b5,
+            #b5b5b5 0.6px,
+            rgba(255, 255, 255, 0) 0.6px,
+            rgba(255, 255, 255, 0) 1.4px
+          );
+          -webkit-background-clip: text;
+          background-clip: text;
         }
-        .ps-sum-alt {
-          background: #f4f4f4;
+        .ps-sum-cell {
+          background-color: #fdfdfd;
+        }
+        .ps-sum-cell-alt {
+          background-color: #f6f6f6;
         }
         .ps-group {
           text-align: right;
-          font-size: 6.4pt;
-          font-weight: 900;
-          background: #e9e9e9;
+          font-size: 6.6pt;
+          font-family: var(--font-titr), var(--font-vazirmatn), Tahoma, sans-serif;
+          background: #e4e4e4 !important;
           padding: 0.3mm 1.5mm;
           letter-spacing: 0.3pt;
         }
@@ -380,6 +441,13 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         .ps-sign {
           color: #666;
         }
+        /* اگر مرورگر background-clip:text را پشتیبانی کند، حروف واقعاً نقطه‌چین می‌شوند */
+        @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+          .ps-ghost,
+          .ps-sum {
+            color: transparent;
+          }
+        }
         @media print {
           .ps-sheet {
             page-break-inside: avoid;
@@ -388,8 +456,8 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           .ps-holiday-head,
           .ps-head,
           .ps-group,
-          .ps-sum,
-          .ps-sum-alt,
+          .ps-sum-cell,
+          .ps-sum-cell-alt,
           .ps-legend-holiday {
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;

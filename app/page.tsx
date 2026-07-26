@@ -3620,6 +3620,20 @@ export default function Home() {
 
   // گروه شغلی هدف برای چاپ (null = هر دو گروه)
   const [printJobGroup, setPrintJobGroup] = useState<JobGroup | null>(null);
+  // منوی کرکره‌ای خروجی‌ها (PDF پرستاران / PDF کمک‌بهیاران / اکسل)
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
+  const exportMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!showExportMenu) return;
+    const onClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showExportMenu]);
 
   const handlePrint = (jobGroup: JobGroup | null = null) => {
     setPrintJobGroup(jobGroup);
@@ -4780,29 +4794,43 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  <button
-                    onClick={() => { exportToExcel(); handlePrint(null); }}
-                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-                    id="btn-export-excel-pdf"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 text-emerald-600"/> خروجی فایل اکسل و PDF
-                  </button>
-                  <button
-                    onClick={() => handlePrint('nurse')}
-                    className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-emerald-700 text-xs font-bold px-3 py-2 rounded-xl border border-emerald-200 transition-colors cursor-pointer"
-                    id="btn-print-nurses"
-                    title="چاپ/PDF لیست پرستاران در یک برگه A4 افقی"
-                  >
-                    <Printer className="w-4 h-4"/> PDF پرستاران
-                  </button>
-                  <button
-                    onClick={() => handlePrint('assistant')}
-                    className="flex items-center gap-1.5 bg-white hover:bg-sky-50 text-sky-700 text-xs font-bold px-3 py-2 rounded-xl border border-sky-200 transition-colors cursor-pointer"
-                    id="btn-print-assistants"
-                    title="چاپ/PDF لیست کمک‌بهیاران در یک برگه A4 افقی"
-                  >
-                    <Printer className="w-4 h-4"/> PDF کمک‌بهیاران
-                  </button>
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      onClick={() => setShowExportMenu(v => !v)}
+                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                      id="btn-export-menu"
+                      title="خروجی‌های چاپ و اکسل"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-600"/>
+                      خروجی و چاپ
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showExportMenu && (
+                      <div className="absolute left-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl z-40 overflow-hidden animate-fade-in" id="export-menu">
+                        <button
+                          onClick={() => { setShowExportMenu(false); handlePrint('nurse'); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors cursor-pointer"
+                          id="btn-print-nurses"
+                        >
+                          <Printer className="w-4 h-4 text-emerald-600"/> چاپ PDF پرستاران
+                        </button>
+                        <button
+                          onClick={() => { setShowExportMenu(false); handlePrint('assistant'); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-sky-50 hover:text-sky-700 border-t border-slate-100 transition-colors cursor-pointer"
+                          id="btn-print-assistants"
+                        >
+                          <Printer className="w-4 h-4 text-sky-600"/> چاپ PDF کمک‌بهیاران
+                        </button>
+                        <button
+                          onClick={() => { setShowExportMenu(false); exportToExcel(); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 border-t border-slate-100 transition-colors cursor-pointer"
+                          id="btn-export-excel"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-slate-500"/> خروجی فایل اکسل
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
