@@ -1313,21 +1313,22 @@ export default function Home() {
   }, [schedule, dismissedWarnings, currentYear, currentMonth, selectedDepartmentId]);
 
   // ====== پایش پیوسته و بازتولید پویای هشدارها ======
-  // این effect هر بار که assignments برنامه تغییر می‌کند (ویرایش دستی، اعمال سناریو،
-  // یا هر تغییر دیگر) هشدارها را از نو بازتولید می‌کند. اگر هشدارهای بازتولیدشده با
-  // هشدارهای فعلی متفاوت باشند، schedule به‌روزرسانی می‌شود تا تغییرات فوراً در
-  // رابط کاربری منعکس گردند.
-  // این مکانیزم تضمین می‌کند که سیستم هشدار همواره پویا و فعال است و هیچ تغییری
-  // در برنامه بدون بازبینی هشدارها باقی نمی‌ماند.
-  const previousAssignmentsRef = React.useRef<string>('');
+  // این effect هر بار که برنامه (schedule) تغییر می‌کند — شامل تغییر در assignments،
+  // warnings، یا هر فیلد دیگر — هشدارها را از نو بازتولید می‌کند. اگر هشدارهای
+  // بازتولیدشده با هشدارهای فعلی متفاوت باشند، schedule به‌روزرسانی می‌شود تا
+  // تغییرات فوراً در رابط کاربری منعکس گردند.
+  //
+  // نکته کلیدی: وابستگی این effect کل شیء schedule است (نه فقط assignments).
+  // این تضمین می‌کند که هر تغییری در برنامه (ویرایش دستی، تغییر تنظیمات نیرو،
+  // اعمال سناریو، و غیره) باعث بازبینی هشدارها می‌شود.
+  // برای جلوگیری از حلقه بی‌نهایت، از previousWarningsKey استفاده می‌شود.
+  const previousWarningsKeyRef = React.useRef<string>('');
+  const isReevaluatingRef = React.useRef<boolean>(false);
 
   React.useEffect(() => {
     if (!schedule || !settings) return;
-
-    const assignmentsKey = JSON.stringify(schedule.assignments);
-    // اگر assignments تغییر نکرده، نیازی به بازبینی نیست (جلوگیری از حلقه بی‌نهایت)
-    if (assignmentsKey === previousAssignmentsRef.current) return;
-    previousAssignmentsRef.current = assignmentsKey;
+    // جلوگیری از اجرای هم‌زمان (محافظت در برابر حلقه بی‌نهایت)
+    if (isReevaluatingRef.current) return;
 
     const currentPersonnel = personnelRef.current;
     const currentRequests = requestsRef.current;
@@ -1337,7 +1338,7 @@ export default function Home() {
 
     if (!currentPersonnel.length || !currentSettings) return;
 
-    // بازتولید هشدارها بر اساس وضعیت فعلی assignments
+    // بازتولید هشدارها بر اساس وضعیت فعلی برنامه
     const verification = verifyCoverageAndLeaders(
       currentYear,
       currentMonth,
@@ -1352,14 +1353,18 @@ export default function Home() {
     const freshWarnings = verification.warnings;
     const currentWarnings = schedule.warnings || [];
 
-    // مقایسه هشدارها: فقط در صورت تفاوت به‌روزرسانی انجام می‌شود
-    const warningsMatch =
-      freshWarnings.length === currentWarnings.length &&
-      freshWarnings.every((w, i) => w === currentWarnings[i]);
+    // کلید مقایسه: مرتب‌سازی برای مقایسه مستقل از ترتیب
+    const freshKey = [...freshWarnings].sort().join('|||');
+    const currentKey = [...currentWarnings].sort().join('|||');
 
-    if (warningsMatch) return;
+    if (freshKey === currentKey && freshKey === previousWarningsKeyRef.current) return;
+    previousWarningsKeyRef.current = freshKey;
 
-    // هشدارها تغییر کرده‌اند — schedule و UI را به‌روز کن
+    // اگر هشدارها واقعاً متفاوت هستند، به‌روزرسانی انجام شود
+    if (freshKey === currentKey) return;
+
+    isReevaluatingRef.current = true;
+
     const updatedSchedule: MonthlySchedule = {
       ...schedule,
       warnings: freshWarnings,
@@ -1376,23 +1381,27 @@ export default function Home() {
     const deptId = selectedDepartmentId || 'sepehr';
     const nextDb = getFreshDbCopy();
     const oldDept = nextDb?.deptData?.[deptId];
-    if (!oldDept) return;
-
-    nextDb.deptData[deptId] = {
-      ...oldDept,
-      schedules: {
-        ...oldDept.schedules,
-        [key]: {
-          ...updatedSchedule,
-          lockedRows: schedule.lockedRows || [],
+    if (oldDept) {
+      nextDb.deptData[deptId] = {
+        ...oldDept,
+        schedules: {
+          ...oldDept.schedules,
+          [key]: {
+            ...updatedSchedule,
+            lockedRows: schedule.lockedRows || [],
+          },
         },
-      },
-    };
-    void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
-      console.error('Error updating warnings after schedule change:', error);
-    });
+      };
+      void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
+        console.error('Error updating warnings after schedule change:', error);
+      }).finally(() => {
+        isReevaluatingRef.current = false;
+      });
+    } else {
+      isReevaluatingRef.current = false;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schedule?.assignments, currentYear, currentMonth, selectedDepartmentId, settings]);
+  }, [schedule, currentYear, currentMonth, selectedDepartmentId, settings]);
 
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
     if (!displayedSchedule) return [];
@@ -2766,13 +2775,14 @@ export default function Home() {
 
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
     // ====== پویا‌سازی سیستم هشدار: همیشه از آخرین وضعیت تعهدشده استفاده کن ======
-    // به‌جای خواندن schedule از closure (که ممکن است stale باشد)، آخرین وضعیت را
-    // از optimisticDbRef می‌خوانیم تا ویرایش‌های قبلی سرپرستار هم لحاظ شوند.
+    // optimisticDbRef به‌صورت همگام (synchronous) توسط saveDbState به‌روز می‌شود،
+    // در حالی که scheduleRef فقط پس از re-render به‌روز می‌شود. بنابراین برای
+    // جلوگیری از stale state، ابتدا optimisticDbRef خوانده می‌شود.
     const deptId = selectedDepartmentId || 'sepehr';
     const monthKey = `${currentYear}_${currentMonth}`;
     const latestSchedule: MonthlySchedule | null =
-      scheduleRef.current ??
       optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[monthKey] ??
+      scheduleRef.current ??
       null;
 
     if (!latestSchedule) return;
@@ -2862,8 +2872,14 @@ export default function Home() {
         // ====== به‌روزرسانی صریح schedule در UI برای پویا‌سازی فوری هشدارها ======
         // پس از هر ویرایش دستی، هشدارها بازتولید می‌شوند و schedule باید فوراً
         // به‌روزرسانی شود تا تغییرات در رابط کاربری منعکس گردد.
-        setSchedule(result.schedule);
-        const remainingWarnings = result.schedule.warnings ?? [];
+        // lockedRows و سایر فیلدها هم باید حفظ شوند.
+        const finalSchedule: MonthlySchedule = {
+          ...result.schedule,
+          lockedRows: currentLocked,
+          dismissedWarnings: result.schedule.dismissedWarnings ?? currentDismissed,
+        };
+        setSchedule(finalSchedule);
+        const remainingWarnings = finalSchedule.warnings ?? [];
         setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
         setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         setEditingCell(null);

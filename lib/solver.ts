@@ -1705,7 +1705,9 @@ export function verifyCoverageAndLeaders(
     let consecutiveOffDays: number[] = [];
     for (let d = 1; d <= totalDays; d++) {
       const assigned = assignments[p.id]?.[d] || 'OFF';
-      if (assigned === 'OFF') {
+      // هر روزی که شیفت کاری عادی ندارد (OFF، مرخصی، یا خالی) جزء زنجیرهٔ عدم حضور حساب می‌شود
+      const isAbsence = assigned === 'OFF' || assigned.startsWith('L');
+      if (isAbsence) {
         consecutiveOffDays.push(d);
       } else {
         if (consecutiveOffDays.length >= 4) {
