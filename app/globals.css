@@ -7,6 +7,49 @@
 @media print {
   @page {
     size: A4 landscape;
-    margin: 5mm;
+    /* حاشیه حداقلی تا جدول کل عرض برگه را بگیرد */
+    margin: 4mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* فقط برگه چاپ نمایش داده شود؛ بقیه رابط کاربری حذف شود */
+  body * {
+    visibility: hidden !important;
+  }
+
+  #print-schedule-sheet,
+  #print-schedule-sheet * {
+    visibility: visible !important;
+  }
+
+  #print-schedule-sheet {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    right: 0;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* جلوگیری از شکستن جدول بین دو صفحه */
+  #print-schedule-sheet table,
+  #print-schedule-sheet tr,
+  #print-schedule-sheet thead,
+  #print-schedule-sheet tbody {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }

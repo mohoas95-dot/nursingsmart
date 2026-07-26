@@ -83,6 +83,7 @@ import type { SchedulePersistence, ScheduleUIFeedback } from '../features/schedu
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenariosModal } from '../features/scheduling/components/ScenariosModal';
+import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
@@ -3617,8 +3618,27 @@ export default function Home() {
     document.body.removeChild(link);
   };
 
-  const handlePrint = () => {
-    window.print();
+  // گروه شغلی هدف برای چاپ (null = هر دو گروه)
+  const [printJobGroup, setPrintJobGroup] = useState<JobGroup | null>(null);
+  // منوی کرکره‌ای خروجی‌ها (PDF پرستاران / PDF کمک‌بهیاران / اکسل)
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
+  const exportMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!showExportMenu) return;
+    const onClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showExportMenu]);
+
+  const handlePrint = (jobGroup: JobGroup | null = null) => {
+    setPrintJobGroup(jobGroup);
+    // یک تیک صبر می‌کنیم تا برگه چاپ با گروه انتخابی رندر شود
+    window.setTimeout(() => window.print(), 60);
   };
 
   // Generate current calendar array — یکپارچه با تعطیلات انتخابی بخش و روز آغاز هفته (Requirement 4)
@@ -4774,13 +4794,43 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  <button
-                    onClick={() => { exportToExcel(); handlePrint(); }}
-                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-                    id="btn-export-excel-pdf"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 text-emerald-600"/> خروجی فایل اکسل و PDF
-                  </button>
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      onClick={() => setShowExportMenu(v => !v)}
+                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                      id="btn-export-menu"
+                      title="خروجی‌های چاپ و اکسل"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-600"/>
+                      خروجی و چاپ
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showExportMenu && (
+                      <div className="absolute left-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl z-40 overflow-hidden animate-fade-in" id="export-menu">
+                        <button
+                          onClick={() => { setShowExportMenu(false); handlePrint('nurse'); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors cursor-pointer"
+                          id="btn-print-nurses"
+                        >
+                          <Printer className="w-4 h-4 text-emerald-600"/> چاپ PDF پرستاران
+                        </button>
+                        <button
+                          onClick={() => { setShowExportMenu(false); handlePrint('assistant'); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-sky-50 hover:text-sky-700 border-t border-slate-100 transition-colors cursor-pointer"
+                          id="btn-print-assistants"
+                        >
+                          <Printer className="w-4 h-4 text-sky-600"/> چاپ PDF کمک‌بهیاران
+                        </button>
+                        <button
+                          onClick={() => { setShowExportMenu(false); exportToExcel(); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 border-t border-slate-100 transition-colors cursor-pointer"
+                          id="btn-export-excel"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-slate-500"/> خروجی فایل اکسل
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -5641,7 +5691,7 @@ export default function Home() {
                 </div>
 
                 <div className="flex gap-2">
-                  <button onClick={() => { exportToExcel(); handlePrint(); }} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
+                  <button onClick={() => { exportToExcel(); handlePrint(null); }} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
                     <FileSpreadsheet className="w-4 h-4"/> دریافت همزمان اکسل و چاپ کارنامه‌ها
                   </button>
                 </div>
@@ -6558,76 +6608,17 @@ export default function Home() {
             <ProfileSection user={authenticatedUser} />
           )}
 
-          <div className="hidden print:block w-full bg-white text-slate-900 p-8">
-            <div className="text-center mb-6">
-              <h1 className="text-2xl font-black">جدول زمان‌بندی و توزیع شیفت پرسنل پرستاری بیمارستان</h1>
-              <p className="text-sm mt-1 font-mono">{JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}</p>
-            </div>
-
-            <div className="overflow-x-auto w-full">
-              <table className="w-full text-xs text-right border-collapse border border-slate-300 min-w-[1240px]">
-                <thead>
-                  <tr className="bg-slate-100">
-                    <th className="border border-slate-300 p-2 font-bold w-44">پرسنل</th>
-                    {calendarDays.map(d => (
-                      <th key={d.day} className="border border-slate-300 p-1 text-center font-bold">
-                        {d.day}
-                      </th>
-                    ))}
-                    <th className="border border-slate-300 p-1 font-bold text-[10px] w-12">حضور</th>
-                    <th className="border border-slate-300 p-1 font-bold text-[10px] w-12">اضافه‌کار</th>
-                    <th className="border border-slate-300 p-1 font-bold text-[10px] w-12">بهره‌وری</th>
-                    <th className="border border-slate-300 p-1 font-bold text-[10px] w-12">سنوات</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {personnel.filter(p => p.active).map(p => {
-                    const pAssignments = schedule?.assignments[p.id] || {};
-                    const pReport = reports.find(r => r.personnelId === p.id);
-                    return (
-                      <tr key={p.id}>
-                        <td className="border border-slate-300 p-2 font-bold whitespace-nowrap">{p.firstName} {p.lastName}</td>
-                        {calendarDays.map(d => {
-                          const shift = pAssignments[d.day] || 'OFF';
-                          let cleanS = shift;
-                          if (shift.startsWith('L')) {
-                            cleanS = shift.substring(1) as ShiftType;
-                          }
-
-                          const isLeaderM = schedule?.shiftLeaders?.[d.day]?.morning === p.id;
-                          const isLeaderE = schedule?.shiftLeaders?.[d.day]?.afternoon === p.id;
-                          const isLeaderN = schedule?.shiftLeaders?.[d.day]?.night === p.id;
-
-                          const isLeaderCell =
-                            (shift === 'M' && isLeaderM) ||
-                            (shift === 'E' && isLeaderE) ||
-                            (shift === 'N' && isLeaderN) ||
-                            (shift === 'ME' && (isLeaderM || isLeaderE)) ||
-                            (shift === 'EN' && (isLeaderE || isLeaderN)) ||
-                            (shift === 'MN' && (isLeaderM || isLeaderN)) ||
-                            (shift === 'MEN' && (isLeaderM || isLeaderE || isLeaderN));
-
-                          let printDisplay = cleanS === 'OFF' ? 'آف' : cleanS;
-                          if (cleanS !== 'OFF' && isLeaderCell) {
-                            printDisplay = `${cleanS} *`;
-                          }
-
-                          return (
-                            <td key={d.day} className="border border-slate-300 p-1 text-center font-mono text-[9px]">
-                              {printDisplay}
-                            </td>
-                          );
-                        })}
-                        <td className="border border-slate-300 p-1 text-center font-mono text-[10px] font-bold">{pReport?.workedHours || 0}</td>
-                        <td className="border border-slate-300 p-1 text-center font-mono text-[10px]">{pReport?.overtimeHours || 0}</td>
-                        <td className="border border-slate-300 p-1 text-center font-mono text-[10px]">{pReport?.productivityHours || 0}</td>
-                        <td className="border border-slate-300 p-1 text-center font-mono text-[10px]">{pReport?.experienceHours || 0}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          <div className="hidden print:block w-full bg-white text-slate-900" id="print-schedule-sheet">
+            <PrintScheduleSheet
+              personnel={personnel}
+              schedule={displayedSchedule || schedule}
+              reports={reports}
+              calendarDays={calendarDays}
+              year={currentYear}
+              month={currentMonth}
+              departmentName={departments.find(d => d.id === selectedDepartmentId)?.name}
+              jobGroupFilter={printJobGroup}
+            />
           </div>
 
         </div>
