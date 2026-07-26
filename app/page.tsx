@@ -70,6 +70,11 @@ import {
   toggleHolidayOverride,
 } from '../domain/calendar/holiday-overrides';
 import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
+import {
+  dismissedWarningsChanged,
+  pruneDismissedWarningMap,
+  pruneDismissedWarnings,
+} from '../domain/scheduling/alert-lifecycle';
 import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
@@ -797,7 +802,10 @@ export default function Home() {
     const sched = deptInfo.schedules?.[hKey] || null;
     setSchedule(sched);
     if (sched) {
-      setDismissedWarnings(sched.dismissedWarnings || []);
+      // هشدارهای رفع‌شده نباید در حالتِ «نادیده‌گرفته‌شده» باقی بمانند؛ در غیر این‌صورت
+      // اگر همان تخلف دوباره ساخته شود، بی‌صدا پنهان می‌ماند.
+      setDismissedWarnings(pruneDismissedWarnings(sched.warnings || [], sched.dismissedWarnings || []));
+      setDismissedAlertWarnings(prev => pruneDismissedWarningMap(sched.warnings || [], prev));
       setLockedRows(sched.lockedRows || []);
       const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
       const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
@@ -1075,7 +1083,9 @@ export default function Home() {
           const sched = deptInfo.schedules?.[hKey] || null;
           setSchedule(sched);
           if (sched) {
-            setDismissedWarnings(sched.dismissedWarnings || []);
+            // هم‌ترازسازی وضعیت نادیده‌گرفتن با هشدارهای فعلی (هشدار رفع‌شده = حذف کامل).
+            setDismissedWarnings(pruneDismissedWarnings(sched.warnings || [], sched.dismissedWarnings || []));
+            setDismissedAlertWarnings(prev => pruneDismissedWarningMap(sched.warnings || [], prev));
             setLockedRows(sched.lockedRows || []);
             const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
             const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
@@ -1252,6 +1262,49 @@ export default function Home() {
     const warningsForDialog = filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings);
     return aggregateWarnings(warningsForDialog, personnel);
   }, [displayedSchedule, dismissedWarnings, personnel]);
+
+  // ====== پاک‌سازی خودکار هشدارهای رفع‌شده ======
+  // به‌محض اینکه سرپرستار مشکلی را در برنامه واقعاً برطرف کند، هشدارِ آن دیگر
+  // بازتولید نمی‌شود. در این حالت رکورد «نادیده‌گرفتنِ» آن هشدار هم باید از حالت
+  // برنامه و از پایگاه داده حذف شود، وگرنه دو مشکل پیش می‌آید:
+  //   ۱) اگر همان تخلف بعداً دوباره ساخته شود، متن هشدار یکسان است و به‌خاطر رکورد
+  //      قدیمی بی‌صدا پنهان می‌ماند و سرپرستار از آن باخبر نمی‌شود.
+  //   ۲) شمارندهٔ «بازیابی همه» عددی نشان می‌دهد که ربطی به وضعیت فعلی برنامه ندارد.
+  React.useEffect(() => {
+    if (!schedule) return;
+    const activeWarnings = schedule.warnings || [];
+
+    setDismissedAlertWarnings(prev => {
+      const next = pruneDismissedWarningMap(activeWarnings, prev);
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+
+    const pruned = pruneDismissedWarnings(activeWarnings, dismissedWarnings);
+    if (!dismissedWarningsChanged(dismissedWarnings, pruned)) return;
+
+    setDismissedWarnings(pruned);
+
+    // فهرست هم‌ترازشده در پایگاه داده هم ماندگار می‌شود (بدون نمایش لایهٔ انتظار).
+    const key = `${currentYear}_${currentMonth}`;
+    const deptId = selectedDepartmentId || 'sepehr';
+    const nextDb = getFreshDbCopy();
+    const oldDept = nextDb?.deptData?.[deptId];
+    const existingSched = oldDept?.schedules?.[key];
+    if (!oldDept || !existingSched) return;
+    if (!dismissedWarningsChanged(existingSched.dismissedWarnings || [], pruned)) return;
+
+    nextDb.deptData[deptId] = {
+      ...oldDept,
+      schedules: {
+        ...oldDept.schedules,
+        [key]: { ...existingSched, dismissedWarnings: pruned },
+      },
+    };
+    void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
+      console.error('Error pruning resolved warnings:', error);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedule, dismissedWarnings, currentYear, currentMonth, selectedDepartmentId]);
 
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
     if (!displayedSchedule) return [];
@@ -1632,7 +1685,9 @@ export default function Home() {
             finalizedNurses: isLockedNurses,
             finalizedAssistants: isLockedAssistants,
             requestsLocked: isReqLocked,
-            dismissedWarnings: dismissedWarnings,
+            // پس از هر بازتولید، هشدارهایی که دیگر مصداق ندارند از فهرست
+            // نادیده‌گرفته‌ها هم پاک می‌شوند تا هشدار رفع‌شده کاملاً از سیستم برود.
+            dismissedWarnings: pruneDismissedWarnings(solved.warnings || [], dismissedWarnings),
             lockedRows: lockedRows,
             changeLogs: schedule?.changeLogs || []
           }
@@ -2648,13 +2703,17 @@ export default function Home() {
             schedules: {},
           };
 
+          // هشدارهایی که با همین ویرایش رفع شده‌اند نباید در فهرست نادیده‌گرفته‌ها بمانند؛
+          // facade فهرست هم‌ترازشده را روی newSchedule گذاشته است.
+          const prunedDismissed = newSchedule.dismissedWarnings ?? dismissedWarnings;
+
           const updatedDept = {
             ...oldDept,
             schedules: {
               ...oldDept.schedules,
               [`${currentYear}_${currentMonth}`]: {
                 ...newSchedule,
-                dismissedWarnings: dismissedWarnings,
+                dismissedWarnings: prunedDismissed,
                 lockedRows: lockedRows,
               },
             },
@@ -2684,6 +2743,7 @@ export default function Home() {
             finalizedAssistantsMonths,
             lockedRows,
           },
+          dismissedWarnings,
         },
         verifyCoverageAndLeaders,
         persistenceAdapter,
@@ -2693,6 +2753,11 @@ export default function Home() {
       if (!result.success) {
         alert('خطا در تغییر دستی شیفت: ' + result.error);
       } else {
+        // هشدارِ رفع‌شده باید کاملاً از سیستم برود: هم از حالت موقتِ رابط کاربری و هم
+        // از فهرست ماندگارِ نادیده‌گرفته‌ها (که facade آن را هم‌تراز کرده است).
+        const remainingWarnings = result.schedule?.warnings ?? [];
+        setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
+        setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         setEditingCell(null);
       }
     } catch (error) {
@@ -4029,7 +4094,7 @@ export default function Home() {
                                       assignments: updatedAssignments,
                                       shiftLeaders: verification.shiftLeaders,
                                       warnings: verification.warnings,
-                                      dismissedWarnings: dismissedWarnings,
+                                      dismissedWarnings: pruneDismissedWarnings(verification.warnings, dismissedWarnings),
                                       lockedRows: lockedRows
                                     }
                                   }

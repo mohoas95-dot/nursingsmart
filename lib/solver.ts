@@ -1753,7 +1753,7 @@ export function verifyCoverageAndLeaders(
     const capViolations = findConsecutiveCapViolations(assignments, p.id, totalDays);
     capViolations.forEach(violation => {
       warnings.push(
-        `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} (${violation.startPeriod}) تا روز ${violation.endDay} (${violation.endPeriod}) — ${violation.length} شیفت متوالی پشت‌سرهم؛ حداکثر مجاز ۴ شیفت متوالی است`
+        `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} (${violation.startPeriod}) تا روز ${violation.endDay} (${violation.endPeriod}) — ${violation.length} شیفت متوالی پشت‌سرهم بدون استراحت (شب ۲ شیفت حساب می‌شود)؛ حداکثر مجاز ۴ شیفت متوالی معادل یک بلوک ۲۴ساعته است`
       );
     });
 

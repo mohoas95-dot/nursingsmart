@@ -33,6 +33,7 @@ import {
   updateScheduleCell,
 } from '../../../domain/scheduling/schedule-operations';
 import { reconcileStaffingCoverage } from '../../../domain/scheduling/staffing-coverage';
+import { findResolvedWarnings, pruneDismissedWarnings } from '../../../domain/scheduling/alert-lifecycle';
 import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
 import { generateJalaliMonthCalendar } from '../../../lib/jalali';
 
@@ -221,7 +222,9 @@ export async function runOptimizerFacade(
       warnings: verification.warnings,
       finalizedNurses: jobGroup === 'nurse' ? false : currentSchedule?.finalizedNurses,
       finalizedAssistants: jobGroup === 'assistant' ? false : currentSchedule?.finalizedAssistants,
-      dismissedWarnings: [...dismissedWarnings],
+      // هشدارهایی که با این بازتولید واقعاً رفع شده‌اند دیگر «نادیده‌گرفته‌شده» نمی‌مانند؛
+      // وگرنه اگر همان تخلف بعداً دوباره ساخته شود، بی‌صدا پنهان می‌ماند.
+      dismissedWarnings: pruneDismissedWarnings(verification.warnings, dismissedWarnings),
       lockedRows: [...lockState.lockedRows],
     };
 
@@ -300,6 +303,7 @@ export async function applyManualShiftChangeFacade(
     settings,
     holidays,
     firstDayOfWeek,
+    dismissedWarnings = currentSchedule.dismissedWarnings ?? [],
   } = input;
 
   try {
@@ -323,7 +327,16 @@ export async function applyManualShiftChangeFacade(
       requests
     );
 
-    // Step 3: Build new schedule
+    // Step 3: Retire alerts that this edit actually resolved.
+    // اگر سرپرستار با همین ویرایش تخلفی را برطرف کند، هشدار آن دیگر تولید نمی‌شود؛
+    // پس رکورد «نادیده‌گرفتن»‌اش هم باید برود تا بروز دوبارهٔ آن در آینده پنهان نماند.
+    const prunedDismissed = pruneDismissedWarnings(verification.warnings, dismissedWarnings);
+    const resolvedWarnings = findResolvedWarnings(
+      currentSchedule.warnings ?? [],
+      verification.warnings
+    );
+
+    // Step 4: Build new schedule
     const newSchedule: MonthlySchedule = {
       ...currentSchedule,
       year,
@@ -331,15 +344,17 @@ export async function applyManualShiftChangeFacade(
       assignments: updatedAssignments,
       shiftLeaders: verification.shiftLeaders,
       warnings: verification.warnings,
+      dismissedWarnings: prunedDismissed,
       finalized: false,
     };
 
-    // Step 4: Persist to S3
+    // Step 5: Persist to S3
     await persistence.saveSchedule(newSchedule, departmentId);
 
     return {
       success: true,
       schedule: newSchedule,
+      resolvedWarnings,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

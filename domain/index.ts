@@ -130,3 +130,14 @@ export {
 } from './scheduling/smart-rules';
 
 export type { AssignmentMap, ConsecutiveRunSummary } from './scheduling/smart-rules';
+
+// ============================================================================
+// Alert Lifecycle — چرخهٔ عمر هشدارها (پاک‌سازی خودکار هشدارهای رفع‌شده)
+// ============================================================================
+
+export {
+  dismissedWarningsChanged,
+  findResolvedWarnings,
+  pruneDismissedWarningMap,
+  pruneDismissedWarnings,
+} from './scheduling/alert-lifecycle';
