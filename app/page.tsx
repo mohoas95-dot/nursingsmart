@@ -348,6 +348,9 @@ export default function Home() {
   const holidaysRef = React.useRef(customHolidays);
   const firstDayRef = React.useRef(firstDayOfWeekIndex);
   const monthlyDutyHoursRef = React.useRef(monthlyDutyHours);
+  const scheduleRef = React.useRef(schedule);
+  const dismissedWarningsRef = React.useRef(dismissedWarnings);
+  const lockedRowsRef = React.useRef(lockedRows);
 
   useEffect(() => {
     personnelRef.current = personnel;
@@ -356,7 +359,10 @@ export default function Home() {
     holidaysRef.current = customHolidays;
     firstDayRef.current = firstDayOfWeekIndex;
     monthlyDutyHoursRef.current = monthlyDutyHours;
-  }, [personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours]);
+    scheduleRef.current = schedule;
+    dismissedWarningsRef.current = dismissedWarnings;
+    lockedRowsRef.current = lockedRows;
+  }, [personnel, requests, settings, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, schedule, dismissedWarnings, lockedRows]);
 
   // Load persisted selected month/year on mount to prevent defaulting to Khordad after resets
   useEffect(() => {
@@ -1305,6 +1311,88 @@ export default function Home() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule, dismissedWarnings, currentYear, currentMonth, selectedDepartmentId]);
+
+  // ====== پایش پیوسته و بازتولید پویای هشدارها ======
+  // این effect هر بار که assignments برنامه تغییر می‌کند (ویرایش دستی، اعمال سناریو،
+  // یا هر تغییر دیگر) هشدارها را از نو بازتولید می‌کند. اگر هشدارهای بازتولیدشده با
+  // هشدارهای فعلی متفاوت باشند، schedule به‌روزرسانی می‌شود تا تغییرات فوراً در
+  // رابط کاربری منعکس گردند.
+  // این مکانیزم تضمین می‌کند که سیستم هشدار همواره پویا و فعال است و هیچ تغییری
+  // در برنامه بدون بازبینی هشدارها باقی نمی‌ماند.
+  const previousAssignmentsRef = React.useRef<string>('');
+
+  React.useEffect(() => {
+    if (!schedule || !settings) return;
+
+    const assignmentsKey = JSON.stringify(schedule.assignments);
+    // اگر assignments تغییر نکرده، نیازی به بازبینی نیست (جلوگیری از حلقه بی‌نهایت)
+    if (assignmentsKey === previousAssignmentsRef.current) return;
+    previousAssignmentsRef.current = assignmentsKey;
+
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentSettings = settingsRef.current;
+    const currentHolidays = holidaysRef.current;
+    const currentFirstDay = firstDayRef.current;
+
+    if (!currentPersonnel.length || !currentSettings) return;
+
+    // بازتولید هشدارها بر اساس وضعیت فعلی assignments
+    const verification = verifyCoverageAndLeaders(
+      currentYear,
+      currentMonth,
+      currentPersonnel,
+      schedule.assignments,
+      currentSettings,
+      currentHolidays,
+      currentFirstDay === -1 ? undefined : currentFirstDay,
+      currentRequests
+    );
+
+    const freshWarnings = verification.warnings;
+    const currentWarnings = schedule.warnings || [];
+
+    // مقایسه هشدارها: فقط در صورت تفاوت به‌روزرسانی انجام می‌شود
+    const warningsMatch =
+      freshWarnings.length === currentWarnings.length &&
+      freshWarnings.every((w, i) => w === currentWarnings[i]);
+
+    if (warningsMatch) return;
+
+    // هشدارها تغییر کرده‌اند — schedule و UI را به‌روز کن
+    const updatedSchedule: MonthlySchedule = {
+      ...schedule,
+      warnings: freshWarnings,
+      shiftLeaders: verification.shiftLeaders,
+      dismissedWarnings: pruneDismissedWarnings(freshWarnings, schedule.dismissedWarnings || []),
+    };
+
+    setSchedule(updatedSchedule);
+    setDismissedAlertWarnings(prev => pruneDismissedWarningMap(freshWarnings, prev));
+    setDismissedWarnings(prev => pruneDismissedWarnings(freshWarnings, prev));
+
+    // ذخیره در پایگاه داده (بدون نمایش لایهٔ انتظار)
+    const key = `${currentYear}_${currentMonth}`;
+    const deptId = selectedDepartmentId || 'sepehr';
+    const nextDb = getFreshDbCopy();
+    const oldDept = nextDb?.deptData?.[deptId];
+    if (!oldDept) return;
+
+    nextDb.deptData[deptId] = {
+      ...oldDept,
+      schedules: {
+        ...oldDept.schedules,
+        [key]: {
+          ...updatedSchedule,
+          lockedRows: schedule.lockedRows || [],
+        },
+      },
+    };
+    void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
+      console.error('Error updating warnings after schedule change:', error);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedule?.assignments, currentYear, currentMonth, selectedDepartmentId, settings]);
 
   const smartSuggestions = React.useMemo<SmartSuggestion[]>(() => {
     if (!displayedSchedule) return [];
@@ -2677,16 +2765,33 @@ export default function Home() {
   };
 
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
-    if (!schedule) return;
+    // ====== پویا‌سازی سیستم هشدار: همیشه از آخرین وضعیت تعهدشده استفاده کن ======
+    // به‌جای خواندن schedule از closure (که ممکن است stale باشد)، آخرین وضعیت را
+    // از optimisticDbRef می‌خوانیم تا ویرایش‌های قبلی سرپرستار هم لحاظ شوند.
+    const deptId = selectedDepartmentId || 'sepehr';
+    const monthKey = `${currentYear}_${currentMonth}`;
+    const latestSchedule: MonthlySchedule | null =
+      scheduleRef.current ??
+      optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[monthKey] ??
+      null;
+
+    if (!latestSchedule) return;
+
+    // از refs برای خواندن آخرین وضعیت استفاده می‌کنیم تا از stale state جلوگیری شود
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentSettings = settingsRef.current;
+    const currentHolidays = holidaysRef.current;
+    const currentFirstDay = firstDayRef.current;
+    const currentDismissed = dismissedWarningsRef.current;
+    const currentLocked = lockedRowsRef.current;
 
     // گزینه یکپارچه «مرخصی» در منوی سلول: شماره روز مرخصی بر اساس روزهای پیاپی
     // قبلی تعیین می‌شود تا در لیست، روز اول عدد ۱، روز دوم عدد ۲ و الی آخر بیاید.
     const resolvedShift: ShiftType =
-      shift === 'L' ? resolveLeaveShiftAssignment(schedule.assignments, pId, day) : shift;
+      shift === 'L' ? resolveLeaveShiftAssignment(latestSchedule.assignments, pId, day) : shift;
 
     try {
-      const deptId = selectedDepartmentId || 'sepehr';
-
       // Create persistence adapter for the Facade
       const persistenceAdapter: SchedulePersistence = {
         saveSchedule: async (newSchedule) => {
@@ -2705,16 +2810,16 @@ export default function Home() {
 
           // هشدارهایی که با همین ویرایش رفع شده‌اند نباید در فهرست نادیده‌گرفته‌ها بمانند؛
           // facade فهرست هم‌ترازشده را روی newSchedule گذاشته است.
-          const prunedDismissed = newSchedule.dismissedWarnings ?? dismissedWarnings;
+          const prunedDismissed = newSchedule.dismissedWarnings ?? currentDismissed;
 
           const updatedDept = {
             ...oldDept,
             schedules: {
               ...oldDept.schedules,
-              [`${currentYear}_${currentMonth}`]: {
+              [monthKey]: {
                 ...newSchedule,
                 dismissedWarnings: prunedDismissed,
-                lockedRows: lockedRows,
+                lockedRows: currentLocked,
               },
             },
           };
@@ -2725,6 +2830,7 @@ export default function Home() {
       };
 
       // Use the Facade (delegates pure logic to domain layer)
+      // ====== نکته کلیدی: currentSchedule از آخرین وضعیت تعهدشده خوانده می‌شود ======
       const result = await applyManualShiftChangeFacade(
         {
           personnelId: pId,
@@ -2732,18 +2838,18 @@ export default function Home() {
           shift: resolvedShift,
           year: currentYear,
           month: currentMonth,
-          currentSchedule: schedule,
-          personnel,
-          requests,
-          settings,
-          holidays: customHolidays,
-          firstDayOfWeek: firstDayOfWeekIndex,
+          currentSchedule: latestSchedule,
+          personnel: currentPersonnel,
+          requests: currentRequests,
+          settings: currentSettings,
+          holidays: currentHolidays,
+          firstDayOfWeek: currentFirstDay,
           lockState: {
             finalizedNursesMonths,
             finalizedAssistantsMonths,
-            lockedRows,
+            lockedRows: currentLocked,
           },
-          dismissedWarnings,
+          dismissedWarnings: currentDismissed,
         },
         verifyCoverageAndLeaders,
         persistenceAdapter,
@@ -2752,10 +2858,12 @@ export default function Home() {
 
       if (!result.success) {
         alert('خطا در تغییر دستی شیفت: ' + result.error);
-      } else {
-        // هشدارِ رفع‌شده باید کاملاً از سیستم برود: هم از حالت موقتِ رابط کاربری و هم
-        // از فهرست ماندگارِ نادیده‌گرفته‌ها (که facade آن را هم‌تراز کرده است).
-        const remainingWarnings = result.schedule?.warnings ?? [];
+      } else if (result.schedule) {
+        // ====== به‌روزرسانی صریح schedule در UI برای پویا‌سازی فوری هشدارها ======
+        // پس از هر ویرایش دستی، هشدارها بازتولید می‌شوند و schedule باید فوراً
+        // به‌روزرسانی شود تا تغییرات در رابط کاربری منعکس گردد.
+        setSchedule(result.schedule);
+        const remainingWarnings = result.schedule.warnings ?? [];
         setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
         setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         setEditingCell(null);
