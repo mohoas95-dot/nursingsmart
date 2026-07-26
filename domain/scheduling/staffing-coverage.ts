@@ -129,9 +129,14 @@ function requiredCoverage(
  * Staffing counts are treated as a hard scheduling constraint. Reconciliation is
  * component based, so removing M from ME yields E and adding N to E yields EN;
  * changing one period therefore cannot accidentally alter another period's count.
- * Locked rows and approved leave entries are never modified. If those protections
- * make the configured count impossible, the mismatch is returned in unresolvedGaps
- * and will also be reported by the normal schedule verifier.
+ * Locked rows, protected cells, and approved leave entries are never modified.
+ * If those protections make the configured count impossible, the mismatch is
+ * returned in unresolvedGaps and will also be reported by the normal schedule verifier.
+ *
+ * @param protectedCells - Set of "personnelId:day" strings representing cells
+ *   that the head nurse manually edited. These cells are NEVER modified by
+ *   reconciliation — not added to, not removed from. This ensures the system
+ *   always submits to the head nurse's manual edits.
  */
 export function reconcileStaffingCoverage(
   assignments: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>,
@@ -140,7 +145,8 @@ export function reconcileStaffingCoverage(
   calendarDays: readonly StaffingCalendarDay[],
   targetJobGroups: readonly JobGroup[] = ['nurse', 'assistant'],
   lockedRows: readonly string[] = [],
-  requests?: readonly ShiftRequest[]
+  requests?: readonly ShiftRequest[],
+  protectedCells?: ReadonlySet<string>
 ): StaffingCoverageResult {
   const reconciled: Record<string, Record<number, ShiftType>> = {};
   for (const [personnelId, dayAssignments] of Object.entries(assignments)) {
@@ -148,6 +154,9 @@ export function reconcileStaffingCoverage(
   }
 
   const lockedIds = new Set(lockedRows);
+  const protectedSet = protectedCells ?? new Set<string>();
+  const isCellProtected = (personId: string, dayNum: number) =>
+    protectedSet.has(`${personId}:${dayNum}`);
   const unresolvedGaps: StaffingCoverageGap[] = [];
   const totalDays = calendarDays.reduce((max, calendarDay) => Math.max(max, calendarDay.day), 0);
 
@@ -179,6 +188,8 @@ export function reconcileStaffingCoverage(
         if (assigned > required) {
           const removable = assignedPersonnel()
             .filter(person => !lockedIds.has(person.id) && !person.locked)
+            // سلول‌های محافظت‌شده (ویرایش دستی سرپرستار) هرگز دست‌نخورده باقی می‌مانند
+            .filter(person => !isCellProtected(person.id, day))
             // Prefer removing a standalone period before breaking a combined shift.
             .sort((left, right) =>
               componentCount(reconciled[left.id]?.[day]) - componentCount(reconciled[right.id]?.[day])
@@ -217,6 +228,9 @@ export function reconcileStaffingCoverage(
           const available = group
             .filter(person => {
               if (lockedIds.has(person.id) || person.locked) return false;
+              // سلول‌های محافظت‌شده (ویرایش دستی سرپرستار) هرگز به‌عنوان گزینه پر کردن
+              // کمبود انتخاب نمی‌شوند — سیستم حق ندارد ویرایش سرپرستار را خنثی کند
+              if (isCellProtected(person.id, day)) return false;
               const currentShift = reconciled[person.id]?.[day] || 'OFF';
               if (currentShift.startsWith('L')) return false;
               return !shiftCoversPeriod(currentShift, shift);

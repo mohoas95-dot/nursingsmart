@@ -305,9 +305,14 @@ export async function applyManualShiftChangeFacade(
     firstDayOfWeek,
     lockState,
     dismissedWarnings = currentSchedule.dismissedWarnings ?? [],
+    protectedCells: protectedCellsInput,
   } = input;
 
   const lockedRows = lockState?.lockedRows ?? [];
+
+  // سلول ویرایش‌شده توسط سرپرستار + تمام سلول‌های محافظت‌شده قبلی
+  const protectedSet = new Set<string>(protectedCellsInput ?? []);
+  protectedSet.add(`${personnelId}:${day}`); // سلول فعلی همیشه محافظت می‌شود
 
   try {
     // Step 1: Update the cell — تغییر دستی سرپرستار حفظ می‌شود
@@ -346,7 +351,8 @@ export async function applyManualShiftChangeFacade(
         calendarDays,
         targetJobGroups,
         lockedRows, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
-        requests
+        requests,
+        protectedSet // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
       );
       reconciledAssignments = staffingResult.assignments;
 

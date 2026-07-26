@@ -352,6 +352,11 @@ export default function Home() {
   const scheduleRef = React.useRef(schedule);
   const dismissedWarningsRef = React.useRef(dismissedWarnings);
   const lockedRowsRef = React.useRef(lockedRows);
+  // ====== سلول‌های محافظت‌شده (ویرایش‌های دستی سرپرستار) ======
+  // هر سلولی که سرپرستار دستی ویرایش می‌کند در این مجموعه ثبت می‌شود.
+  // سیستم جبران خودکار هرگز این سلول‌ها را تغییر نمی‌دهد.
+  // با اجرای بهینه‌ساز، این فهرست پاک می‌شود.
+  const protectedCellsRef = React.useRef<Set<string>>(new Set());
 
   useEffect(() => {
     personnelRef.current = personnel;
@@ -1351,6 +1356,7 @@ export default function Home() {
         currentYear, currentMonth, currentHolidays, currentFirstDay === -1 ? undefined : currentFirstDay
       );
       const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+      const protectedSet = protectedCellsRef.current;
 
       const MAX_PASSES = 3;
       let prevUnresolvedCount = Infinity;
@@ -1362,7 +1368,8 @@ export default function Home() {
           calendarDays,
           ['nurse', 'assistant'],
           currentLocked, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
-          currentRequests
+          currentRequests,
+          protectedSet   // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
         );
         effectiveAssignments = staffingResult.assignments;
         if (staffingResult.unresolvedGaps.length === 0) break;
@@ -1866,6 +1873,10 @@ export default function Home() {
   // Migrated to Facade pattern (Phase 3) — delegates to runOptimizerFacade
   const handleRunOptimizer = async (jobGroup: JobGroup) => {
     const deptId = selectedDepartmentId || 'sepehr';
+
+    // با اجرای بهینه‌ساز، برنامه از نو تولید می‌شود. سلول‌های محافظت‌شده قبلی
+    // دیگر معتبر نیستند چون برنامه کاملاً بازنویسی می‌شود.
+    protectedCellsRef.current.clear();
 
     // Never start with the initial/default state while the department or calendar
     // is still being loaded. Otherwise the delayed optimizer could capture old
@@ -2880,6 +2891,9 @@ export default function Home() {
 
       // Use the Facade (delegates pure logic to domain layer)
       // ====== نکته کلیدی: currentSchedule از آخرین وضعیت تعهدشده خوانده می‌شود ======
+      // ثبت سلول ویرایش‌شده در فهرست محافظت‌شده‌ها (سیستم هرگز این سلول را تغییر نمی‌دهد)
+      protectedCellsRef.current.add(`${pId}:${day}`);
+
       const result = await applyManualShiftChangeFacade(
         {
           personnelId: pId,
@@ -2899,6 +2913,7 @@ export default function Home() {
             lockedRows: currentLocked,
           },
           dismissedWarnings: currentDismissed,
+          protectedCells: Array.from(protectedCellsRef.current),
         },
         verifyCoverageAndLeaders,
         persistenceAdapter,

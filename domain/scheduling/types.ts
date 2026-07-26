@@ -64,6 +64,11 @@ export interface ManualShiftChangeInput {
    * که دیگر مصداق ندارند از این فهرست حذف می‌شوند تا کاملاً از سیستم پاک شوند.
    */
   dismissedWarnings?: ReadonlyArray<string>;
+  /**
+   * مجموعه سلول‌های محافظت‌شده (ویرایش‌های دستی سرپرستار). فرمت: "personnelId:day"
+   * این سلول‌ها هرگز توسط reconcileStaffingCoverage تغییر داده نمی‌شوند.
+   */
+  protectedCells?: ReadonlyArray<string>;
 }
 
 export interface ManualShiftChangeResult {
