@@ -70,6 +70,7 @@ import {
   toggleHolidayOverride,
 } from '../domain/calendar/holiday-overrides';
 import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
+import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
 import {
   dismissedWarningsChanged,
   pruneDismissedWarningMap,
@@ -1312,22 +1313,18 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule, dismissedWarnings, currentYear, currentMonth, selectedDepartmentId]);
 
-  // ====== پایش پیوسته و بازتولید پویای هشدارها ======
-  // این effect هر بار که برنامه (schedule) تغییر می‌کند — شامل تغییر در assignments،
-  // warnings، یا هر فیلد دیگر — هشدارها را از نو بازتولید می‌کند. اگر هشدارهای
-  // بازتولیدشده با هشدارهای فعلی متفاوت باشند، schedule به‌روزرسانی می‌شود تا
-  // تغییرات فوراً در رابط کاربری منعکس گردند.
-  //
-  // نکته کلیدی: وابستگی این effect کل شیء schedule است (نه فقط assignments).
-  // این تضمین می‌کند که هر تغییری در برنامه (ویرایش دستی، تغییر تنظیمات نیرو،
-  // اعمال سناریو، و غیره) باعث بازبینی هشدارها می‌شود.
-  // برای جلوگیری از حلقه بی‌نهایت، از previousWarningsKey استفاده می‌شود.
+  // ====== پایش پیوسته، جبران خودکار کمبود/مازاد و بازتولید پویای هشدارها ======
+  // این effect هر بار که برنامه (schedule) تغییر می‌کند:
+  //   ۱) ابتدا کمبود و مازاد نیرو را به‌صورت خودکار جبران می‌کند (reconcile)
+  //   ۲) سپس هشدارها را بازتولید می‌کند
+  //   ۳) در صورت تفاوت، schedule را به‌روزرسانی می‌کند
+  // این تضمین می‌کند که سیستم همواره هوشمند عمل کند و کمترین هشدار صادر شود.
+  const previousAssignmentsKeyRef = React.useRef<string>('');
   const previousWarningsKeyRef = React.useRef<string>('');
   const isReevaluatingRef = React.useRef<boolean>(false);
 
   React.useEffect(() => {
     if (!schedule || !settings) return;
-    // جلوگیری از اجرای هم‌زمان (محافظت در برابر حلقه بی‌نهایت)
     if (isReevaluatingRef.current) return;
 
     const currentPersonnel = personnelRef.current;
@@ -1335,15 +1332,39 @@ export default function Home() {
     const currentSettings = settingsRef.current;
     const currentHolidays = holidaysRef.current;
     const currentFirstDay = firstDayRef.current;
+    const currentLocked = lockedRowsRef.current;
 
     if (!currentPersonnel.length || !currentSettings) return;
 
-    // بازتولید هشدارها بر اساس وضعیت فعلی برنامه
+    const assignmentsKey = JSON.stringify(schedule.assignments);
+    const assignmentsChanged = assignmentsKey !== previousAssignmentsKeyRef.current;
+    previousAssignmentsKeyRef.current = assignmentsKey;
+
+    // ====== گام ۱: جبران خودکار کمبود و مازاد نیرو ======
+    // هر بار که assignments تغییر می‌کند، سیستم تلاش می‌کند کمبود/مازاد را رفع کند.
+    let effectiveAssignments = schedule.assignments;
+    if (assignmentsChanged) {
+      const calendar = generateJalaliMonthCalendar(
+        currentYear, currentMonth, currentHolidays, currentFirstDay === -1 ? undefined : currentFirstDay
+      );
+      const staffingResult = reconcileStaffingCoverage(
+        schedule.assignments,
+        currentPersonnel,
+        currentSettings,
+        calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday })),
+        ['nurse', 'assistant'],
+        currentLocked,
+        currentRequests
+      );
+      effectiveAssignments = staffingResult.assignments;
+    }
+
+    // ====== گام ۲: بازتولید هشدارها بر اساس assignments جبران‌شده ======
     const verification = verifyCoverageAndLeaders(
       currentYear,
       currentMonth,
       currentPersonnel,
-      schedule.assignments,
+      effectiveAssignments,
       currentSettings,
       currentHolidays,
       currentFirstDay === -1 ? undefined : currentFirstDay,
@@ -1353,20 +1374,28 @@ export default function Home() {
     const freshWarnings = verification.warnings;
     const currentWarnings = schedule.warnings || [];
 
-    // کلید مقایسه: مرتب‌سازی برای مقایسه مستقل از ترتیب
     const freshKey = [...freshWarnings].sort().join('|||');
     const currentKey = [...currentWarnings].sort().join('|||');
+    const reconciledAssignmentsKey = JSON.stringify(effectiveAssignments);
 
-    if (freshKey === currentKey && freshKey === previousWarningsKeyRef.current) return;
+    // اگر نه assignments تغییر کرده و نه هشدارها، نیازی به به‌روزرسانی نیست
+    const assignmentsActuallyChanged = reconciledAssignmentsKey !== JSON.stringify(schedule.assignments);
+    const warningsActuallyChanged = freshKey !== currentKey;
+
+    if (!assignmentsActuallyChanged && !warningsActuallyChanged) {
+      previousWarningsKeyRef.current = freshKey;
+      return;
+    }
+
+    // محافظت در برابر حلقه بی‌نهایت: اگر همین هشدارها را قبلاً دیده‌ایم
+    if (!assignmentsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
     previousWarningsKeyRef.current = freshKey;
-
-    // اگر هشدارها واقعاً متفاوت هستند، به‌روزرسانی انجام شود
-    if (freshKey === currentKey) return;
 
     isReevaluatingRef.current = true;
 
     const updatedSchedule: MonthlySchedule = {
       ...schedule,
+      assignments: effectiveAssignments,
       warnings: freshWarnings,
       shiftLeaders: verification.shiftLeaders,
       dismissedWarnings: pruneDismissedWarnings(freshWarnings, schedule.dismissedWarnings || []),
@@ -1393,7 +1422,7 @@ export default function Home() {
         },
       };
       void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
-        console.error('Error updating warnings after schedule change:', error);
+        console.error('Error updating schedule after auto-reconciliation:', error);
       }).finally(() => {
         isReevaluatingRef.current = false;
       });

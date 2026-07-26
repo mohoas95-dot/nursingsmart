@@ -315,19 +315,41 @@ export async function applyManualShiftChangeFacade(
       shift
     );
 
-    // Step 2: Verify coverage and leaders
+    // Step 2: Auto-reconcile staffing coverage — هوشمندانه کمبود و مازاد را جبران کن
+    // به‌محض اینکه سرپرستار سلولی را ویرایش می‌کند، سیستم به‌صورت خودکار تلاش می‌کند
+    // هر کمبود یا مازاد نیرویی را با جابه‌جایی شیفت نفرات دیگر (با رعایت قوانین) جبران کند.
+    // فقط اگر با تمام تلاش‌ها امکان جبران نباشد، هشدار صادر می‌شود.
+    const editedPerson = personnel.find(p => p.id === personnelId);
+    const targetJobGroups: Array<'nurse' | 'assistant'> = editedPerson
+      ? [editedPerson.jobGroup]
+      : ['nurse', 'assistant'];
+
+    const calendar = generateJalaliMonthCalendar(year, month, holidays, firstDayOfWeek);
+    const staffingResult = reconcileStaffingCoverage(
+      updatedAssignments,
+      personnel,
+      settings,
+      calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday })),
+      targetJobGroups,
+      [], // در ویرایش دستی، ردیف‌ها قفل نیستند (سرپرستار خودش ویرایش کرده)
+      requests
+    );
+    const reconciledAssignments = staffingResult.assignments;
+
+    // Step 3: Verify coverage and leaders (on reconciled assignments)
+    // اگر reconcile نتوانسته gapها را حل کند، verifier آن‌ها را به‌عنوان هشدار گزارش می‌دهد.
     const verification = verifier(
       year,
       month,
       personnel,
-      updatedAssignments,
+      reconciledAssignments,
       settings,
       holidays,
       firstDayOfWeek,
       requests
     );
 
-    // Step 3: Retire alerts that this edit actually resolved.
+    // Step 4: Retire alerts that this edit actually resolved.
     // اگر سرپرستار با همین ویرایش تخلفی را برطرف کند، هشدار آن دیگر تولید نمی‌شود؛
     // پس رکورد «نادیده‌گرفتن»‌اش هم باید برود تا بروز دوبارهٔ آن در آینده پنهان نماند.
     const prunedDismissed = pruneDismissedWarnings(verification.warnings, dismissedWarnings);
@@ -336,19 +358,19 @@ export async function applyManualShiftChangeFacade(
       verification.warnings
     );
 
-    // Step 4: Build new schedule
+    // Step 5: Build new schedule
     const newSchedule: MonthlySchedule = {
       ...currentSchedule,
       year,
       month,
-      assignments: updatedAssignments,
+      assignments: reconciledAssignments,
       shiftLeaders: verification.shiftLeaders,
       warnings: verification.warnings,
       dismissedWarnings: prunedDismissed,
       finalized: false,
     };
 
-    // Step 5: Persist to S3
+    // Step 6: Persist to S3
     await persistence.saveSchedule(newSchedule, departmentId);
 
     return {
