@@ -662,11 +662,11 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         }
         /*
          * ===== حروف انگلیسی شیفت: فونت تریسینگ (نقطه‌چین) و کم‌رنگ =====
-         * Raleway Dots یک فونت واقعی «tracing» است: خودِ حروف از نقطه‌های گرد
-         * ساخته شده‌اند (نه ماسک CSS روی حروف توپر). نتیجه در چاپ تمیزتر است و
-         * پرسنل می‌توانند روی نقطه‌ها را با مداد پررنگ کنند.
+         * Handjet یک فونت متغیرِ element-based است: خودِ حروف از نقطه ساخته
+         * می‌شوند (نه ماسک CSS روی حروف توپر) و تراکم/شکل نقطه‌ها با محورهای
+         * ELGR و ELSH قابل تنظیم است. پرسنل روی نقطه‌ها را با مداد پررنگ می‌کنند.
          * مجوز فونت: SIL OFL — از طریق next/font/google خودمیزبان می‌شود.
-         * توجه: این فونت proportional است؛ ثابت CHAR_W_EM بر همین اساس تنظیم شده.
+         * توجه: این فونت proportional است؛ جدول GHOST_CHAR_W_EM بر همین اساس تنظیم شده.
          */
         /* «م» مرخصی: فونت فارسی، هم‌رنگ حروف تریسینگ (فونت لاتین «م» ندارد) */
         .ps-leave {
@@ -681,14 +681,21 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         }
         .ps-ghost {
           display: inline-block;
-          font-family: var(--font-tracing), 'Raleway Dots', 'Courier New', monospace;
-          font-weight: 400;
+          font-family: var(--font-tracing), Handjet, 'Courier New', monospace;
+          font-weight: 500;
+          /*
+           * ELGR 1 → کمترین تعداد المان در هر خانهٔ شبکه ⇒ نقطه‌ها کم‌تراکم و بازتر
+           * ELSH 8 → شکل المان کاملاً گرد ⇒ نقطه‌های درشت و مجزا
+           * نتیجه: «M» به‌جای انبوه نقطه‌های ریز، نقطه‌های شمردنی و بافاصله دارد.
+           */
+          font-variation-settings: 'ELGR' 1, 'ELSH' 8, 'wght' 500;
           letter-spacing: 0.2pt;
           line-height: 1;
           vertical-align: middle;
           text-align: center;
-          color: #9a9a9a;
-          -webkit-text-fill-color: #9a9a9a;
+          /* یک درجه پررنگ‌تر از قبل (#9a9a9a) تا در چاپ محو نشود */
+          color: #8a8a8a;
+          -webkit-text-fill-color: #8a8a8a;
         }
 
         /* ===== اعداد کارکرد: خاکستری تیره، خوانا و وسط‌چین ===== */
