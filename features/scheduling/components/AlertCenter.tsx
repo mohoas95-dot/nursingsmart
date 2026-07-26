@@ -49,7 +49,9 @@ export interface AlertCenterProps {
 
   // Handlers
   onDismissAlert: (warningText: string) => void;
-  onAlertClick: (personnelId: string, day: number) => void;
+  onAlertClick: (personnelId: string, day: number, warningText?: string) => void;
+  /** پرش به کل ستون یک روز (برای هشدارهای عمومی مثل کمبود/مازاد نیرو) */
+  onDayAlertClick: (day: number, warningText?: string) => void;
 
   // Helper
   extractWarningDay: (warningText: string) => number | null;
@@ -66,6 +68,7 @@ export function AlertCenter(props: AlertCenterProps) {
     onToggleSection,
     onDismissAlert,
     onAlertClick,
+    onDayAlertClick,
     extractWarningDay,
   } = props;
 
@@ -170,6 +173,7 @@ export function AlertCenter(props: AlertCenterProps) {
                           onToggle={() => onToggleSection('generalNurse')}
                           dismissedAlertWarnings={dismissedAlertWarnings}
                           onDismissAlert={onDismissAlert}
+                          onDayAlertClick={onDayAlertClick}
                           extractWarningDay={extractWarningDay}
                           activeCount={activeNurseCount}
                           colorScheme="sky"
@@ -187,6 +191,7 @@ export function AlertCenter(props: AlertCenterProps) {
                           onToggle={() => onToggleSection('generalAssistant')}
                           dismissedAlertWarnings={dismissedAlertWarnings}
                           onDismissAlert={onDismissAlert}
+                          onDayAlertClick={onDayAlertClick}
                           extractWarningDay={extractWarningDay}
                           activeCount={activeAssistantCount}
                           colorScheme="teal"
@@ -204,6 +209,7 @@ export function AlertCenter(props: AlertCenterProps) {
                           onToggle={() => onToggleSection('generalOther')}
                           dismissedAlertWarnings={dismissedAlertWarnings}
                           onDismissAlert={onDismissAlert}
+                          onDayAlertClick={onDayAlertClick}
                           extractWarningDay={extractWarningDay}
                           activeCount={activeOtherCount}
                           colorScheme="slate"
@@ -249,6 +255,7 @@ interface GeneralSubSectionProps {
   onToggle: () => void;
   dismissedAlertWarnings: Record<string, boolean>;
   onDismissAlert: (warningText: string) => void;
+  onDayAlertClick: (day: number, warningText?: string) => void;
   extractWarningDay: (warningText: string) => number | null;
   activeCount: number;
   colorScheme: 'sky' | 'teal' | 'slate';
@@ -264,6 +271,7 @@ function GeneralSubSection(props: GeneralSubSectionProps) {
     onToggle,
     dismissedAlertWarnings,
     onDismissAlert,
+    onDayAlertClick,
     extractWarningDay,
     activeCount,
     colorScheme,
@@ -356,9 +364,19 @@ function GeneralSubSection(props: GeneralSubSectionProps) {
 
                   <div className="flex items-center gap-2 shrink-0">
                     {!isDismissed ? (
-                      <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
-                        فاقد سلول مستقیم
-                      </span>
+                      day !== null ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onDayAlertClick(day, warn); }}
+                          className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all cursor-pointer"
+                          title={`اسکرول به ستون روز ${day} و هایلایت کل آن روز`}
+                        >
+                          رفتن به روز {day}
+                        </button>
+                      ) : (
+                        <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
+                          فاقد سلول مستقیم
+                        </span>
+                      )
                     ) : null}
 
                     <button
@@ -393,7 +411,7 @@ interface AlertSectionProps {
   onToggle: () => void;
   dismissedAlertWarnings: Record<string, boolean>;
   onDismissAlert: (warningText: string) => void;
-  onAlertClick: (personnelId: string, day: number) => void;
+  onAlertClick: (personnelId: string, day: number, warningText?: string) => void;
   extractWarningDay: (warningText: string) => number | null;
   colorScheme: 'indigo' | 'amber';
   badgeText: string;
@@ -521,7 +539,7 @@ function AlertSection(props: AlertSectionProps) {
                     <div className="flex items-center gap-2 shrink-0">
                       {canNavigateToCell && day !== null && !isDismissed ? (
                         <button
-                          onClick={() => onAlertClick(alert.personnelId, day)}
+                          onClick={() => onAlertClick(alert.personnelId, day, warn)}
                           className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
                         >
                           رفتن به سلول

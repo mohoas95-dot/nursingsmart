@@ -47,6 +47,8 @@ import {
   solveWithPriority
 } from '../lib/solver';
 import { aggregateWarnings, filterActiveWarnings } from '../lib/alertAggregator';
+import { captureScrollSnapshot, restoreScrollSnapshot } from '../lib/scroll-restore';
+import type { ScrollSnapshot } from '../lib/scroll-restore';
 import {
   applyDefaultOffRule,
   findBestSubstitute,
@@ -342,6 +344,21 @@ export default function Home() {
   const [pendingJobGroupForScenarios, setPendingJobGroupForScenarios] = useState<JobGroup | null>(null);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean, generalNurse: boolean, generalAssistant: boolean, generalOther: boolean}>({general: true, personnel: true, generalNurse: true, generalAssistant: true, generalOther: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
+  // هایلایت کل ستون یک روز (برای هشدارهای عمومی مانند کمبود/مازاد نیرو)
+  const [highlightedDay, setHighlightedDay] = useState<number | null>(null);
+
+  // ====== بازگشت خودکار به موقعیت هشدار پس از رفع آن ======
+  // وقتی کاربر از پنجره هشدارها روی «رفتن به سلول» می‌زند، موقعیت اسکرول صفحه
+  // ثبت می‌شود؛ اگر آن هشدار با ویرایش دستی برطرف و حذف شد، صفحه دقیقاً به همان
+  // نقطه بازمی‌گردد و پنجره هشدارها دوباره باز می‌شود.
+  const alertReturnRef = React.useRef<{
+    warningText: string;
+    targetId: string;
+    snapshot: ScrollSnapshot;
+    reopenAlertCenter: boolean;
+  } | null>(null);
+  const [alertReturnAvailable, setAlertReturnAvailable] = useState<boolean>(false);
+  const [alertReturnToast, setAlertReturnToast] = useState<{ message: string; canReopen: boolean } | null>(null);
 
   const personnelRef = React.useRef(personnel);
   const requestsRef = React.useRef(requests);
@@ -1172,12 +1189,27 @@ export default function Home() {
   };
 
   // ====== تابع کلیک روی هشدار و اسکرول (درخواست ۴) ======
-  const handleAlertClick = (personnelId: string, day: number) => {
+  // پیش از پرش به سلول، موقعیت فعلی اسکرول ثبت می‌شود تا پس از رفع هشدار
+  // بتوان به همان نقطه بازگشت.
+  const handleAlertClick = (personnelId: string, day: number, warningText?: string) => {
+    const cellId = `cell-${personnelId}-${day}`;
+    const wasAlertCenterOpen = showAlertCenter;
+    const snapshot = captureScrollSnapshot(document.getElementById(cellId));
+
+    setShowAlertCenter(false);
+
     setTimeout(() => {
-      const cellId = `cell-${personnelId}-${day}`;
       const element = document.getElementById(cellId);
       if (element) {
-        setShowAlertCenter(false);
+        if (warningText) {
+          alertReturnRef.current = {
+            warningText,
+            targetId: cellId,
+            snapshot,
+            reopenAlertCenter: wasAlertCenterOpen,
+          };
+          setAlertReturnAvailable(true);
+        }
         setHighlightedCellId(cellId);
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
         setTimeout(() => {
@@ -1186,6 +1218,64 @@ export default function Home() {
       }
     }, 100);
   };
+
+  // ====== پرش به کل ستون یک روز (هشدارهای عمومی: کمبود/مازاد نیرو) ======
+  // برخلاف هشدارهای پرسنلی، این هشدارها به یک سلول مشخص وصل نیستند؛ بنابراین
+  // به سربرگ آن روز اسکرول می‌کنیم و کل ستون آن روز هایلایت می‌شود.
+  const handleDayAlertClick = (day: number, warningText?: string) => {
+    const headerId = `day-header-${day}`;
+    const wasAlertCenterOpen = showAlertCenter;
+    const snapshot = captureScrollSnapshot(document.getElementById(headerId));
+
+    setShowAlertCenter(false);
+
+    setTimeout(() => {
+      const element = document.getElementById(headerId);
+      if (element) {
+        if (warningText) {
+          alertReturnRef.current = {
+            warningText,
+            targetId: headerId,
+            snapshot,
+            reopenAlertCenter: wasAlertCenterOpen,
+          };
+          setAlertReturnAvailable(true);
+        }
+        setHighlightedDay(day);
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        // اگر بازگشت خودکار ثبت شده باشد، هایلایت تا رفع هشدار (یا انصراف کاربر)
+        // باقی می‌ماند تا سرپرستار ستون را گم نکند؛ در غیر این صورت پس از ۶ ثانیه پاک می‌شود.
+        if (!warningText) {
+          setTimeout(() => {
+            setHighlightedDay(current => (current === day ? null : current));
+          }, 6000);
+        }
+      }
+    }, 100);
+  };
+
+  // بازگشت دستی/خودکار به موقعیت ثبت‌شده‌ی هشدار
+  const returnToAlertPosition = React.useCallback((options: { reopenAlertCenter?: boolean } = {}) => {
+    const pending = alertReturnRef.current;
+    alertReturnRef.current = null;
+    setAlertReturnAvailable(false);
+    setHighlightedDay(null);
+    if (!pending) return;
+
+    restoreScrollSnapshot(pending.snapshot, { behavior: 'smooth' });
+
+    const shouldReopen = options.reopenAlertCenter ?? pending.reopenAlertCenter;
+    if (shouldReopen) {
+      // کمی صبر تا اسکرول نرم تمام شود، سپس پنجره هشدارها دوباره باز شود
+      setTimeout(() => setShowAlertCenter(true), 450);
+    }
+  }, []);
+
+  const cancelAlertReturn = React.useCallback(() => {
+    alertReturnRef.current = null;
+    setAlertReturnAvailable(false);
+    setHighlightedDay(null);
+  }, []);
 
   // ====== درخواست ۵: توابع مدیریت هشدارها ======
   const handleDismissAlert = (warningText: string) => {
@@ -1274,6 +1364,47 @@ export default function Home() {
     const warningsForDialog = filterActiveWarnings(displayedSchedule.warnings, dismissedWarnings);
     return aggregateWarnings(warningsForDialog, personnel);
   }, [displayedSchedule, dismissedWarnings, personnel]);
+
+  // ====== بازگشت خودکار به موقعیت قبلی پس از رفع هشدار ======
+  // اگر کاربر با «رفتن به سلول» به سلول پرید و پس از ویرایش دستی، همان هشدار
+  // از فهرست هشدارهای برنامه حذف شد، صفحه به آخرین موقعیتی که در آن هشدار را
+  // مشاهده می‌کرد بازمی‌گردد.
+  React.useEffect(() => {
+    const pending = alertReturnRef.current;
+    if (!pending) return;
+    if (!displayedSchedule) return;
+
+    const stillExists = (displayedSchedule.warnings || []).includes(pending.warningText);
+    if (stillExists) return;
+
+    const canReopen = pending.reopenAlertCenter;
+    const timer = setTimeout(() => {
+      returnToAlertPosition({ reopenAlertCenter: false });
+      setAlertReturnToast({
+        message: 'هشدار برطرف شد و صفحه به موقعیت قبلی بازگشت.',
+        canReopen,
+      });
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [displayedSchedule, returnToAlertPosition]);
+
+  // پنهان‌سازی خودکار پیام بازگشت
+  React.useEffect(() => {
+    if (!alertReturnToast) return;
+    const timer = setTimeout(() => setAlertReturnToast(null), 7000);
+    return () => clearTimeout(timer);
+  }, [alertReturnToast]);
+
+  // اگر کاربر ماه/بخش را عوض کند، نقطه بازگشت ثبت‌شده بی‌اعتبار است
+  React.useEffect(() => {
+    return () => {
+      alertReturnRef.current = null;
+      setAlertReturnAvailable(false);
+      setAlertReturnToast(null);
+      setHighlightedDay(null);
+    };
+  }, [selectedDepartmentId, currentYear, currentMonth]);
 
   // ====== پاک‌سازی خودکار هشدارهای رفع‌شده ======
   // به‌محض اینکه سرپرستار مشکلی را در برنامه واقعاً برطرف کند، هشدارِ آن دیگر
@@ -4663,7 +4794,8 @@ export default function Home() {
                         {calendarDays.map(d => (
                           <th
                             key={d.day}
-                            className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b border-slate-200 min-w-[34px] ${d.isHoliday ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800' : 'bg-slate-50 text-slate-600'}`}
+                            id={`day-header-${d.day}`}
+                            className={`sticky top-0 z-20 px-1 py-2 text-center text-[10px] font-black border-l border-b border-slate-200 min-w-[34px] ${d.isHoliday ? 'bg-rose-50 border-b-2 border-b-rose-400 text-rose-800' : 'bg-slate-50 text-slate-600'} ${highlightedDay === d.day ? 'outline-2 outline-indigo-500 outline-offset-[-2px] !bg-indigo-100 !text-indigo-900 animate-[pulse_1.1s_ease-in-out_5]' : ''}`}
                             title={d.holidayTitle || 'روز عادی'}
                           >
                             <div>{d.day}</div>
@@ -4796,7 +4928,7 @@ export default function Home() {
                                 return (
                                   <td
                                     key={d.day}
-                                    className={`px-0.5 py-1 text-center border-l border-slate-100 relative ${d.isHoliday ? 'bg-rose-50/10' : ''}`}
+                                    className={`px-0.5 py-1 text-center border-l border-slate-100 relative ${d.isHoliday ? 'bg-rose-50/10' : ''} ${highlightedDay === d.day ? 'bg-indigo-100/70 shadow-[inset_1px_0_0_0_rgb(99_102_241),inset_-1px_0_0_0_rgb(99_102_241)]' : ''}`}
                                   >
                                     {isEditingThis ? (
                                       <select
@@ -6763,8 +6895,48 @@ export default function Home() {
         onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
         onDismissAlert={handleDismissAlert}
         onAlertClick={handleAlertClick}
+        onDayAlertClick={handleDayAlertClick}
         extractWarningDay={extractWarningDay}
       />
+
+      {/* ====== نوار شناور بازگشت به موقعیت هشدار ====== */}
+      {!showAlertCenter && (alertReturnAvailable || alertReturnToast) && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[70] print:hidden animate-fade-in" dir="rtl">
+          <div className="flex items-center gap-3 bg-white/95 backdrop-blur border border-slate-200 shadow-2xl rounded-2xl px-4 py-2.5">
+            <span className="text-[11px] font-bold text-slate-700">
+              {alertReturnToast
+                ? alertReturnToast.message
+                : 'پس از رفع هشدار، به موقعیت قبلی بازگردانده می‌شوید.'}
+            </span>
+
+            {alertReturnAvailable && !alertReturnToast && (
+              <button
+                onClick={() => returnToAlertPosition({ reopenAlertCenter: true })}
+                className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-all cursor-pointer"
+              >
+                بازگشت به هشدارها
+              </button>
+            )}
+
+            {alertReturnToast?.canReopen && (
+              <button
+                onClick={() => { setAlertReturnToast(null); setShowAlertCenter(true); }}
+                className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-all cursor-pointer"
+              >
+                بازکردن پنجره هشدارها
+              </button>
+            )}
+
+            <button
+              onClick={() => { setAlertReturnToast(null); cancelAlertReturn(); }}
+              className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              title="بستن"
+            >
+              <span className="text-xs font-black">✕</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {showAddRequestModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 print:hidden animate-fade-in" id="request-modal">
