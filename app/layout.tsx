@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Vazirmatn, Lalezar, Courier_Prime } from 'next/font/google';
+import { Vazirmatn, Lalezar, Barlow_Condensed } from 'next/font/google';
 import './globals.css';
 
 const vazirmatn = Vazirmatn({
@@ -16,13 +16,11 @@ const lalezar = Lalezar({
   display: 'swap',
 });
 
-// فونت پایهٔ حروف انگلیسی شیفت در برگهٔ چاپ. Courier Prime یک فونت مونوی سریف
-// است و در برگهٔ چاپ با الگوی نقطه‌چین CSS ترکیب می‌شود تا پرسنل بتوانند روی
-// نقطه‌ها را با مداد پررنگ کنند. مجوز: SIL OFL.
-// مونو بودن مهم است: محاسبهٔ اندازهٔ حروف به عرض ثابت نویسه‌ها تکیه دارد.
-const courierPrime = Courier_Prime({
+// فونت باریک و کم‌رنگ حروف انگلیسی شیفت در برگهٔ چاپ؛ فرم هندسی و کشیدهٔ
+// Barlow Condensed Light با نمونهٔ Tracing ارائه‌شده برای تکمیل با مداد هماهنگ است.
+const tracingFont = Barlow_Condensed({
   subsets: ['latin'],
-  weight: '700',
+  weight: '300',
   variable: '--font-tracing',
   display: 'swap',
 });
@@ -44,7 +42,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fa" dir="rtl" className={`${vazirmatn.variable} ${lalezar.variable} ${courierPrime.variable} scroll-smooth`}>
+    <html lang="fa" dir="rtl" className={`${vazirmatn.variable} ${lalezar.variable} ${tracingFont.variable} scroll-smooth`}>
       <head>
         <link rel="icon" type="image/png" sizes="192x192" href="/icon-192x192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/icon-512x512.png" />

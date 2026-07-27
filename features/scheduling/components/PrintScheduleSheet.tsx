@@ -66,12 +66,14 @@ export interface PrintScheduleSheetProps {
  * نرمال‌سازی شیفت برای نمایش (حذف پیشوند مرخصی L).
  * مسئول شیفت عمداً در سلول علامت‌گذاری نمی‌شود؛ نشانهٔ آن فقط در راهنمای بالای برگه است.
  */
-function displayShift(raw: ShiftType | undefined): string {
+export function formatShiftForPrint(raw: ShiftType | undefined): string {
   const shift = raw || 'OFF';
   const isLeave = typeof shift === 'string' && shift.startsWith('L') && shift !== 'L';
   const clean = isLeave ? shift.substring(1) : shift;
   if (clean === 'OFF') return '';
-  return isLeave ? `م${clean}` : clean;
+  // شیفت تمام‌روز در PDF با عدد انگلیسی 24 نمایش داده می‌شود تا در ستون باریک خوانا بماند.
+  const printableShift = clean === 'MEN' ? '24' : clean;
+  return isLeave ? `م${printableShift}` : printableShift;
 }
 
 /* ===== سنجه‌های چیدمان صفحه A4 لنداسکیپ (میلی‌متر) ===== */
@@ -146,19 +148,18 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
 
   /**
    * اندازهٔ حروف با هر دو قید محدود می‌شود: ارتفاع سطر و عرض ستون.
-   *
-   * عرض هر نویسه در فونت مونوی Courier Prime برابر ۰٫۶em است (اندازه‌گیری‌شده
-   * از خود فونت). چون فونت monospace است همهٔ نویسه‌ها یک عرض دارند؛ جدول را
-   * نگه می‌داریم تا اگر بعداً فونت proportional شد، محاسبه همچنان درست بماند.
+   * ضرایب زیر بر اساس عرض نویسه‌های فونت باریک Barlow Condensed تنظیم شده‌اند.
    */
   const GHOST_CHAR_W_EM: Record<string, number> = {
-    M: 0.6,
-    N: 0.6,
-    E: 0.6,
-    L: 0.6,
+    M: 0.58,
+    N: 0.48,
+    E: 0.4,
+    L: 0.38,
+    2: 0.48,
+    4: 0.48,
     م: 0.64,
   };
-  const DEFAULT_CHAR_W_EM = 0.6;
+  const DEFAULT_CHAR_W_EM = 0.5;
   /** letter-spacing سلول‌ها (۰٫۲pt) هم به عرض هر نویسه اضافه می‌شود */
   const GHOST_TRACKING_EM = 0.03;
   const ghostWidthEm = (text: string): number =>
@@ -204,7 +205,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
     return Math.max(4.6, base * 0.68);
   };
 
-  /** حروف طولانی‌تر شیفت (MEN، مME و…) کوچک‌تر می‌شوند تا در سلول جا شوند. */
+  /** ترکیب‌های چندحرفی شیفت (ME، EN، MN و…) متناسب با عرض سلول اندازه می‌گیرند. */
   const shiftFontSizeFor = (text: string): number =>
     clamp(Math.min(heightCapPt, widthCapFor(text)), 4.2, 12);
 
@@ -237,7 +238,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         </td>
         {calendarDays.map((d) => {
           const shift = pAssignments[d.day] as ShiftType | undefined;
-          const text = displayShift(shift);
+          const text = formatShiftForPrint(shift);
           // «م» مرخصی در فونت تریسینگ لاتین وجود ندارد؛ جدا می‌شود تا با فونت
           // فارسیِ کم‌رنگ رندر شود و به گلیفِ توپرِ پیش‌فرض برنگردد.
           const leaveMark = text.startsWith(LEAVE_MARK);
@@ -633,7 +634,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           line-height: 1.15;
         }
 
-        /* ===== حروف شیفت: نقطه‌چین و بسیار کم‌رنگ (قابل پررنگ‌کردن با مداد) ===== */
+        /* ===== حروف شیفت: باریک و خاکستری کم‌رنگ، مطابق نمونهٔ Tracing ===== */
         .ps-day {
           text-align: center;
           vertical-align: middle;
@@ -649,56 +650,34 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           line-height: 1;
         }
         /*
-         * ===== حروف انگلیسی شیفت: فونت Tracing نقطه‌چین و خاکستری کم‌رنگ =====
-         * Courier Prime مونو با الگوی نقطه‌های ریز داخل گلیف ترکیب می‌شود تا فرم
-         * حروف نمونه حفظ شود و بتوان آن‌ها را با مداد پررنگ کرد.
+         * ===== حروف انگلیسی شیفت: Barlow Condensed Light =====
+         * فرم باریک، هندسی و بدون سریف این فونت با حروف نمونهٔ ضمیمه‌شده هماهنگ است.
+         * رنگ کم‌رنگ باقی می‌ماند تا نوشته‌ها برای تکمیل/پررنگ‌کردن با مداد مناسب باشند.
          */
-        /* «م» مرخصی: فونت فارسی، هم‌رنگ حروف تریسینگ (فونت لاتین «م» ندارد) */
+        /* «م» مرخصی: فونت فارسی، هم‌رنگ حروف Tracing (فونت لاتین «م» ندارد) */
         .ps-leave {
           display: inline-block;
           font-family: var(--font-vazirmatn), Vazirmatn, Tahoma, sans-serif;
-          font-weight: 400;
+          font-weight: 300;
           line-height: 1;
           vertical-align: middle;
-          color: #b0b0b0;
-          -webkit-text-fill-color: #b0b0b0;
+          color: #aaa;
+          -webkit-text-fill-color: #aaa;
           flex: 0 0 auto;
         }
         .ps-ghost {
           display: inline-block;
-          /*
-           * فونت مونو (Courier) با الگوی نقطه‌چین CSS — مطابق نمونه‌ای که
-           * سرپرستار تأیید کرد: حروف سریف و مونو، ساخته‌شده از نقطه‌های ریز.
-           * زنجیره فقط mono است؛ ثابت‌های GHOST_CHAR_W_EM بر همین اساس تنظیم شده.
-           */
-          font-family: var(--font-tracing), 'Courier Prime', 'Courier New', Courier, monospace;
-          font-weight: 700;
+          font-family: var(--font-tracing), 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif;
+          font-weight: 300;
+          font-stretch: condensed;
+          direction: ltr;
+          unicode-bidi: isolate;
           letter-spacing: 0.2pt;
           line-height: 1;
           vertical-align: middle;
           text-align: center;
-          /* fallback خاکستری کم‌رنگ برای مرورگرهای بدون background-clip:text */
-          color: #b0b0b0;
-          -webkit-text-fill-color: #b0b0b0;
-        }
-        /*
-         * نقطه‌چین واقعی: نقطه‌های ریز خاکستری از داخل حروف بریده می‌شوند.
-         * واحد em است تا الگو با هر اندازهٔ فونت هم‌مقیاس بماند.
-         */
-        @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-          .ps-ghost {
-            color: transparent;
-            -webkit-text-fill-color: transparent;
-            background-image: radial-gradient(
-              circle at 50% 50%,
-              #b0b0b0 0.042em,
-              rgba(255, 255, 255, 0) 0.049em
-            );
-            background-size: 0.13em 0.13em;
-            background-repeat: repeat;
-            -webkit-background-clip: text;
-            background-clip: text;
-          }
+          color: #aaa;
+          -webkit-text-fill-color: #aaa;
         }
 
         /* ===== اعداد کارکرد: خاکستری تیره، خوانا و وسط‌چین ===== */
