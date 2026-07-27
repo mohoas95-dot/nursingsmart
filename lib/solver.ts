@@ -178,6 +178,9 @@ export function aggregateWarnings(
   return result;
 }
 
+// Bias type for scenario generation - controls how personnel are prioritized
+export type SolverBias = 'fairness' | 'requests' | 'mixed';
+
 // ====== تابع جدید برای بازتولید هوشمند با اولویت‌بندی (درخواست ۳) ======
 export function solveWithPriority(
   year: number,
@@ -187,7 +190,8 @@ export function solveWithPriority(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  monthlyDutyHours?: any,
+  bias: SolverBias = 'mixed'
 ): OptimizationResult {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
@@ -204,7 +208,7 @@ export function solveWithPriority(
 
   const baseResult = solveNursingSchedule(
     year, month, personnelList, requests, settings,
-    customHolidays, firstDayOfWeekIndex, monthlyDutyHours
+    customHolidays, firstDayOfWeekIndex, monthlyDutyHours, bias
   );
 
   // Deep-copy day maps. The priority pass must not mutate the base solver result.
@@ -455,7 +459,8 @@ export function solveNursingSchedule(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  monthlyDutyHours?: any,
+  bias: SolverBias = 'mixed'
 ): MonthlySchedule {
   
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
@@ -933,7 +938,25 @@ export function solveNursingSchedule(
             const matchesE = shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN');
             const matchesN = shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN');
             if (!matchesM && !matchesE && !matchesN) {
-              return false;
+              // برای سناریوی عدالت‌محور، افرادی که درخواست شیفت مشخص دارند اما با این شیفت مطابقت ندارند
+              // را حذف نکن تا ساعات کاری به طور مساوی توزیع شود (مگر اینکه ساعات کافی داشته باشند)
+              if (bias === 'fairness') {
+                // در حالت عدالت‌محور، اگر فرد ساعات کمتری دارد، او را در available نگه دار
+                let currentHours = 0;
+                for (let day = 1; day <= totalDays; day++) {
+                  currentHours += getShiftHours(assignments[p.id][day], p.employmentType);
+                }
+                const effectiveDuty = monthlyDutyHours || settings.dutyHours;
+                const targetHours = p.employmentType === 'overtime' ? 0 : (effectiveDuty[p.employmentType] || 0);
+                // اگر فرد کمتر از ۸۰٪ ساعات موظفی را کار کرده، او را در available نگه دار
+                if (currentHours < targetHours * 0.8) {
+                  // نگه دار برای توزیع عادلانه ساعات
+                } else {
+                  return false;
+                }
+              } else {
+                return false;
+              }
             }
           }
         }
@@ -1142,9 +1165,6 @@ export function solveNursingSchedule(
         const routinePenaltyX = hasRoutineX && !isXRequested;
         const routinePenaltyY = hasRoutineY && !isYRequested;
 
-        if (routinePenaltyX && !routinePenaltyY) return 1;
-        if (!routinePenaltyX && routinePenaltyY) return -1;
-
         let hoursX = 0;
         let hoursY = 0;
         for (let day = 1; day <= totalDays; day++) {
@@ -1162,16 +1182,44 @@ export function solveNursingSchedule(
         const hasDeficitX = defX > 0;
         const hasDeficitY = defY > 0;
 
-        if (hasDeficitX && !hasDeficitY) return -1;
-        if (!hasDeficitX && hasDeficitY) return 1;
-
-        if (hasDeficitX && hasDeficitY) {
-          if (Math.abs(defX - defY) > 0.1) {
-            return defY - defX;
+        // ====== اولویت‌بندی بر اساس bias سناریو ======
+        // fairness: اولویت با تعادل ساعات کاری (عدالت) است
+        // requests: اولویت با برآورده کردن درخواست‌های پرسنل است
+        // mixed: تعادل بین هر دو
+        if (bias === 'fairness') {
+          // اولویت ۱: تعادل ساعات کاری (کسانی که کمتر کار کرده‌اند اولویت دارند)
+          if (hasDeficitX && !hasDeficitY) return -1;
+          if (!hasDeficitX && hasDeficitY) return 1;
+          if (hasDeficitX && hasDeficitY) {
+            if (Math.abs(defX - defY) > 0.1) return defY - defX;
+          } else {
+            if (Math.abs(hoursX - hoursY) > 0.1) return hoursX - hoursY;
+          }
+          // اولویت ۲: درخواست‌ها (با وزن کمتر)
+          if (routinePenaltyX && !routinePenaltyY) return 1;
+          if (!routinePenaltyX && routinePenaltyY) return -1;
+        } else if (bias === 'requests') {
+          // اولویت ۱: برآورده کردن درخواست‌های پرسنل
+          if (routinePenaltyX && !routinePenaltyY) return 1;
+          if (!routinePenaltyX && routinePenaltyY) return -1;
+          // اولویت ۲: تعادل ساعات کاری (با وزن کمتر)
+          if (hasDeficitX && !hasDeficitY) return -1;
+          if (!hasDeficitX && hasDeficitY) return 1;
+          if (hasDeficitX && hasDeficitY) {
+            if (Math.abs(defX - defY) > 0.1) return defY - defX;
+          } else {
+            if (Math.abs(hoursX - hoursY) > 0.1) return hoursX - hoursY;
           }
         } else {
-          if (Math.abs(hoursX - hoursY) > 0.1) {
-            return hoursX - hoursY;
+          // mixed: تعادل بین درخواست‌ها و عدالت (رفتار پیش‌فرض)
+          if (routinePenaltyX && !routinePenaltyY) return 1;
+          if (!routinePenaltyX && routinePenaltyY) return -1;
+          if (hasDeficitX && !hasDeficitY) return -1;
+          if (!hasDeficitX && hasDeficitY) return 1;
+          if (hasDeficitX && hasDeficitY) {
+            if (Math.abs(defX - defY) > 0.1) return defY - defX;
+          } else {
+            if (Math.abs(hoursX - hoursY) > 0.1) return hoursX - hoursY;
           }
         }
 
