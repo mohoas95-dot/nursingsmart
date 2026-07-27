@@ -14,10 +14,11 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  *  - جدول در وسط صفحه و پرکنندهٔ ارتفاع برگه (ارتفاع سطرها پویا محاسبه می‌شود)
  *  - تمام روزهای ماه (۱ تا ۳۰/۳۱) با نام روز هفته زیر شماره روز
  *  - دو ستون پایانی: مجموع کارکرد «با بهره‌وری» و «بدون بهره‌وری»
- *  - تعطیلات و جمعه‌ها با هاشور در کل ستون
- *  - حروف شیفت به‌صورت نقطه‌چین و بسیار کم‌رنگ برای پررنگ‌کردن با مداد
+ *  - ستون‌های تعطیلات و جمعه‌ها بدون هاشور؛ نمونهٔ هاشور فقط در راهنمای بالای صفحه
+ *  - حروف شیفت با فونت Tracing و خاکستری کم‌رنگ برای پررنگ‌کردن با مداد
+ *  - نشانهٔ مسئول شیفت فقط در راهنمای مشکی بالای صفحه (بدون نقطه در سلول‌ها)
  *  - فونت Lalezar برای نام پرسنل و عناوین
- *  - تعداد روزهای ماه و تعداد تعطیلات ماه در پانویس
+ *  - تعداد روزهای ماه، تعداد تعطیلات و سایر نوشته‌های پانویس با مشکی پررنگ
  */
 
 /**
@@ -26,7 +27,7 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  */
 const WEEKDAY_FULL = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
 
-/** نشانهٔ «مسئول شیفت» — گلولهٔ توپر (خاکستری بسیار کم‌رنگ در چاپ) */
+/** نشانهٔ «مسئول شیفت» — فقط در راهنمای بالای برگه چاپ می‌شود */
 const LEADER_MARK = '●';
 
 /** پیشوند فارسی «مرخصی» که پیش از حروف شیفت می‌آید */
@@ -61,15 +62,18 @@ export interface PrintScheduleSheetProps {
   jobGroupFilter?: 'nurse' | 'assistant' | null;
 }
 
-/** نرمال‌سازی شیفت برای نمایش (حذف پیشوند مرخصی L) */
-function displayShift(raw: ShiftType | undefined, isLeader: boolean): string {
+/**
+ * نرمال‌سازی شیفت برای نمایش (حذف پیشوند مرخصی L).
+ * مسئول شیفت عمداً در سلول علامت‌گذاری نمی‌شود؛ نشانهٔ آن فقط در راهنمای بالای برگه است.
+ */
+export function formatShiftForPrint(raw: ShiftType | undefined): string {
   const shift = raw || 'OFF';
   const isLeave = typeof shift === 'string' && shift.startsWith('L') && shift !== 'L';
   const clean = isLeave ? shift.substring(1) : shift;
   if (clean === 'OFF') return '';
-  const label = isLeave ? `م${clean}` : clean;
-  // نشانهٔ مسئول شیفت: گلولهٔ توپر مشکی (به‌جای ستاره)
-  return isLeader ? `${LEADER_MARK}${label}` : label;
+  // شیفت تمام‌روز در PDF با عدد انگلیسی 24 نمایش داده می‌شود تا در ستون باریک خوانا بماند.
+  const printableShift = clean === 'MEN' ? '24' : clean;
+  return isLeave ? `م${printableShift}` : printableShift;
 }
 
 /* ===== سنجه‌های چیدمان صفحه A4 لنداسکیپ (میلی‌متر) ===== */
@@ -144,19 +148,18 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
 
   /**
    * اندازهٔ حروف با هر دو قید محدود می‌شود: ارتفاع سطر و عرض ستون.
-   *
-   * عرض هر نویسه در فونت مونوی Courier Prime برابر ۰٫۶em است (اندازه‌گیری‌شده
-   * از خود فونت). چون فونت monospace است همهٔ نویسه‌ها یک عرض دارند؛ جدول را
-   * نگه می‌داریم تا اگر بعداً فونت proportional شد، محاسبه همچنان درست بماند.
+   * ضرایب زیر بر اساس عرض نویسه‌های فونت باریک Barlow Condensed تنظیم شده‌اند.
    */
   const GHOST_CHAR_W_EM: Record<string, number> = {
-    M: 0.6,
-    N: 0.6,
-    E: 0.6,
-    L: 0.6,
+    M: 0.58,
+    N: 0.48,
+    E: 0.4,
+    L: 0.38,
+    2: 0.48,
+    4: 0.48,
     م: 0.64,
   };
-  const DEFAULT_CHAR_W_EM = 0.6;
+  const DEFAULT_CHAR_W_EM = 0.5;
   /** letter-spacing سلول‌ها (۰٫۲pt) هم به عرض هر نویسه اضافه می‌شود */
   const GHOST_TRACKING_EM = 0.03;
   const ghostWidthEm = (text: string): number =>
@@ -164,12 +167,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
       (sum, ch) => sum + (GHOST_CHAR_W_EM[ch] ?? DEFAULT_CHAR_W_EM) + GHOST_TRACKING_EM,
       0
     );
-  /*
-   * گلولهٔ سرشیفتی در چیدمان absolute و زیر حروف است، پس عرضی اشغال نمی‌کند و
-   * در محاسبهٔ اندازهٔ فونت وارد نمی‌شود؛ به همین دلیل اندازهٔ حروف در سلول‌های
-   * دارای گلوله و بدون گلوله یکسان می‌ماند.
-   * ارتفاع هم کمی محافظه‌کارانه‌تر گرفته شده تا جای گلوله زیر حروف باز بماند.
-   */
+  /** سقف اندازهٔ حروف بر اساس ارتفاع واقعی سطر */
   const heightCapPt = rowHeightMm * PT_PER_MM * 0.72;
   /** ۰٫۹mm حاشیهٔ امن تا حروف به خطوط سلول نچسبند */
   const widthCapFor = (letters: string) =>
@@ -207,25 +205,13 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
     return Math.max(4.6, base * 0.68);
   };
 
-  /**
-   * اندازهٔ گلولهٔ سرشیفتی فقط به ارتفاع سطر بستگی دارد (نه به طول حروف سلول)،
-   * تا همهٔ گلوله‌های برگه یک‌اندازه و یکدست دیده شوند.
-   */
-  const leaderDotPt = clamp(rowHeightMm * PT_PER_MM * 0.3, 2.6, 5);
-
-  /**
-   * حروف طولانی‌تر شیفت (MEN، مME و…) کوچک‌تر می‌شوند تا در سلول جا شوند.
-   * گلولهٔ سرشیفتی عمداً در محاسبه نمی‌آید تا اندازهٔ حروف را تغییر ندهد.
-   */
-  const shiftFontSizeFor = (text: string): number => {
-    const hasMark = text.startsWith(LEADER_MARK);
-    const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
-    return clamp(Math.min(heightCapPt, widthCapFor(letters)), 4.2, 12);
-  };
+  /** ترکیب‌های چندحرفی شیفت (ME، EN، MN و…) متناسب با عرض سلول اندازه می‌گیرند. */
+  const shiftFontSizeFor = (text: string): number =>
+    clamp(Math.min(heightCapPt, widthCapFor(text)), 4.2, 12);
 
   const reportOf = (id: string) => reports.find((r) => r.personnelId === id);
 
-  /** تعداد تعطیلات ماه = جمعه‌ها + تعطیلات رسمی (همان ستون‌های هاشورخورده) */
+  /** تعداد تعطیلات ماه = جمعه‌ها + تعطیلات رسمی؛ مستقل از نمایش بدون هاشور جدول */
   const holidayCount = calendarDays.filter((d) => d.isHoliday).length;
 
   const dutyChips = dutyHours
@@ -252,20 +238,15 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
         </td>
         {calendarDays.map((d) => {
           const shift = pAssignments[d.day] as ShiftType | undefined;
-          const leaders = schedule?.shiftLeaders?.[d.day];
-          const isLeader =
-            !!leaders &&
-            (leaders.morning === p.id || leaders.afternoon === p.id || leaders.night === p.id);
-          const text = displayShift(shift, isLeader);
-          const hasMark = text.startsWith(LEADER_MARK);
-          const letters = hasMark ? text.slice(LEADER_MARK.length) : text;
+          const text = formatShiftForPrint(shift);
           // «م» مرخصی در فونت تریسینگ لاتین وجود ندارد؛ جدا می‌شود تا با فونت
           // فارسیِ کم‌رنگ رندر شود و به گلیفِ توپرِ پیش‌فرض برنگردد.
-          const leaveMark = letters.startsWith(LEAVE_MARK);
-          const latinLetters = leaveMark ? letters.slice(LEAVE_MARK.length) : letters;
+          const leaveMark = text.startsWith(LEAVE_MARK);
+          const latinLetters = leaveMark ? text.slice(LEAVE_MARK.length) : text;
           const fontPt = shiftFontSizeFor(text);
           return (
-            <td key={d.day} className={`ps-cell ps-day ${d.isHoliday ? 'ps-holiday' : ''}`}>
+            // تعطیلات و جمعه‌ها عمداً هیچ پس‌زمینه/هاشوری داخل جدول ندارند.
+            <td key={d.day} className="ps-cell ps-day">
               {text && (
                 <span className="ps-cellbox">
                   {leaveMark && (
@@ -276,16 +257,6 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                   {latinLetters && (
                     <span className="ps-ghost" style={{ fontSize: `${fontPt}pt` }}>
                       {latinLetters}
-                    </span>
-                  )}
-                  {/*
-                    گلولهٔ سرشیفتی زیر حروف و خارج از جریان چیدمان (absolute) قرار
-                    می‌گیرد تا عرضی اشغال نکند؛ در نتیجه اندازهٔ حروف در سلول‌های
-                    دارای گلوله و بدون گلوله دقیقاً یکسان می‌ماند.
-                  */}
-                  {hasMark && (
-                    <span className="ps-leader" style={{ fontSize: `${leaderDotPt}pt` }}>
-                      {LEADER_MARK}
                     </span>
                   )}
                 </span>
@@ -331,9 +302,13 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
               </div>
             )}
 
-            <div className="ps-legend">
-              <span>{LEADER_MARK} : مسئول شیفت</span>
-              <span className="ps-legend-holiday">تعطیل / جمعه</span>
+            <div className="ps-legend" aria-label="راهنمای علائم چاپی">
+              <span className="ps-legend-leader">
+                <span className="ps-legend-dot" aria-hidden="true">{LEADER_MARK}</span> : مسئول شیفت
+              </span>
+              <span className="ps-legend-holiday">
+                <span className="ps-legend-hatch" aria-hidden="true" /> تعطیل / جمعه
+              </span>
             </div>
           </div>
 
@@ -344,7 +319,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                 <tr className="ps-head-days">
                   <th className="ps-cell ps-head ps-name-head">نام و نام خانوادگی</th>
                   {calendarDays.map((d) => (
-                    <th key={d.day} className={`ps-cell ps-head ${d.isHoliday ? 'ps-holiday' : ''}`}>
+                    <th key={d.day} className="ps-cell ps-head">
                       {toFa(d.day)}
                     </th>
                   ))}
@@ -364,7 +339,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
                   {calendarDays.map((d) => (
                     <th
                       key={d.day}
-                      className={`ps-cell ps-head ps-weekday ${d.isHoliday ? 'ps-holiday' : ''}`}
+                      className="ps-cell ps-head ps-weekday"
                       title={d.holidayTitle || WEEKDAYS[d.dayOfWeek]}
                     >
                       {/* نام کامل روز، عمودی چاپ می‌شود تا در عرض ~۷ میلی‌متری ستون جا شود */}
@@ -516,25 +491,45 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           padding: 0 0.5mm;
         }
 
+        /* راهنما تنها محل نمایش نقطهٔ مسئول شیفت و نمونهٔ هاشور تعطیلات است. */
         .ps-legend {
           display: flex;
+          align-items: center;
           gap: 2.5mm;
           font-size: 6.5pt;
-          font-weight: 700;
-          color: #444;
+          font-weight: 900;
+          color: #000;
           white-space: nowrap;
         }
+        .ps-legend-leader,
         .ps-legend-holiday {
+          display: inline-flex;
+          align-items: center;
+          color: #000;
+          font-weight: 900;
+        }
+        .ps-legend-dot {
+          color: #000;
+          -webkit-text-fill-color: #000;
+          font-size: 8pt;
+          line-height: 1;
+        }
+        .ps-legend-hatch {
+          display: inline-block;
+          width: 5mm;
+          height: 3.2mm;
+          margin-left: 0.8mm;
+          flex: 0 0 auto;
+          background-color: #fff;
           background-image: repeating-linear-gradient(
             45deg,
-            #c8c8c8,
-            #c8c8c8 1px,
-            #ffffff 1px,
-            #ffffff 3px
+            #000,
+            #000 1px,
+            #fff 1px,
+            #fff 3px
           );
-          padding: 0 1.2mm;
-          border: 1px solid #888;
-          border-radius: 1mm;
+          border: 1px solid #000;
+          border-radius: 0.7mm;
         }
 
         /* جدول در وسط فضای باقی‌مانده صفحه */
@@ -618,16 +613,7 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           font-size: 5.4pt;
         }
 
-        /* هاشور کل ستون تعطیل/جمعه (سربرگ + همه سلول‌ها) */
-        .ps-holiday {
-          background-image: repeating-linear-gradient(
-            45deg,
-            #c4c4c4,
-            #c4c4c4 1px,
-            #ffffff 1px,
-            #ffffff 3.5px
-          );
-        }
+        /* ستون‌های تعطیلات و جمعه‌ها مانند سایر ستون‌ها سفید و بدون هاشورند. */
 
         /* ===== نام پرسنل با فونت Lalezar ===== */
         .ps-name {
@@ -648,17 +634,13 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           line-height: 1.15;
         }
 
-        /* ===== حروف شیفت: نقطه‌چین و بسیار کم‌رنگ (قابل پررنگ‌کردن با مداد) ===== */
+        /* ===== حروف شیفت: باریک و خاکستری کم‌رنگ، مطابق نمونهٔ Tracing ===== */
         .ps-day {
           text-align: center;
           vertical-align: middle;
         }
-        /*
-         * وسط‌چینی قطعی حروف در سلول: با flex هم افقی و هم عمودی وسط می‌نشینند،
-         * مستقل از اینکه گلولهٔ مسئول شیفت باشد یا نه.
-         */
+        /* وسط‌چینی قطعی حروف Tracing در سلول، بدون نقطهٔ مسئول شیفت. */
         .ps-cellbox {
-          position: relative;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -668,75 +650,34 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           line-height: 1;
         }
         /*
-         * گلولهٔ مسئول شیفت: زیر حروف و خارج از جریان چیدمان.
-         * چون absolute است هیچ عرضی از سلول نمی‌گیرد، پس اندازهٔ حروف در
-         * سلول‌های دارای گلوله با بقیهٔ سلول‌ها یکسان می‌ماند.
+         * ===== حروف انگلیسی شیفت: Barlow Condensed Light =====
+         * فرم باریک، هندسی و بدون سریف این فونت با حروف نمونهٔ ضمیمه‌شده هماهنگ است.
+         * رنگ کم‌رنگ باقی می‌ماند تا نوشته‌ها برای تکمیل/پررنگ‌کردن با مداد مناسب باشند.
          */
-        .ps-leader {
-          position: absolute;
-          left: 50%;
-          bottom: 0;
-          transform: translateX(-50%);
-          color: #c2c2c2;
-          -webkit-text-fill-color: #c2c2c2;
-          line-height: 1;
-          pointer-events: none;
-        }
-        /*
-         * ===== حروف انگلیسی شیفت: فونت تریسینگ (نقطه‌چین) و کم‌رنگ =====
-         * Raleway Dots یک فونت واقعی «tracing» است: خودِ حروف از نقطه‌های گرد
-         * ساخته شده‌اند (نه ماسک CSS روی حروف توپر) و پرسنل روی نقطه‌ها را با
-         * مداد پررنگ می‌کنند.
-         * مجوز فونت: SIL OFL — از طریق next/font/google خودمیزبان می‌شود.
-         * توجه: این فونت proportional است؛ جدول GHOST_CHAR_W_EM بر همین اساس تنظیم شده.
-         */
-        /* «م» مرخصی: فونت فارسی، هم‌رنگ حروف تریسینگ (فونت لاتین «م» ندارد) */
+        /* «م» مرخصی: فونت فارسی، هم‌رنگ حروف Tracing (فونت لاتین «م» ندارد) */
         .ps-leave {
           display: inline-block;
           font-family: var(--font-vazirmatn), Vazirmatn, Tahoma, sans-serif;
-          font-weight: 400;
+          font-weight: 300;
           line-height: 1;
           vertical-align: middle;
-          color: #b0b0b0;
-          -webkit-text-fill-color: #b0b0b0;
+          color: #aaa;
+          -webkit-text-fill-color: #aaa;
           flex: 0 0 auto;
         }
         .ps-ghost {
           display: inline-block;
-          /*
-           * فونت مونو (Courier) با الگوی نقطه‌چین CSS — مطابق نمونه‌ای که
-           * سرپرستار تأیید کرد: حروف سریف و مونو، ساخته‌شده از نقطه‌های ریز.
-           * زنجیره فقط mono است؛ ثابت‌های GHOST_CHAR_W_EM بر همین اساس تنظیم شده.
-           */
-          font-family: var(--font-tracing), 'Courier Prime', 'Courier New', Courier, monospace;
-          font-weight: 700;
+          font-family: var(--font-tracing), 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif;
+          font-weight: 300;
+          font-stretch: condensed;
+          direction: ltr;
+          unicode-bidi: isolate;
           letter-spacing: 0.2pt;
           line-height: 1;
           vertical-align: middle;
           text-align: center;
-          /* fallback برای مرورگرهای بدون background-clip:text */
-          color: #8a8a8a;
-          -webkit-text-fill-color: #8a8a8a;
-        }
-        /*
-         * نقطه‌چین واقعی: نقطه‌های ریز از داخل حروف بریده می‌شوند.
-         * واحد em است تا الگو با هر اندازهٔ فونت هم‌مقیاس بماند.
-         * رنگ #8a8a8a همان رنگ فعلی مورد تأیید است.
-         */
-        @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-          .ps-ghost {
-            color: transparent;
-            -webkit-text-fill-color: transparent;
-            background-image: radial-gradient(
-              circle at 50% 50%,
-              #8a8a8a 0.042em,
-              rgba(255, 255, 255, 0) 0.049em
-            );
-            background-size: 0.13em 0.13em;
-            background-repeat: repeat;
-            -webkit-background-clip: text;
-            background-clip: text;
-          }
+          color: #aaa;
+          -webkit-text-fill-color: #aaa;
         }
 
         /* ===== اعداد کارکرد: خاکستری تیره، خوانا و وسط‌چین ===== */
@@ -776,15 +717,16 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           justify-content: space-between;
           align-items: center;
           font-size: 6.6pt;
-          font-weight: 700;
-          color: #444;
+          font-weight: 900;
+          color: #000;
           margin-top: 1.2mm;
-          border-top: 1px solid #b5b5b5;
+          border-top: 1px solid #000;
           padding-top: 0.8mm;
           flex: 0 0 auto;
         }
         .ps-sign {
-          color: #666;
+          color: #000;
+          font-weight: 900;
         }
         .ps-footer-counts {
           display: inline-flex;
@@ -792,8 +734,10 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           gap: 1.6mm;
           white-space: nowrap;
         }
+        .ps-footer-counts,
         .ps-footer-sep {
-          color: #aaa;
+          color: #000;
+          font-weight: 900;
         }
 
         @media print {
@@ -805,16 +749,17 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
           .ps-table,
           .ps-cell,
           .ps-head,
-          .ps-holiday,
           .ps-group,
           .ps-ghost,
-          .ps-leader,
           .ps-leave,
           .ps-sum-cell,
           .ps-sum-cell-alt,
           .ps-sum-text,
           .ps-duty,
-          .ps-legend-holiday {
+          .ps-legend,
+          .ps-legend-dot,
+          .ps-legend-hatch,
+          .ps-footer {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
