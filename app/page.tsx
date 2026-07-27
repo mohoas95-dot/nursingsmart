@@ -470,11 +470,10 @@ export default function Home() {
   const currentScenarioAssistant = isVotingModeAssistant ? normalizedActiveScenarios.assistant.scenarios[viewingScenarioIndexAssistant] : null;
   // برای سازگاری: اگر هر دو فعال هستند، اولویت با پرستار برای نمایش در جدول (یا می‌توان جدول را اصلی نمایش داد)
   const currentScenario = currentScenarioNurse || currentScenarioAssistant || null;
-  // Requirement 2: در زمان رای‌گیری، برنامه اصلی یا سناریوی در حال مشاهده نمایش داده می‌شود
-  // + پیش‌نمایش بهترین سناریو بعد از بازتولید (جدید)
+  // Requirement 2 + پیش‌نمایش ریشه‌ای بهترین سناریو بعد از بازتولید
   const displayedSchedule = React.useMemo(() => {
-    // اولویت ۱: پیش‌نمایش بهترین سناریو (بعد از بازتولید)
-    if (previewBestScenario && !isVotingModeNurse && !isVotingModeAssistant) {
+    // اولویت مطلق: پیش‌نمایش بهترین سناریو (حتی خارج از حالت voting)
+    if (previewBestScenario) {
       return previewBestScenario.schedule;
     }
 
@@ -486,23 +485,19 @@ export default function Home() {
       return currentScenarioAssistant.schedule;
     }
     if (isVotingModeNurse && isVotingModeAssistant && currentScenarioNurse && currentScenarioAssistant) {
-      // ترکیب دو سناریو: پرستاران از سناریوی پرستاران، کمک‌بهیاران از سناریوی کمک‌بهیاران
       const mergedAssignments: any = { ...(schedule?.assignments || {}) };
-      // nurse
       for (const [pid, days] of Object.entries(currentScenarioNurse.schedule.assignments || {})) {
         const p = personnel.find(per => per.id === pid);
         if (p && p.jobGroup === 'nurse') {
           mergedAssignments[pid] = days as any;
         }
       }
-      // assistant
       for (const [pid, days] of Object.entries(currentScenarioAssistant.schedule.assignments || {})) {
         const p = personnel.find(per => per.id === pid);
         if (p && p.jobGroup === 'assistant') {
           mergedAssignments[pid] = days as any;
         }
       }
-      // بقیه پرسنل (اگر سناریوها ناقص باشند) از schedule اصلی
       return {
         ...(schedule || currentScenarioNurse.schedule),
         assignments: mergedAssignments,
@@ -2074,7 +2069,7 @@ export default function Home() {
       // Store top4 in local state for immediate modal display (new 4-scenario system)
       setTop4Scenarios(top4);
 
-      // نمایش خودکار بهترین سناریو روی داشبورد اصلی (پیش‌نمایش)
+      // نمایش خودکار بهترین سناریو روی داشبورد اصلی (پیش‌نمایش ریشه‌ای)
       if (top4.length > 0) {
         setPreviewBestScenario(top4[0]);
       }
@@ -6643,13 +6638,7 @@ export default function Home() {
 
       <ScenariosModal
         isOpen={showScenariosModal}
-        scenarios={
-          modalTargetJobGroup === 'nurse' 
-            ? (normalizedActiveScenarios.nurse?.scenarios || top4Scenarios || []) 
-            : modalTargetJobGroup === 'assistant' 
-              ? (normalizedActiveScenarios.assistant?.scenarios || top4Scenarios || []) 
-              : (normalizedActiveScenarios.nurse?.scenarios || normalizedActiveScenarios.assistant?.scenarios || top4Scenarios || [])
-        }
+        scenarios={top4Scenarios || []}
         votes={
           modalTargetJobGroup === 'nurse' ? normalizedScenarioVotes.nurse :
           modalTargetJobGroup === 'assistant' ? normalizedScenarioVotes.assistant :
