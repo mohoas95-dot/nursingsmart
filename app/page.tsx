@@ -2051,7 +2051,7 @@ export default function Home() {
 
     try {
       const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
-      const { top3 } = generateAndScoreScenarios(
+      const { top4: top3 } = generateAndScoreScenarios(
         currentYear,
         currentMonth,
         optimizerPersonnel,
