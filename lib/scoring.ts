@@ -1,11 +1,14 @@
-import { MonthlySchedule, Personnel, ShiftRequest, SystemSettings, PersonnelReportResult, ShiftType } from './types';
+import { generateJalaliMonthCalendar } from './jalali';
 import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
-import { generatePersonnelReports } from './solver';
+import { MonthlySchedule, Personnel, ShiftRequest, SystemSettings, ShiftType } from './types';
 
 export type ScenarioType = 'FAIRNESS' | 'REQUESTS' | 'MIXED';
+export type ScenarioCode = 'A' | 'B' | 'C';
 
 export interface ScoredSchedule {
   id: number;
+  /** A=تلفیقی، B=درخواست‌محور، C=عدالت‌محور. */
+  scenarioCode?: ScenarioCode;
   type: ScenarioType;
   schedule: MonthlySchedule;
   scoreA: number;
@@ -17,103 +20,159 @@ export interface ScoredSchedule {
   analysis: string;
 }
 
+const SHIFT_COMPONENTS: Readonly<Record<string, readonly string[]>> = {
+  M: ['M'],
+  E: ['E'],
+  N: ['N'],
+  ME: ['M', 'E'],
+  EN: ['E', 'N'],
+  MN: ['M', 'N'],
+  MEN: ['M', 'E', 'N'],
+  OFF: [],
+};
+
+const SHIFT_HOURS: Readonly<Record<string, number>> = {
+  M: 6.5,
+  E: 6.5,
+  N: 12.5,
+  ME: 13,
+  EN: 19,
+  MN: 19,
+  MEN: 25.5,
+  OFF: 0,
+};
+
+function shiftCovers(shift: ShiftType | undefined, requested: string | undefined): boolean {
+  if (!requested || !shift) return false;
+  if (requested === 'L') return shift.startsWith('L');
+  if (requested === 'OFF') return shift === 'OFF';
+  return SHIFT_COMPONENTS[shift]?.includes(requested) ?? false;
+}
+
+function requestIsSatisfied(request: ShiftRequest, shift: ShiftType | undefined): boolean {
+  if (request.requestType === 'OFF') return shift === 'OFF';
+  if (request.requestType === 'leave') return Boolean(shift?.startsWith('L'));
+  if (request.requestType === 'avoid_shift') return !shiftCovers(shift, request.preferredShift);
+  if (request.requestType === 'shift') return shiftCovers(shift, request.preferredShift);
+  return true;
+}
+
+function requestScore(
+  schedule: MonthlySchedule,
+  requests: readonly ShiftRequest[],
+  year: number,
+  month: number,
+  customHolidays: Readonly<Record<number, string>>,
+  firstDayOfWeekIndex?: number
+): number {
+  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
+  let applicable = 0;
+  let satisfied = 0;
+
+  for (const request of requests) {
+    // Pattern requests do not currently have a single, comparable preferred shift.
+    // They are respected by the solver but are intentionally excluded from this score.
+    if (!['shift', 'OFF', 'leave', 'avoid_shift'].includes(request.requestType)) continue;
+    const assignments = schedule.assignments[request.personnelId];
+    if (!assignments) continue;
+
+    for (const calendarDay of calendar) {
+      if (!isDayInRequestScope(calendarDay.day, calendarDay.dayOfWeek, request)) continue;
+      applicable += request.isEssential ? 2 : 1;
+      if (requestIsSatisfied(request, assignments[calendarDay.day])) {
+        satisfied += request.isEssential ? 2 : 1;
+      }
+    }
+  }
+
+  return applicable === 0 ? 100 : Math.max(0, Math.min(100, (satisfied / applicable) * 100));
+}
+
+function fairnessScore(schedule: MonthlySchedule, personnelList: readonly Personnel[]): number {
+  const groupScores: number[] = [];
+
+  for (const jobGroup of ['nurse', 'assistant'] as const) {
+    const group = personnelList.filter(person => person.active && person.jobGroup === jobGroup);
+    if (group.length < 2) continue;
+
+    const workedHours = group.map(person => Object.values(schedule.assignments[person.id] || {}).reduce(
+      (total, shift) => total + (SHIFT_HOURS[shift] ?? (shift.startsWith('L') ? 7 : 0)),
+      0
+    ));
+    const average = workedHours.reduce((total, value) => total + value, 0) / workedHours.length;
+    if (average === 0) {
+      groupScores.push(100);
+      continue;
+    }
+    const variance = workedHours.reduce((total, value) => total + ((value - average) ** 2), 0) / workedHours.length;
+    const coefficientOfVariation = Math.sqrt(variance) / average;
+    // A 50% relative spread scores zero; ordinary small differences remain visible
+    // without unfairly punishing months with different contractual duty hours.
+    groupScores.push(Math.max(0, Math.min(100, 100 - coefficientOfVariation * 200)));
+  }
+
+  return groupScores.length === 0
+    ? 100
+    : groupScores.reduce((total, value) => total + value, 0) / groupScores.length;
+}
+
+function rulesScore(warnings: readonly string[]): number {
+  let penalty = 0;
+  for (const warning of warnings) {
+    const coverageOrLeaderWarning = /کمبود|مازاد|Coverage|Overstaffing|Missing Shift Leader/i.test(warning);
+    penalty += coverageOrLeaderWarning ? 12 : 4;
+  }
+  return Math.max(0, 100 - penalty);
+}
+
+/**
+ * Scores are deliberately deterministic and based on the actual schedule.  The former
+ * implementation used random values, which meant a scenario could change rank without
+ * any scheduling change and made a vote impossible to explain or audit.
+ */
 export function evaluateSchedule(
   id: number,
   type: ScenarioType,
   schedule: MonthlySchedule,
   personnelList: readonly Personnel[],
   requests: readonly ShiftRequest[],
-  settings: SystemSettings,
+  _settings: SystemSettings,
   warnings: string[],
   year: number,
   month: number,
   customHolidays: Readonly<Record<number, string>>,
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  _monthlyDutyHours?: unknown
 ): ScoredSchedule {
-  // --- Score A (Level A): 50% Weight ---
-  // Hard constraints: Coverage, max shifts, consecutive caps, single isolated shift, mandatory rest, continuous leave.
-  // The 'warnings' array from solver contains violations of Level A and some Level B.
-  // We'll base Score A primarily on the absence of major warnings.
-  let majorViolations = warnings.filter(w => 
-    w.includes('Max Consecutive') || 
-    w.includes('Isolated Shift') || 
-    w.includes('Mandatory Rest') || 
-    w.includes('Coverage') ||
-    w.includes('Leave Continuity')
-  ).length;
-  
-  let scoreA = 100 - (majorViolations * 10);
-  if (scoreA < 0) scoreA = 0;
+  const scoreA = rulesScore(warnings);
+  const scoreB = requestScore(schedule, requests, year, month, customHolidays, firstDayOfWeekIndex);
+  const scoreC = fairnessScore(schedule, personnelList);
 
-  // --- Score B (Level B): 30% Weight ---
-  // Soft constraints & requests: Personnel requests (OFF, Shift), soft OFFs.
-  let fulfilledRequests = 0;
-  let totalApplicableRequests = 0;
-  
-  requests.forEach(req => {
-    if (req.requestType === 'shift' || req.requestType === 'OFF' || req.requestType === 'leave') {
-      const pAssign = schedule.assignments[req.personnelId];
-      if (!pAssign) return;
-      
-      for (let d = 1; d <= Object.keys(pAssign).length; d++) {
-        // Simplified check to see if request applied to this day
-        // For a true check, we'd use isDayInRequestScope
-        // But let's approximate based on actual shifts vs request preferred shift
-        // Because checking exact scope matches requires calendar info.
-      }
-    }
-  });
-  
-  // To simulate different scores based on scenario since solver isn't fully randomized yet
-  let scoreB = 75 + Math.floor(Math.random() * 15);
-  if (type === 'REQUESTS') {
-    scoreB = 90 + Math.floor(Math.random() * 10);
-  } else if (type === 'FAIRNESS') {
-    scoreB = 60 + Math.floor(Math.random() * 20);
-  } else {
-    scoreB = 80 + Math.floor(Math.random() * 15);
-  }
+  const weights = type === 'REQUESTS'
+    ? { rules: 0.4, requests: 0.45, fairness: 0.15 }
+    : type === 'FAIRNESS'
+      ? { rules: 0.4, requests: 0.15, fairness: 0.45 }
+      : { rules: 0.5, requests: 0.25, fairness: 0.25 };
+  const totalScore = scoreA * weights.rules + scoreB * weights.requests + scoreC * weights.fairness;
 
-  // --- Score C (Level C): 20% Weight ---
-  // Fairness: Equal duty hours, equal weekends off, balancing similar routines
-  let scoreC = 75 + Math.floor(Math.random() * 15);
-  if (type === 'FAIRNESS') {
-    scoreC = 90 + Math.floor(Math.random() * 10);
-  } else if (type === 'REQUESTS') {
-    scoreC = 60 + Math.floor(Math.random() * 20);
-  } else {
-    scoreC = 80 + Math.floor(Math.random() * 15);
-  }
+  const strengths: string[] = [];
+  const weaknesses: string[] = [];
 
-  // Add some randomness to A based on type to simulate variations
-  if (type === 'MIXED') {
-    scoreA = Math.min(100, scoreA + Math.floor(Math.random() * 5));
-  }
+  if (scoreA >= 95) strengths.push('رعایت کامل قوانین ساختاری و پوشش نیروی موردنیاز');
+  else if (scoreA >= 80) strengths.push('رعایت قابل قبول قوانین پایه‌ای شیفت‌بندی');
+  else weaknesses.push('هشدارهای ساختاری یا کمبود/مازاد نیرو نیازمند بررسی است');
 
-  const totalScore = (scoreA * 0.5) + (scoreB * 0.3) + (scoreC * 0.2);
+  if (scoreB >= 85) strengths.push('بخش عمده‌ای از درخواست‌های ثبت‌شده پرسنل تامین شده است');
+  else weaknesses.push('همه درخواست‌های پرسنل قابل تامین نبوده‌اند');
 
-  const strengths = [];
-  const weaknesses = [];
-  
-  if (scoreA >= 95) strengths.push('رعایت کامل قوانین خط قرمز و ساختاری شیفت‌بندی (رعایت قوانین کلی)');
-  else if (scoreA >= 80) strengths.push('رعایت قابل قبول قوانین پایه‌ای (رعایت قوانین کلی)');
-  else weaknesses.push('وجود خطاهای مهم در ساختار الزامی شیفت‌ها');
-  
-  if (scoreB >= 85) strengths.push('تخصیص موفقیت‌آمیز بخش عمده‌ای از درخواست‌های پرسنل');
-  else weaknesses.push('عدم موفقیت در برآورده کردن کامل درخواست‌های ثبت شده');
+  if (scoreC >= 85) strengths.push('توزیع ساعات و شیفت‌ها بین هم‌گروهی‌ها متوازن است');
+  else weaknesses.push('توزیع ساعات یا شیفت‌ها هنوز اختلاف محسوسی دارد');
 
-  if (scoreC >= 85) strengths.push('توزیع عادلانه و متوازن شیفت‌ها بین نفرات با روتین مشابه');
-  else weaknesses.push('وجود اختلاف در توزیع عادلانه ساعات و شیفت‌ها');
-
-  let analysis = '';
-  if (type === 'FAIRNESS') {
-    analysis = 'این برنامه تمرکز بالایی بر مساوات بین پرسنل دارد. برای ماه‌هایی با درخواست‌های کمتر مناسب است.';
-  } else if (type === 'REQUESTS') {
-    analysis = 'این برنامه بیشترین رضایت پرسنل را در پاسخ به درخواست‌ها جلب می‌کند اما ممکن است کمی توازن ساعات به هم بخورد.';
-  } else {
-    analysis = 'این برنامه تعادل بسیار خوبی بین رعایت عدالت و پذیرش درخواست‌ها برقرار کرده است و گزینه‌ای ایده‌آل است.';
-  }
+  const analysis = type === 'FAIRNESS'
+    ? 'برنامه C با اولویت توزیع عادلانه ساعات و بار شیفت بین پرسنل ساخته شده است.'
+    : type === 'REQUESTS'
+      ? 'برنامه B با اولویت تامین درخواست‌های ثبت‌شده پرسنل ساخته شده است.'
+      : 'برنامه A ترکیبی متوازن از رعایت درخواست‌های پرسنل و عدالت در شیفت‌دهی است.';
 
   return {
     id,
@@ -125,7 +184,7 @@ export function evaluateSchedule(
     totalScore,
     strengths,
     weaknesses,
-    analysis
+    analysis,
   };
 }
 
@@ -133,33 +192,28 @@ export function generateScoringReportText(scoredSchedules: ScoredSchedule[]): st
   let report = '';
   let bestSchedule = scoredSchedules[0];
 
-  scoredSchedules.forEach(s => {
-    if (s.totalScore > bestSchedule.totalScore) {
-      bestSchedule = s;
-    }
-    const typeFa = s.type === 'FAIRNESS' ? 'عدالت‌محور' : (s.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی');
-    
-    report += `📋 برنامه شماره ${s.id} - نوع: ${typeFa}\n\n`;
-    report += `📊 تفکیک امتیازات:\n`;
-    report += `- رعایت قوانین کلی  [${s.scoreA.toFixed(0)} از ۱۰۰]\n`;
-    report += `- رعایت درخواست های پرسنل  [${s.scoreB.toFixed(0)} از ۱۰۰]\n`;
-    report += `- رعایت عدالت در چینش  [${s.scoreC.toFixed(0)} از ۱۰۰]\n\n`;
-    
-    report += `💡 نقاط قوت:\n`;
-    s.strengths.forEach(st => report += `- ${st}\n`);
-    report += `\n`;
-    
-    if (s.weaknesses.length > 0) {
-      report += `⚠️ نقاط ضعف یا خطاهای احتمالی:\n`;
-      s.weaknesses.forEach(w => report += `- ${w}\n`);
-      report += `\n`;
-    }
-    
-    report += `🧐 تحلیل نهایی: ${s.analysis}\n`;
-    report += `---\n\n`;
-  });
+  for (const scenario of scoredSchedules) {
+    if (scenario.totalScore > bestSchedule.totalScore) bestSchedule = scenario;
+    const typeFa = scenario.type === 'FAIRNESS' ? 'عدالت‌محور' : scenario.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی';
+    const program = scenario.scenarioCode ? `برنامه ${scenario.scenarioCode}` : `برنامه شماره ${scenario.id}`;
 
-  report += `🏆 پیشنهاد نهایی سیستم: برنامه شماره ${bestSchedule.id} (${bestSchedule.type === 'MIXED' ? 'تلفیقی' : bestSchedule.type === 'FAIRNESS' ? 'عدالت‌محور' : 'درخواست‌محور'}) با امتیاز کلی ${bestSchedule.totalScore.toFixed(2)}`;
-  
+    report += `📋 ${program} - نوع: ${typeFa}\n\n`;
+    report += `📊 تفکیک امتیازات:\n`;
+    report += `- رعایت قوانین کلی  [${scenario.scoreA.toFixed(0)} از ۱۰۰]\n`;
+    report += `- رعایت درخواست‌های پرسنل  [${scenario.scoreB.toFixed(0)} از ۱۰۰]\n`;
+    report += `- رعایت عدالت در چینش  [${scenario.scoreC.toFixed(0)} از ۱۰۰]\n\n`;
+    report += '💡 نقاط قوت:\n';
+    scenario.strengths.forEach(strength => { report += `- ${strength}\n`; });
+    report += '\n';
+    if (scenario.weaknesses.length > 0) {
+      report += '⚠️ موارد نیازمند توجه:\n';
+      scenario.weaknesses.forEach(weakness => { report += `- ${weakness}\n`; });
+      report += '\n';
+    }
+    report += `🧐 تحلیل نهایی: ${scenario.analysis}\n---\n\n`;
+  }
+
+  const bestLabel = bestSchedule.scenarioCode ? `برنامه ${bestSchedule.scenarioCode}` : `برنامه شماره ${bestSchedule.id}`;
+  report += `🏆 امتیاز بالاتر: ${bestLabel} با امتیاز کلی ${bestSchedule.totalScore.toFixed(2)}`;
   return report;
 }

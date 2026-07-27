@@ -452,59 +452,67 @@ export default function Home() {
     };
   }, [scenarioVotesRaw]);
 
-  // برای سازگاری با ScenariosModal قدیمی که scenarioVotes را flat می‌خواهد، یک merged می‌سازیم
+  // برای سازگاری با داده‌های قدیمیِ رای‌ها، نسخه تخت همچنان به modal داده می‌شود.
   const scenarioVotes = scenarioVotesRaw || {};
 
-  const [viewingScenarioIndex, setViewingScenarioIndex] = useState<number>(0);
   const [viewingScenarioIndexNurse, setViewingScenarioIndexNurse] = useState<number>(0);
   const [viewingScenarioIndexAssistant, setViewingScenarioIndexAssistant] = useState<number>(0);
   const [modalTargetJobGroup, setModalTargetJobGroup] = useState<JobGroup | null>(null);
 
-  const isVotingModeNurse = !!(normalizedActiveScenarios.nurse && normalizedActiveScenarios.nurse.scenarios && normalizedActiveScenarios.nurse.scenarios.length > 0);
-  const isVotingModeAssistant = !!(normalizedActiveScenarios.assistant && normalizedActiveScenarios.assistant.scenarios && normalizedActiveScenarios.assistant.scenarios.length > 0);
-  const isVotingMode = isVotingModeNurse || isVotingModeAssistant;
-
-  const currentScenarioNurse = isVotingModeNurse ? normalizedActiveScenarios.nurse.scenarios[viewingScenarioIndexNurse] : null;
-  const currentScenarioAssistant = isVotingModeAssistant ? normalizedActiveScenarios.assistant.scenarios[viewingScenarioIndexAssistant] : null;
-  // برای سازگاری: اگر هر دو فعال هستند، اولویت با پرستار برای نمایش در جدول (یا می‌توان جدول را اصلی نمایش داد)
-  const currentScenario = currentScenarioNurse || currentScenarioAssistant || null;
-  // Requirement 2: در زمان رای‌گیری، برنامه اصلی یا سناریوی در حال مشاهده نمایش داده می‌شود
-  // اگر هر دو گروه همزمان در رای‌گیری باشند، assignments هر دو را ترکیب می‌کنیم تا جدول یکپارچه بماند.
+  // ساخت سناریو و شروع رای‌گیری دو وضعیت مستقل‌اند. سناریوها بلافاصله پس از بازتولید
+  // برای سرپرستار آماده‌اند، اما تا `votingOpen` نشود هیچ پرسنلی آن‌ها را نمی‌بیند.
+  const hasScenariosNurse = Array.isArray(normalizedActiveScenarios.nurse?.scenarios) && normalizedActiveScenarios.nurse.scenarios.length === 3;
+  const hasScenariosAssistant = Array.isArray(normalizedActiveScenarios.assistant?.scenarios) && normalizedActiveScenarios.assistant.scenarios.length === 3;
+  const votingOpenNurse = hasScenariosNurse && normalizedActiveScenarios.nurse?.votingOpen === true;
+  const votingOpenAssistant = hasScenariosAssistant && normalizedActiveScenarios.assistant?.votingOpen === true;
+  const canManageScenarioVoting = role === 'headnurse' || role === 'admin';
+  const canViewNurseScenarios = hasScenariosNurse && (canManageScenarioVoting || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && votingOpenNurse));
+  const canViewAssistantScenarios = hasScenariosAssistant && (canManageScenarioVoting || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && votingOpenAssistant));
+  const isVotingModeNurse = canViewNurseScenarios;
+  const isVotingModeAssistant = canViewAssistantScenarios;
+  const currentScenarioNurse = isVotingModeNurse
+    ? normalizedActiveScenarios.nurse.scenarios[viewingScenarioIndexNurse % normalizedActiveScenarios.nurse.scenarios.length]
+    : null;
+  const currentScenarioAssistant = isVotingModeAssistant
+    ? normalizedActiveScenarios.assistant.scenarios[viewingScenarioIndexAssistant % normalizedActiveScenarios.assistant.scenarios.length]
+    : null;
+  // فقط ردیف‌های گروهی که سناریوی آن در حال مشاهده است روی برنامه A اعمال می‌شود.
+  // به این ترتیب اگر فقط رای‌گیری پرستاران باز باشد، پرسنل برنامه کمک‌بهیاران را از
+  // سناریوی مخفی/قدیمی نمی‌بینند و آن گروه روی برنامه پیش‌فرض A باقی می‌ماند.
   const displayedSchedule = React.useMemo(() => {
-    if (!schedule && !currentScenarioNurse && !currentScenarioAssistant) return schedule;
-    if (isVotingModeNurse && !isVotingModeAssistant && currentScenarioNurse) {
-      return currentScenarioNurse.schedule;
-    }
-    if (!isVotingModeNurse && isVotingModeAssistant && currentScenarioAssistant) {
-      return currentScenarioAssistant.schedule;
-    }
-    if (isVotingModeNurse && isVotingModeAssistant && currentScenarioNurse && currentScenarioAssistant) {
-      // ترکیب دو سناریو: پرستاران از سناریوی پرستاران، کمک‌بهیاران از سناریوی کمک‌بهیاران
-      const mergedAssignments: any = { ...(schedule?.assignments || {}) };
-      // nurse
-      for (const [pid, days] of Object.entries(currentScenarioNurse.schedule.assignments || {})) {
-        const p = personnel.find(per => per.id === pid);
-        if (p && p.jobGroup === 'nurse') {
-          mergedAssignments[pid] = days as any;
+    const baseSchedule = schedule || currentScenarioNurse?.schedule || currentScenarioAssistant?.schedule || null;
+    if (!baseSchedule) return null;
+    if (!currentScenarioNurse && !currentScenarioAssistant) return baseSchedule;
+
+    const mergedAssignments: MonthlySchedule['assignments'] = { ...(baseSchedule.assignments || {}) };
+    if (currentScenarioNurse) {
+      for (const person of personnel) {
+        if (person.jobGroup === 'nurse' && currentScenarioNurse.schedule.assignments[person.id]) {
+          mergedAssignments[person.id] = { ...currentScenarioNurse.schedule.assignments[person.id] };
         }
       }
-      // assistant
-      for (const [pid, days] of Object.entries(currentScenarioAssistant.schedule.assignments || {})) {
-        const p = personnel.find(per => per.id === pid);
-        if (p && p.jobGroup === 'assistant') {
-          mergedAssignments[pid] = days as any;
+    }
+    if (currentScenarioAssistant) {
+      for (const person of personnel) {
+        if (person.jobGroup === 'assistant' && currentScenarioAssistant.schedule.assignments[person.id]) {
+          mergedAssignments[person.id] = { ...currentScenarioAssistant.schedule.assignments[person.id] };
         }
       }
-      // بقیه پرسنل (اگر سناریوها ناقص باشند) از schedule اصلی
-      return {
-        ...(schedule || currentScenarioNurse.schedule),
-        assignments: mergedAssignments,
-        warnings: [...(currentScenarioNurse.schedule.warnings || []), ...(currentScenarioAssistant.schedule.warnings || [])],
-        shiftLeaders: { ...(schedule?.shiftLeaders || {}), ...(currentScenarioNurse.schedule.shiftLeaders || {}), ...(currentScenarioAssistant.schedule.shiftLeaders || {}) },
-      } as any;
     }
-    return schedule;
-  }, [schedule, personnel, isVotingModeNurse, isVotingModeAssistant, currentScenarioNurse, currentScenarioAssistant]);
+
+    return {
+      ...baseSchedule,
+      assignments: mergedAssignments,
+      // سرشیفت‌ها فقط به گروه پرستاری مربوط‌اند؛ در صورت مشاهده سناریوی پرستاران
+      // از همان سناریو گرفته می‌شوند و در غیر این صورت برنامه A حفظ می‌شود.
+      shiftLeaders: currentScenarioNurse?.schedule.shiftLeaders || baseSchedule.shiftLeaders,
+      warnings: Array.from(new Set([
+        ...(baseSchedule.warnings || []),
+        ...(currentScenarioNurse?.schedule.warnings || []),
+        ...(currentScenarioAssistant?.schedule.warnings || []),
+      ])),
+    };
+  }, [schedule, personnel, currentScenarioNurse, currentScenarioAssistant]);
 
   // Compiled reports from current schedule dynamically and reactively
   const reports = React.useMemo(() => {
@@ -2001,6 +2009,102 @@ export default function Home() {
     await saveState(withOrder, requests, settings, customHolidays);
   };
 
+  /**
+   * Persist one fixed, auditable A/B/C set for a job group.  It is intentionally
+   * separate from `votingOpen`: regenerating or reconciling a schedule never exposes
+   * drafts to personnel before the head nurse explicitly starts the vote.
+   */
+  const createScenarioBundle = async (
+    jobGroup: JobGroup,
+    baseSchedule: MonthlySchedule,
+    source: 'regeneration' | 'warning-reconciliation',
+    useCurrentTargetAssignments: boolean
+  ): Promise<ScoredSchedule[]> => {
+    const deptId = selectedDepartmentId || 'sepehr';
+    const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
+    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentHolidays = holidaysRef.current;
+    const currentFirstDay = firstDayRef.current;
+    const currentDutyHours = monthlyDutyHoursRef.current;
+    const currentLocked = lockedRowsRef.current;
+
+    const { top3 } = generateAndScoreScenarios(
+      currentYear,
+      currentMonth,
+      currentPersonnel,
+      currentRequests,
+      optimizerSettings,
+      currentHolidays,
+      currentFirstDay === -1 ? undefined : currentFirstDay,
+      currentDutyHours,
+      jobGroup,
+      baseSchedule.assignments,
+      {
+        protectedCells: protectedCellsRef.current,
+        lockedRows: currentLocked,
+        useCurrentTargetAssignments,
+      }
+    );
+
+    const nextDb = getFreshDbCopy();
+    if (!nextDb.deptData) nextDb.deptData = {};
+    const oldDept = nextDb.deptData[deptId];
+    if (!oldDept) throw new Error('اطلاعات بخش برای ذخیره سناریوها یافت نشد.');
+    const key = `${currentYear}_${currentMonth}`;
+    const existingMonthScenarios = (oldDept.activeScenarios || {})[key] as any;
+    const monthScenarios = existingMonthScenarios?.scenarios && Array.isArray(existingMonthScenarios.scenarios)
+      ? (existingMonthScenarios.targetJobGroup ? { [existingMonthScenarios.targetJobGroup]: existingMonthScenarios } : {})
+      : { ...(existingMonthScenarios || {}) };
+    monthScenarios[jobGroup] = {
+      scenarios: top3,
+      targetJobGroup: jobGroup,
+      votingOpen: false,
+      generatedAt: new Date().toISOString(),
+      source,
+    };
+
+    const existingMonthVotes = (oldDept.scenarioVotes || {})[key] as any;
+    const monthVotes = existingMonthVotes?.nurse !== undefined || existingMonthVotes?.assistant !== undefined
+      ? { ...existingMonthVotes }
+      : {};
+    // Scenarios changed, so votes for this group cannot be carried over.
+    monthVotes[jobGroup] = {};
+
+    // Programme A is always the canonical/default schedule shown on the dashboard.
+    // Only the regenerated group is replaced; the generator preserves the other group.
+    const programmeA = top3[0];
+    const defaultSchedule: MonthlySchedule = {
+      ...baseSchedule,
+      ...programmeA.schedule,
+      finalizedNurses: jobGroup === 'nurse' ? false : baseSchedule.finalizedNurses,
+      finalizedAssistants: jobGroup === 'assistant' ? false : baseSchedule.finalizedAssistants,
+      lockedRows: currentLocked,
+      dismissedWarnings: pruneDismissedWarnings(programmeA.schedule.warnings || [], baseSchedule.dismissedWarnings || []),
+    };
+
+    nextDb.deptData[deptId] = {
+      ...oldDept,
+      schedules: {
+        ...oldDept.schedules,
+        [key]: defaultSchedule,
+      },
+      activeScenarios: {
+        ...(oldDept.activeScenarios || {}),
+        [key]: monthScenarios,
+      },
+      scenarioVotes: {
+        ...(oldDept.scenarioVotes || {}),
+        [key]: monthVotes,
+      },
+    };
+    await saveDbState(nextDb);
+    setSchedule(defaultSchedule);
+    setDismissedWarnings(defaultSchedule.dismissedWarnings || []);
+    return top3;
+  };
+
   // Run the smart constraints CP-SAT mimic engine with loading animation
   // Migrated to Facade pattern (Phase 3) — delegates to runOptimizerFacade
   const handleRunOptimizer = async (jobGroup: JobGroup) => {
@@ -2031,16 +2135,6 @@ export default function Home() {
       return;
     }
 
-    // The committed department settings are the source of truth. Unsaved edits in
-    // the settings form must not silently change staffing rules during regeneration.
-    const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
-    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
-    const optimizerPersonnel = personnelRef.current;
-    const optimizerRequests = requestsRef.current;
-    const optimizerHolidays = holidaysRef.current;
-    const optimizerFirstDay = firstDayRef.current;
-    const optimizerDutyHours = monthlyDutyHoursRef.current;
-
     // -------------------------------------------------------------
     // Scenario Generation Phase (New Feature)
     // -------------------------------------------------------------
@@ -2050,90 +2144,36 @@ export default function Home() {
     await new Promise(resolve => setTimeout(resolve, 100));
 
     try {
-      const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
-      const { top3 } = generateAndScoreScenarios(
-        currentYear,
-        currentMonth,
-        optimizerPersonnel,
-        optimizerRequests,
-        optimizerSettings,
-        optimizerHolidays,
-        optimizerFirstDay === -1 ? undefined : optimizerFirstDay,
-        optimizerDutyHours,
+      const currentScheduleForGeneration =
+        optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`] ??
+        scheduleRef.current ?? {
+          year: currentYear,
+          month: currentMonth,
+          assignments: {},
+          shiftLeaders: {},
+          warnings: [],
+        };
+      const generated = await createScenarioBundle(
         jobGroup,
-        currentAssignmentsForMerge as any
+        currentScheduleForGeneration,
+        'regeneration',
+        false
       );
-
-      // Persist generated scenarios into the DB so all personnel can see and vote on them
-      const nextDb = getFreshDbCopy();
-      if (!nextDb.deptData) nextDb.deptData = {};
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
-
-      const monthKey = `${currentYear}_${currentMonth}`;
-      
-      // Requirement 1 & 2: جداسازی سناریوهای پرستاران و کمک‌بهیاران و عدم تاثیر متقابل
-      const existingMonthScenarios = (oldDept.activeScenarios || {})[monthKey] as any;
-      let baseScenariosForMonth: any = {};
-      if (existingMonthScenarios) {
-        if (existingMonthScenarios.scenarios && Array.isArray(existingMonthScenarios.scenarios)) {
-          const oldGroup = existingMonthScenarios.targetJobGroup;
-          if (oldGroup) baseScenariosForMonth[oldGroup] = existingMonthScenarios;
-        } else {
-          baseScenariosForMonth = { ...(existingMonthScenarios as any) };
-        }
-      }
-      baseScenariosForMonth[jobGroup] = {
-        scenarios: top3,
-        targetJobGroup: jobGroup
-      };
-
-      const existingMonthVotes = (oldDept.scenarioVotes || {})[monthKey] as any;
-      let baseVotesForMonth: any = {};
-      if (existingMonthVotes) {
-        const hasGroupKeys = existingMonthVotes.nurse !== undefined || existingMonthVotes.assistant !== undefined;
-        if (hasGroupKeys) {
-          baseVotesForMonth = { ...(existingMonthVotes as any) };
-        } else {
-          // قدیمی flat — برای گروه مقابل نگه نمی‌داریم چون گروه مشخص نیست
-          baseVotesForMonth = {};
-        }
-      }
-      baseVotesForMonth[jobGroup] = {}; // Reset votes only for this jobGroup
-
-      const updatedDept = {
-        ...oldDept,
-        activeScenarios: {
-          ...(oldDept.activeScenarios || {}),
-          [monthKey]: baseScenariosForMonth
-        },
-        scenarioVotes: {
-          ...(oldDept.scenarioVotes || {}),
-          [monthKey]: baseVotesForMonth
-        }
-      };
-
-      nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
-
+      setScenarios(generated);
+      if (jobGroup === 'nurse') setViewingScenarioIndexNurse(0);
+      else setViewingScenarioIndexAssistant(0);
       setSolvingTarget(null);
       return;
     } catch (err) {
       console.error(err);
-      alert('خطا در تولید سناریوها');
+      alert('خطا در تولید سه برنامه پیشنهادی');
       setSolvingTarget(null);
       return;
     }
   };
 
   const handleApplyScenario = async (selectedScenario: ScoredSchedule) => {
+    if (role !== 'headnurse' && role !== 'admin') return;
     setShowScenariosModal(false);
     
     // Requirement 1 & 2: تعیین گروه هدف بر اساس modalTargetJobGroup یا جستجو در سناریوهای فعال هر گروه
@@ -2338,6 +2378,18 @@ export default function Home() {
     // fallback: nurse
     if (!targetGroup) targetGroup = 'nurse';
 
+    const targetScenarioSet = allScenariosForMonth?.scenarios && Array.isArray(allScenariosForMonth.scenarios)
+      ? allScenariosForMonth
+      : allScenariosForMonth?.[targetGroup];
+    const scenarioExists = (targetScenarioSet?.scenarios || []).some((scenario: ScoredSchedule) => scenario.id === scenarioId);
+    if (!scenarioExists || rating < 0.5 || rating > 5) return;
+    // Staff may only vote for their own group and only after the head nurse has
+    // explicitly opened the vote. This check is repeated here (not only in the UI)
+    // so a stale tab cannot submit an early/late vote.
+    if (role === 'personnel') {
+      if (!selectedPersonnelUser || selectedPersonnelUser.jobGroup !== targetGroup || targetScenarioSet?.votingOpen !== true) return;
+    }
+
     const oldVotesAll = oldDept.scenarioVotes || {};
     const oldVotesMonth = oldVotesAll[monthKey] as any;
 
@@ -2398,6 +2450,34 @@ export default function Home() {
     };
 
     nextDb.deptData[deptId] = updatedDept;
+    await saveDbState(nextDb);
+  };
+
+  const handleToggleScenarioVoting = async (jobGroup: JobGroup) => {
+    if (role !== 'headnurse' && role !== 'admin') return;
+    const deptId = selectedDepartmentId || 'sepehr';
+    const nextDb = getFreshDbCopy();
+    const oldDept = nextDb.deptData?.[deptId];
+    if (!oldDept) return;
+
+    const key = `${currentYear}_${currentMonth}`;
+    const existingMonth = (oldDept.activeScenarios || {})[key] as any;
+    if (!existingMonth) return;
+    const monthScenarios = existingMonth.scenarios && Array.isArray(existingMonth.scenarios)
+      ? { [existingMonth.targetJobGroup || jobGroup]: existingMonth }
+      : { ...existingMonth };
+    const groupScenarios = monthScenarios[jobGroup];
+    if (!groupScenarios?.scenarios || groupScenarios.scenarios.length !== 3) return;
+
+    const nextVotingOpen = groupScenarios.votingOpen !== true;
+    monthScenarios[jobGroup] = { ...groupScenarios, votingOpen: nextVotingOpen };
+    nextDb.deptData[deptId] = {
+      ...oldDept,
+      activeScenarios: {
+        ...(oldDept.activeScenarios || {}),
+        [key]: monthScenarios,
+      },
+    };
     await saveDbState(nextDb);
   };
 
@@ -3070,43 +3150,26 @@ export default function Home() {
         setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         setEditingCell(null);
 
-        // ====== خروج از حالت نمایش سناریو پس از ویرایش دستی ======
-        // اگر سناریویی برای گروه شغلی این پرسنل فعال باشد، باید پاک شود
-        // تا displayedSchedule به برنامه اصلی برگردد و تغییرات قابل مشاهده باشند.
-        const editedPerson = currentPersonnel.find(pp => pp.id === pId);
+        // ویرایش دستی، برنامه‌ها را حذف نمی‌کند. سه برنامه تازه از همین وضعیت
+        // حل‌شده ساخته می‌شوند؛ سلول ویرایش‌شده در protectedCellsRef باقی می‌ماند و
+        // در A/B/C هرگز توسط سیستم جابه‌جا نخواهد شد. رای‌های قبلی هم با تغییر
+        // گزینه‌ها معتبر نیستند، بنابراین createScenarioBundle رای‌گیری را می‌بندد.
+        const editedPerson = currentPersonnel.find(person => person.id === pId);
         if (editedPerson) {
-          const jobGroup = editedPerson.jobGroup;
-          const nextDb2 = getFreshDbCopy();
-          const dept2 = nextDb2?.deptData?.[deptId];
-          const activeScenarios = dept2?.activeScenarios?.[monthKey];
-          if (activeScenarios) {
-            let needsUpdate = false;
-            let newActiveScenarios = { ...(activeScenarios as any) };
-
-            // حالت قدیمی (flat)
-            if (newActiveScenarios.scenarios && Array.isArray(newActiveScenarios.scenarios)) {
-              if (newActiveScenarios.targetJobGroup === jobGroup) {
-                delete (nextDb2.deptData[deptId] as any).activeScenarios[monthKey];
-                needsUpdate = true;
-              }
-            } else {
-              // حالت جدید (nurse/assistant)
-              if (newActiveScenarios[jobGroup]) {
-                delete newActiveScenarios[jobGroup];
-                if (Object.keys(newActiveScenarios).length === 0) {
-                  delete (nextDb2.deptData[deptId] as any).activeScenarios[monthKey];
-                } else {
-                  (nextDb2.deptData[deptId] as any).activeScenarios[monthKey] = newActiveScenarios;
-                }
-                needsUpdate = true;
-              }
-            }
-
-            if (needsUpdate) {
-              void saveDbState(nextDb2, { showBusyOverlay: false }).catch(error => {
-                console.error('Error clearing scenarios after manual edit:', error);
-              });
-            }
+          try {
+            const generated = await createScenarioBundle(
+              editedPerson.jobGroup,
+              finalSchedule,
+              'warning-reconciliation',
+              true
+            );
+            setScenarios(generated);
+            if (editedPerson.jobGroup === 'nurse') setViewingScenarioIndexNurse(0);
+            else setViewingScenarioIndexAssistant(0);
+          } catch (scenarioError) {
+            // The manual correction has already been saved; scenario generation can
+            // be retried without losing that correction.
+            console.error('Error generating scenarios after manual shift change:', scenarioError);
           }
         }
       }
@@ -4640,15 +4703,23 @@ export default function Home() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2.5">
-                          <h3 className="text-[15px] font-black text-indigo-900 tracking-tight">۳ لیست پیشنهادی</h3>
+                          <h3 className="text-[15px] font-black text-indigo-900 tracking-tight">برنامه‌های A، B و C</h3>
                           <span className="text-[11px] font-black bg-indigo-600 text-white border border-indigo-600 px-2.5 py-1 rounded-full shadow-sm">پرستاران</span>
                         </div>
                         <p className="text-[12px] text-indigo-800 font-bold mt-1">
-                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای شما' : 'برای انتخاب نهایی رای دهید'}
+                          {role === 'headnurse' || role === 'admin' ? (votingOpenNurse ? 'رای‌گیری پرسنل فعال است' : 'سناریوها فقط برای شما آماده‌اند؛ رای‌گیری هنوز شروع نشده است') : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {(role === 'headnurse' || role === 'admin') && (
+                        <button
+                          onClick={() => void handleToggleScenarioVoting('nurse')}
+                          className={`text-[10px] font-black px-3 py-2 rounded-xl border-2 shadow-sm transition-all ${votingOpenNurse ? 'bg-rose-600 text-white border-rose-600 hover:bg-rose-700' : 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'}`}
+                        >
+                          {votingOpenNurse ? 'پایان رای‌گیری' : 'شروع رای‌گیری'}
+                        </button>
+                      )}
                       {(role === 'headnurse' || role === 'admin') && (
                         <button
                           onClick={() => handleCancelVoting('nurse')}
@@ -4679,7 +4750,7 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-[12px] font-black bg-white border-2 border-indigo-100 rounded-xl px-4 py-2.5 shadow-sm">
-                    <span className="text-indigo-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>{currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="text-indigo-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>برنامه {currentScenarioNurse.scenarioCode || (currentScenarioNurse.type === 'MIXED' ? 'A' : currentScenarioNurse.type === 'REQUESTS' ? 'B' : 'C')} · {currentScenarioNurse.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioNurse.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
                     <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioNurse.totalScore.toFixed(0)}/100</span>
                   </div>
                 </div>
@@ -4695,15 +4766,23 @@ export default function Home() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2.5">
-                          <h3 className="text-[15px] font-black text-teal-900 tracking-tight">۳ لیست پیشنهادی</h3>
+                          <h3 className="text-[15px] font-black text-teal-900 tracking-tight">برنامه‌های A، B و C</h3>
                           <span className="text-[11px] font-black bg-teal-600 text-white border border-teal-600 px-2.5 py-1 rounded-full shadow-sm">کمک‌بهیاران</span>
                         </div>
                         <p className="text-[12px] text-teal-800 font-bold mt-1">
-                          {role === 'headnurse' || role === 'admin' ? 'در انتظار رای شما' : 'برای انتخاب نهایی رای دهید'}
+                          {role === 'headnurse' || role === 'admin' ? (votingOpenAssistant ? 'رای‌گیری پرسنل فعال است' : 'سناریوها فقط برای شما آماده‌اند؛ رای‌گیری هنوز شروع نشده است') : 'برای انتخاب نهایی رای دهید'}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      {(role === 'headnurse' || role === 'admin') && (
+                        <button
+                          onClick={() => void handleToggleScenarioVoting('assistant')}
+                          className={`text-[10px] font-black px-3 py-2 rounded-xl border-2 shadow-sm transition-all ${votingOpenAssistant ? 'bg-rose-600 text-white border-rose-600 hover:bg-rose-700' : 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'}`}
+                        >
+                          {votingOpenAssistant ? 'پایان رای‌گیری' : 'شروع رای‌گیری'}
+                        </button>
+                      )}
                       {(role === 'headnurse' || role === 'admin') && (
                         <button
                           onClick={() => handleCancelVoting('assistant')}
@@ -4734,7 +4813,7 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-[12px] font-black bg-white border-2 border-teal-100 rounded-xl px-4 py-2.5 shadow-sm">
-                    <span className="text-teal-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>{currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
+                    <span className="text-teal-900 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>برنامه {currentScenarioAssistant.scenarioCode || (currentScenarioAssistant.type === 'MIXED' ? 'A' : currentScenarioAssistant.type === 'REQUESTS' ? 'B' : 'C')} · {currentScenarioAssistant.type === 'FAIRNESS' ? 'عدالت‌محور' : currentScenarioAssistant.type === 'REQUESTS' ? 'درخواست‌محور' : 'تلفیقی'}</span>
                     <span className="font-mono text-teal-700 bg-teal-50 border border-teal-100 px-2.5 py-1 rounded-lg">امتیاز {currentScenarioAssistant.totalScore.toFixed(0)}/100</span>
                   </div>
                 </div>
@@ -6642,8 +6721,12 @@ export default function Home() {
         currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
         userRole={role}
         targetJobGroup={modalTargetJobGroup}
+        votingOpen={modalTargetJobGroup === 'nurse' ? votingOpenNurse : modalTargetJobGroup === 'assistant' ? votingOpenAssistant : false}
         onApply={handleApplyScenario}
         onVote={handleVoteScenario}
+        onToggleVoting={() => {
+          if (modalTargetJobGroup) void handleToggleScenarioVoting(modalTargetJobGroup);
+        }}
         onClose={() => { setShowScenariosModal(false); setModalTargetJobGroup(null); }}
       />
 
