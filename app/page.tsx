@@ -6617,6 +6617,7 @@ export default function Home() {
               year={currentYear}
               month={currentMonth}
               departmentName={departments.find(d => d.id === selectedDepartmentId)?.name}
+              dutyHours={effectiveDutyHours}
               jobGroupFilter={printJobGroup}
             />
           </div>
