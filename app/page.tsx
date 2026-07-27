@@ -341,6 +341,8 @@ export default function Home() {
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
   const [scenarios, setScenarios] = useState<ScoredSchedule[] | null>(null);
+  const [top4Scenarios, setTop4Scenarios] = useState<ScoredSchedule[] | null>(null);
+  const [previewBestScenario, setPreviewBestScenario] = useState<ScoredSchedule | null>(null);
   const [showScenariosModal, setShowScenariosModal] = useState<boolean>(false);
   const [pendingJobGroupForScenarios, setPendingJobGroupForScenarios] = useState<JobGroup | null>(null);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean, generalNurse: boolean, generalAssistant: boolean, generalOther: boolean}>({general: true, personnel: true, generalNurse: true, generalAssistant: true, generalOther: true});
@@ -469,8 +471,13 @@ export default function Home() {
   // برای سازگاری: اگر هر دو فعال هستند، اولویت با پرستار برای نمایش در جدول (یا می‌توان جدول را اصلی نمایش داد)
   const currentScenario = currentScenarioNurse || currentScenarioAssistant || null;
   // Requirement 2: در زمان رای‌گیری، برنامه اصلی یا سناریوی در حال مشاهده نمایش داده می‌شود
-  // اگر هر دو گروه همزمان در رای‌گیری باشند، assignments هر دو را ترکیب می‌کنیم تا جدول یکپارچه بماند.
+  // + پیش‌نمایش بهترین سناریو بعد از بازتولید (جدید)
   const displayedSchedule = React.useMemo(() => {
+    // اولویت ۱: پیش‌نمایش بهترین سناریو (بعد از بازتولید)
+    if (previewBestScenario && !isVotingModeNurse && !isVotingModeAssistant) {
+      return previewBestScenario.schedule;
+    }
+
     if (!schedule && !currentScenarioNurse && !currentScenarioAssistant) return schedule;
     if (isVotingModeNurse && !isVotingModeAssistant && currentScenarioNurse) {
       return currentScenarioNurse.schedule;
@@ -504,7 +511,7 @@ export default function Home() {
       } as any;
     }
     return schedule;
-  }, [schedule, personnel, isVotingModeNurse, isVotingModeAssistant, currentScenarioNurse, currentScenarioAssistant]);
+  }, [schedule, personnel, isVotingModeNurse, isVotingModeAssistant, currentScenarioNurse, currentScenarioAssistant, previewBestScenario]);
 
   // Compiled reports from current schedule dynamically and reactively
   const reports = React.useMemo(() => {
@@ -2051,7 +2058,7 @@ export default function Home() {
 
     try {
       const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
-      const { top4: top3 } = generateAndScoreScenarios(
+      const { top4 } = generateAndScoreScenarios(
         currentYear,
         currentMonth,
         optimizerPersonnel,
@@ -2063,6 +2070,14 @@ export default function Home() {
         jobGroup,
         currentAssignmentsForMerge as any
       );
+
+      // Store top4 in local state for immediate modal display (new 4-scenario system)
+      setTop4Scenarios(top4);
+
+      // نمایش خودکار بهترین سناریو روی داشبورد اصلی (پیش‌نمایش)
+      if (top4.length > 0) {
+        setPreviewBestScenario(top4[0]);
+      }
 
       // Persist generated scenarios into the DB so all personnel can see and vote on them
       const nextDb = getFreshDbCopy();
@@ -2091,7 +2106,7 @@ export default function Home() {
         }
       }
       baseScenariosForMonth[jobGroup] = {
-        scenarios: top3,
+        scenarios: top4,
         targetJobGroup: jobGroup
       };
 
@@ -2135,6 +2150,7 @@ export default function Home() {
 
   const handleApplyScenario = async (selectedScenario: ScoredSchedule) => {
     setShowScenariosModal(false);
+    setPreviewBestScenario(null); // پاک کردن پیش‌نمایش بعد از انتخاب نهایی
     
     // Requirement 1 & 2: تعیین گروه هدف بر اساس modalTargetJobGroup یا جستجو در سناریوهای فعال هر گروه
     let jobGroup: JobGroup | null = modalTargetJobGroup || pendingJobGroupForScenarios;
@@ -6628,9 +6644,11 @@ export default function Home() {
       <ScenariosModal
         isOpen={showScenariosModal}
         scenarios={
-          modalTargetJobGroup === 'nurse' ? (normalizedActiveScenarios.nurse?.scenarios || scenarios) :
-          modalTargetJobGroup === 'assistant' ? (normalizedActiveScenarios.assistant?.scenarios || scenarios) :
-          (activeScenariosData?.scenarios || normalizedActiveScenarios.nurse?.scenarios || normalizedActiveScenarios.assistant?.scenarios || scenarios)
+          modalTargetJobGroup === 'nurse' 
+            ? (normalizedActiveScenarios.nurse?.scenarios || top4Scenarios || []) 
+            : modalTargetJobGroup === 'assistant' 
+              ? (normalizedActiveScenarios.assistant?.scenarios || top4Scenarios || []) 
+              : (normalizedActiveScenarios.nurse?.scenarios || normalizedActiveScenarios.assistant?.scenarios || top4Scenarios || [])
         }
         votes={
           modalTargetJobGroup === 'nurse' ? normalizedScenarioVotes.nurse :
