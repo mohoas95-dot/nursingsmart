@@ -57,11 +57,77 @@ interface ScenarioContext {
 
 const MIN_DIFFERENCE_PERCENT = 20;
 const MAX_DIFFERENCE_PERCENT = 30;
-const MAX_LOCAL_SEARCH_STEPS = 18;
-const MAX_OPERATIONS_PER_PASS = 48;
+const TARGET_DIFFERENCE_PERCENT = 25;
+const MAX_LOCAL_SEARCH_STEPS = 32;
+const MAX_DIVERSITY_REFINEMENT_STEPS = 42;
+const MAX_OPERATIONS_PER_PASS = 96;
+const MAX_SEED_VARIANTS_PER_SCENARIO = 12;
+const MAX_ACCEPTABLE_SCORE_DROP = 12;
 
 const uniqueKeyForOperation = (operation: ScenarioOperation) => JSON.stringify(operation);
 const scenarioOrder: ScenarioType[] = ['REQUESTS', 'FAIRNESS', 'MIXED'];
+
+function getAssignedShift(
+  schedule: MonthlySchedule,
+  personnelId: string,
+  day: number
+): ShiftType {
+  return schedule.assignments[personnelId]?.[day] || 'OFF';
+}
+
+function differenceDistanceFromWindow(diff: number): number {
+  if (diff < MIN_DIFFERENCE_PERCENT) return MIN_DIFFERENCE_PERCENT - diff;
+  if (diff > MAX_DIFFERENCE_PERCENT) return diff - MAX_DIFFERENCE_PERCENT;
+  return 0;
+}
+
+function differenceFitness(diff: number): number {
+  if (diff >= MIN_DIFFERENCE_PERCENT && diff <= MAX_DIFFERENCE_PERCENT) {
+    return 120 - (Math.abs(TARGET_DIFFERENCE_PERCENT - diff) * 5);
+  }
+  if (diff < MIN_DIFFERENCE_PERCENT) {
+    return -((MIN_DIFFERENCE_PERCENT - diff) * 18);
+  }
+  return -((diff - MAX_DIFFERENCE_PERCENT) * 12);
+}
+
+function getCandidateDifferences(
+  candidate: ScoredSchedule,
+  accepted: readonly ScoredSchedule[],
+  context: ScenarioContext
+): number[] {
+  return accepted.map(item =>
+    calculateScenarioDifferencePercent(item.schedule, candidate.schedule, context.targetPersonnelIds, context.totalDays)
+  );
+}
+
+function candidateObjective(
+  candidate: ScoredSchedule,
+  accepted: readonly ScoredSchedule[],
+  context: ScenarioContext,
+  baselineScore: number
+): number {
+  const scoreDropPenalty = Math.max(0, baselineScore - candidate.totalScore) * 3.4;
+  const hardPenalty = candidate.relevantHardWarningCount * 18;
+  if (accepted.length === 0) {
+    return candidate.totalScore - scoreDropPenalty - hardPenalty;
+  }
+
+  const differences = getCandidateDifferences(candidate, accepted, context);
+  const minDiffFitness = Math.min(...differences.map(differenceFitness));
+  const avgDiffFitness = differences.reduce((sum, diff) => sum + differenceFitness(diff), 0) / differences.length;
+  return (candidate.totalScore * 0.45) + minDiffFitness + (avgDiffFitness * 0.35) - scoreDropPenalty - hardPenalty;
+}
+
+function mergedTargetVariant(
+  targetVariant: readonly Personnel[],
+  fullList: readonly Personnel[],
+  targetJobGroup?: JobGroup
+): Personnel[] {
+  if (!targetJobGroup) return [...targetVariant];
+  const preserved = fullList.filter(person => person.jobGroup !== targetJobGroup);
+  return [...targetVariant, ...preserved];
+}
 
 function cloneAssignments(
   assignments: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>
@@ -242,7 +308,6 @@ function reorderPersonnelForScenario(
   }
 
   const targetPeople = personnelList.filter(person => !context.targetJobGroup || person.jobGroup === context.targetJobGroup);
-  const preservedPeople = personnelList.filter(person => context.targetJobGroup && person.jobGroup !== context.targetJobGroup);
 
   const sortedTarget = [...targetPeople].sort((left, right) => {
     const leftRequestLoad = requestLoadByPerson.get(left.id) || 0;
@@ -272,11 +337,51 @@ function reorderPersonnelForScenario(
     scenarioType === 'REQUESTS' ? 1 : scenarioType === 'FAIRNESS' ? Math.floor(sortedTarget.length / 3) : Math.floor(sortedTarget.length / 2)
   );
 
-  if (!context.targetJobGroup) {
-    return rotatedTarget;
+  return mergedTargetVariant(rotatedTarget, personnelList, context.targetJobGroup);
+}
+
+function buildSeedPersonnelVariants(
+  personnelList: readonly Personnel[],
+  scenarioType: ScenarioType,
+  context: ScenarioContext
+): Personnel[][] {
+  const targetPeople = personnelList.filter(person => !context.targetJobGroup || person.jobGroup === context.targetJobGroup);
+  if (targetPeople.length === 0) return [[...personnelList]];
+
+  const baseVariant = reorderPersonnelForScenario(personnelList, scenarioType, context)
+    .filter(person => !context.targetJobGroup || person.jobGroup === context.targetJobGroup);
+
+  const offsets = Array.from(new Set([
+    0,
+    1,
+    Math.floor(targetPeople.length / 4),
+    Math.floor(targetPeople.length / 3),
+    Math.floor(targetPeople.length / 2),
+    Math.max(0, targetPeople.length - 1),
+  ].filter(offset => offset >= 0 && offset < targetPeople.length)));
+
+  const variants: Personnel[][] = [];
+  const seen = new Set<string>();
+  const pushVariant = (variant: readonly Personnel[]) => {
+    const key = variant.map(person => person.id).join('|');
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    variants.push(mergedTargetVariant(variant, personnelList, context.targetJobGroup));
+  };
+
+  for (const offset of offsets) {
+    pushVariant(rotateArray(baseVariant, offset));
   }
 
-  return [...rotatedTarget, ...preservedPeople];
+  pushVariant([...baseVariant].reverse());
+  pushVariant(baseVariant.filter((_, index) => index % 2 === 0).concat(baseVariant.filter((_, index) => index % 2 === 1)));
+  pushVariant(baseVariant.filter((_, index) => index % 2 === 1).concat(baseVariant.filter((_, index) => index % 2 === 0)));
+
+  const byOriginalOrder = [...targetPeople].sort((left, right) => getOriginalOrder(left) - getOriginalOrder(right));
+  pushVariant(byOriginalOrder);
+  pushVariant([...byOriginalOrder].reverse());
+
+  return variants.slice(0, MAX_SEED_VARIANTS_PER_SCENARIO);
 }
 
 function assignmentMatchesRequest(shift: ShiftType, request: ShiftRequest, expectedPattern?: string): boolean {
@@ -483,13 +588,97 @@ function generateFairnessFocusedOperations(
   return operations.slice(0, MAX_OPERATIONS_PER_PASS);
 }
 
+function generateDiversityFocusedOperations(
+  scored: ScoredSchedule,
+  accepted: readonly ScoredSchedule[],
+  context: ScenarioContext
+): ScenarioOperation[] {
+  if (accepted.length === 0) return [];
+
+  const operations: ScenarioOperation[] = [];
+  const seen = new Set<string>();
+  const overlapCells: Array<{ personnelId: string; day: number; shift: ShiftType; overlapCount: number }> = [];
+
+  for (const personnelId of context.targetPersonnelIds) {
+    for (let day = 1; day <= context.totalDays; day++) {
+      const shift = getAssignedShift(scored.schedule, personnelId, day);
+      if (shift.startsWith('L')) continue;
+      const overlapCount = accepted.reduce((count, scenario) => {
+        return count + (getAssignedShift(scenario.schedule, personnelId, day) === shift ? 1 : 0);
+      }, 0);
+      if (overlapCount > 0) {
+        overlapCells.push({ personnelId, day, shift, overlapCount });
+      }
+    }
+  }
+
+  overlapCells.sort((left, right) => right.overlapCount - left.overlapCount || left.day - right.day);
+
+  const addOperation = (operation: ScenarioOperation) => {
+    const key = uniqueKeyForOperation(operation);
+    if (seen.has(key)) return;
+    seen.add(key);
+    operations.push(operation);
+  };
+
+  for (const cell of overlapCells.slice(0, Math.min(overlapCells.length, MAX_OPERATIONS_PER_PASS))) {
+    const dayCandidates = context.targetPersonnelIds
+      .filter(otherId => otherId !== cell.personnelId)
+      .map(otherId => ({
+        personnelId: otherId,
+        shift: getAssignedShift(scored.schedule, otherId, cell.day),
+        overlapCount: accepted.reduce((count, scenario) => {
+          return count + (getAssignedShift(scenario.schedule, otherId, cell.day) === getAssignedShift(scored.schedule, otherId, cell.day) ? 1 : 0);
+        }, 0),
+      }))
+      .filter(candidate => !candidate.shift.startsWith('L') && candidate.shift !== cell.shift)
+      .sort((left, right) => right.overlapCount - left.overlapCount);
+
+    for (const candidate of dayCandidates.slice(0, 4)) {
+      addOperation({ kind: 'swap', day: cell.day, leftId: cell.personnelId, rightId: candidate.personnelId });
+
+      const leftShift = cell.shift;
+      const rightShift = candidate.shift;
+      if (leftShift === 'OFF' && rightShift !== 'OFF') {
+        addOperation({ kind: 'move', day: cell.day, fromId: candidate.personnelId, toId: cell.personnelId });
+      }
+      if (rightShift === 'OFF' && leftShift !== 'OFF') {
+        addOperation({ kind: 'move', day: cell.day, fromId: cell.personnelId, toId: candidate.personnelId });
+      }
+
+      if (cell.day < context.totalDays) {
+        const nextLeft = getAssignedShift(scored.schedule, cell.personnelId, cell.day + 1);
+        const nextRight = getAssignedShift(scored.schedule, candidate.personnelId, cell.day + 1);
+        if (!nextLeft.startsWith('L') && !nextRight.startsWith('L') && (nextLeft !== nextRight || leftShift !== rightShift)) {
+          addOperation({ kind: 'multiSwap', days: [cell.day, cell.day + 1], leftId: cell.personnelId, rightId: candidate.personnelId });
+        }
+      }
+    }
+
+    const chainCandidates = [cell.personnelId, ...dayCandidates.map(candidate => candidate.personnelId)]
+      .filter((personnelId, index, ids) => ids.indexOf(personnelId) === index)
+      .slice(0, 4);
+    if (chainCandidates.length >= 3) {
+      addOperation({ kind: 'chainSwap', day: cell.day, cycle: [chainCandidates[0], chainCandidates[1], chainCandidates[2]] });
+    }
+
+    if (operations.length >= MAX_OPERATIONS_PER_PASS) {
+      break;
+    }
+  }
+
+  return operations.slice(0, MAX_OPERATIONS_PER_PASS);
+}
+
 function generateOperationsForScenario(
   scored: ScoredSchedule,
   scenarioType: ScenarioType,
+  accepted: readonly ScoredSchedule[],
   context: ScenarioContext
 ): ScenarioOperation[] {
   const requestOps = generateRequestFocusedOperations(scored, context);
   const fairnessOps = generateFairnessFocusedOperations(scored, context);
+  const diversityOps = generateDiversityFocusedOperations(scored, accepted, context);
   const merged: ScenarioOperation[] = [];
   const seen = new Set<string>();
 
@@ -504,14 +693,17 @@ function generateOperationsForScenario(
   };
 
   if (scenarioType === 'REQUESTS') {
+    addAll(diversityOps.slice(0, 28));
     addAll(requestOps);
-    addAll(fairnessOps.slice(0, 12));
-  } else if (scenarioType === 'FAIRNESS') {
-    addAll(fairnessOps);
-    addAll(requestOps.slice(0, 12));
-  } else {
-    addAll(requestOps.slice(0, 18));
     addAll(fairnessOps.slice(0, 18));
+  } else if (scenarioType === 'FAIRNESS') {
+    addAll(diversityOps.slice(0, 28));
+    addAll(fairnessOps);
+    addAll(requestOps.slice(0, 18));
+  } else {
+    addAll(diversityOps.slice(0, 36));
+    addAll(requestOps.slice(0, 24));
+    addAll(fairnessOps.slice(0, 24));
   }
 
   return merged.slice(0, MAX_OPERATIONS_PER_PASS);
@@ -599,9 +791,9 @@ function localSearchScenario(
   const startingScore = initial.totalScore;
 
   for (let step = 0; step < MAX_LOCAL_SEARCH_STEPS; step++) {
-    const operations = generateOperationsForScenario(current, scenarioType, context);
+    const operations = generateOperationsForScenario(current, scenarioType, accepted, context);
     let bestCandidate: ScoredSchedule | null = null;
-    let bestValue = current.totalScore + differenceBonus(current, accepted, context);
+    let bestValue = candidateObjective(current, accepted, context, startingScore);
 
     for (const operation of operations) {
       const updatedSchedule = applyScenarioOperation(current.schedule, operation, context);
@@ -610,9 +802,9 @@ function localSearchScenario(
       if (!isHardWarningCountAcceptable(updatedHardWarningCount)) continue;
 
       const candidate = evaluateScenario(updatedSchedule, scenarioType, initial.id, context);
-      if (candidate.totalScore + 8 < startingScore) continue;
+      if ((startingScore - candidate.totalScore) > MAX_ACCEPTABLE_SCORE_DROP) continue;
 
-      const candidateValue = candidate.totalScore + differenceBonus(candidate, accepted, context);
+      const candidateValue = candidateObjective(candidate, accepted, context, startingScore);
       if (candidateValue > bestValue + 0.1) {
         bestCandidate = candidate;
         bestValue = candidateValue;
@@ -621,6 +813,61 @@ function localSearchScenario(
 
     if (!bestCandidate) break;
     current = bestCandidate;
+  }
+
+  return current;
+}
+
+function refineScenarioForDifferenceWindow(
+  initial: ScoredSchedule,
+  scenarioType: ScenarioType,
+  accepted: readonly ScoredSchedule[],
+  context: ScenarioContext
+): ScoredSchedule {
+  if (accepted.length === 0) return initial;
+
+  let current = initial;
+  const baselineScore = initial.totalScore;
+  let bestDistance = Math.max(...getCandidateDifferences(current, accepted, context).map(differenceDistanceFromWindow));
+
+  for (let step = 0; step < MAX_DIVERSITY_REFINEMENT_STEPS; step++) {
+    const operations = [
+      ...generateDiversityFocusedOperations(current, accepted, context),
+      ...generateOperationsForScenario(current, scenarioType, accepted, context),
+    ];
+
+    let bestCandidate: ScoredSchedule | null = null;
+    let bestValue = candidateObjective(current, accepted, context, baselineScore);
+    let bestCandidateDistance = bestDistance;
+
+    for (const operation of operations) {
+      const updatedSchedule = applyScenarioOperation(current.schedule, operation, context);
+      if (!updatedSchedule) continue;
+      const updatedHardWarningCount = countHardConstraintWarnings(updatedSchedule.warnings);
+      if (!isHardWarningCountAcceptable(updatedHardWarningCount)) continue;
+
+      const candidate = evaluateScenario(updatedSchedule, scenarioType, initial.id, context);
+      if ((baselineScore - candidate.totalScore) > MAX_ACCEPTABLE_SCORE_DROP) continue;
+
+      const candidateDifferences = getCandidateDifferences(candidate, accepted, context);
+      const candidateDistance = Math.max(...candidateDifferences.map(differenceDistanceFromWindow));
+      const candidateValue = candidateObjective(candidate, accepted, context, baselineScore);
+      const distanceImproved = candidateDistance < bestCandidateDistance - 0.05;
+      const valueImproved = candidateValue > bestValue + 0.1;
+
+      if (distanceImproved || (candidateDistance <= bestCandidateDistance + 0.05 && valueImproved)) {
+        bestCandidate = candidate;
+        bestValue = candidateValue;
+        bestCandidateDistance = candidateDistance;
+      }
+    }
+
+    if (!bestCandidate) break;
+    current = bestCandidate;
+    bestDistance = bestCandidateDistance;
+    if (bestDistance === 0 && differencesAreAcceptable(current, accepted, context).ok) {
+      break;
+    }
   }
 
   return current;
@@ -674,6 +921,49 @@ function annotatePairwiseDifferences(
   }));
 }
 
+function chooseScenarioCandidate(
+  scenarioType: ScenarioType,
+  scenarioId: number,
+  accepted: readonly ScoredSchedule[],
+  context: ScenarioContext
+): { candidate: ScoredSchedule; attempts: number; foundInRange: boolean } {
+  const seedVariants = buildSeedPersonnelVariants(context.personnelList, scenarioType, context);
+  let attempts = 0;
+  let bestCandidate: ScoredSchedule | null = null;
+  let bestValue = Number.NEGATIVE_INFINITY;
+  let bestInRangeCandidate: ScoredSchedule | null = null;
+  let bestInRangeValue = Number.NEGATIVE_INFINITY;
+
+  for (const personnelSeed of seedVariants) {
+    attempts += 1;
+    const initial = initialScoredSchedule(scenarioType, scenarioId, context, personnelSeed);
+    const locallyOptimized = localSearchScenario(initial, scenarioType, accepted, context);
+    const refined = refineScenarioForDifferenceWindow(locallyOptimized, scenarioType, accepted, context);
+
+    const hardWarningCount = countHardConstraintWarnings(refined.schedule.warnings);
+    if (!isHardWarningCountAcceptable(hardWarningCount)) {
+      continue;
+    }
+
+    const value = candidateObjective(refined, accepted, context, initial.totalScore);
+    if (value > bestValue) {
+      bestCandidate = refined;
+      bestValue = value;
+    }
+
+    if (differencesAreAcceptable(refined, accepted, context).ok && value > bestInRangeValue) {
+      bestInRangeCandidate = refined;
+      bestInRangeValue = value;
+    }
+  }
+
+  return {
+    candidate: bestInRangeCandidate || bestCandidate || initialScoredSchedule(scenarioType, scenarioId, context, seedVariants[0] || context.personnelList),
+    attempts,
+    foundInRange: !!bestInRangeCandidate,
+  };
+}
+
 export function generateAndScoreScenarios(
   year: number,
   month: number,
@@ -710,34 +1000,36 @@ export function generateAndScoreScenarios(
 
   let scenarioId = 1;
   for (const scenarioType of scenarioOrder) {
-    const seedPersonnel = reorderPersonnelForScenario(personnelList, scenarioType, context);
-    const initial = initialScoredSchedule(scenarioType, scenarioId++, context, seedPersonnel);
-    const refined = localSearchScenario(initial, scenarioType, accepted, context);
-    explored.push(refined);
+    const { candidate, attempts, foundInRange } = chooseScenarioCandidate(scenarioType, scenarioId++, accepted, context);
+    explored.push(candidate);
 
-    const refinedHardWarningCount = countHardConstraintWarnings(refined.schedule.warnings);
-    if (!isHardWarningCountAcceptable(refinedHardWarningCount)) {
-      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} کنار گذاشته شد چون ${refinedHardWarningCount} هشدار سخت دارد و سقف مجاز برای ساخت سناریو ${MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO} مورد است.`;
+    const hardWarningCount = countHardConstraintWarnings(candidate.schedule.warnings);
+    if (!isHardWarningCountAcceptable(hardWarningCount)) {
+      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} تلاش، ${hardWarningCount} هشدار سخت داشت و چون از سقف مجاز ${MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO} مورد عبور کرد کنار گذاشته شد.`;
       generationLog.push(reason);
       console.warn('[scenario-generator]', reason);
       continue;
     }
 
-    const differenceCheck = differencesAreAcceptable(refined, accepted, context);
+    const differenceCheck = differencesAreAcceptable(candidate, accepted, context);
     if (!differenceCheck.ok) {
-      const reason = differenceCheck.message || `سناریوی ${SCENARIO_KEYS[scenarioType]} به‌اندازه کافی متمایز نبود.`;
+      const differences = getCandidateDifferences(candidate, accepted, context);
+      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} با وجود ${attempts} دور تلاش و اعمال swap / move / multi-swap / chain-swap، هنوز به بازه اختلاف ${MIN_DIFFERENCE_PERCENT} تا ${MAX_DIFFERENCE_PERCENT} درصد نرسید. اختلاف‌های فعلی: ${differences.map(diff => `${diff.toFixed(1)}٪`).join(' ، ')}.`;
       generationLog.push(reason);
       console.warn('[scenario-generator]', reason);
       continue;
     }
 
-    if (refinedHardWarningCount > 0) {
-      const note = `سناریوی ${SCENARIO_KEYS[scenarioType]} با ${refinedHardWarningCount} هشدار سخت پذیرفته شد و برای بررسی در کرکره «هشدارهای سخت» نمایش داده می‌شود.`;
+    if (hardWarningCount > 0) {
+      const note = `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} دور تلاش با ${hardWarningCount} هشدار سخت پذیرفته شد و همان هشدارها در فهرست هشدارهای برنامه نمایش داده می‌شوند.`;
       generationLog.push(note);
       console.warn('[scenario-generator]', note);
+    } else if (foundInRange) {
+      const note = `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} دور تلاش با اختلاف هدف‌گذاری‌شده ${MIN_DIFFERENCE_PERCENT} تا ${MAX_DIFFERENCE_PERCENT} درصد ساخته شد.`;
+      generationLog.push(note);
     }
 
-    accepted.push(refined);
+    accepted.push(candidate);
   }
 
   if (accepted.length < 3) {
