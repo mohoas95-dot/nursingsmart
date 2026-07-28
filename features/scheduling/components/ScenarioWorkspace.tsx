@@ -35,7 +35,6 @@ interface ScenarioWorkspaceProps {
   currentUserId: string | null;
   votes: Record<number, Record<string, number>>;
   onSelectScenario: (scenarioId: number | null) => void;
-  onOpenWarnings: (scenario: ScoredSchedule) => void;
   onStartComparison: () => void;
   onToggleVoting: () => void;
   onFinalize: (scenario: ScoredSchedule) => void;
@@ -82,8 +81,9 @@ const groupMeta = {
     button: 'bg-indigo-600 hover:bg-indigo-700',
     buttonSoft: 'border-indigo-200 text-indigo-700 hover:bg-indigo-50',
     scoreRing: 'ring-indigo-100',
-    scoreBar: 'bg-indigo-500',
-    stageDot: 'bg-indigo-500',
+    stageActive: 'bg-indigo-600 text-white border-indigo-600',
+    stageDone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    stagePending: 'bg-white text-slate-400 border-slate-200',
   },
   assistant: {
     label: 'کمک‌بهیاران',
@@ -95,8 +95,9 @@ const groupMeta = {
     button: 'bg-emerald-600 hover:bg-emerald-700',
     buttonSoft: 'border-emerald-200 text-emerald-700 hover:bg-emerald-50',
     scoreRing: 'ring-emerald-100',
-    scoreBar: 'bg-emerald-500',
-    stageDot: 'bg-emerald-500',
+    stageActive: 'bg-emerald-600 text-white border-emerald-600',
+    stageDone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    stagePending: 'bg-white text-slate-400 border-slate-200',
   },
 } as const;
 
@@ -117,13 +118,35 @@ function scoreBarColor(score: number) {
   return 'bg-rose-500';
 }
 
-function stageState(workflow: ScenarioWorkflowView, warningsResolved: boolean) {
-  return [
-    { label: 'تولید برنامه‌ها', active: workflow.scenarios.length > 0 },
-    { label: 'رفع هشدارها', active: warningsResolved },
-    { label: 'امتیازدهی سیستم', active: !!workflow.comparisonStartedAt },
-    { label: 'نظرسنجی پرسنل', active: !!workflow.votingOpen },
+function buildStages(workflow: ScenarioWorkflowView, warningsResolved: boolean) {
+  const currentStage = workflow.votingOpen
+    ? 4
+    : workflow.comparisonStartedAt
+      ? 3
+      : warningsResolved
+        ? 2
+        : 2;
+
+  const stageLabels = [
+    'تولید برنامه‌ها',
+    warningsResolved && !workflow.comparisonStartedAt ? 'رفع هشدارها تکمیل شده' : 'رفع هشدارها',
+    workflow.comparisonStartedAt ? 'امتیازدهی سیستم فعال' : 'امتیازدهی سیستم',
+    workflow.votingOpen ? 'نظرسنجی پرسنل فعال' : 'نظرسنجی پرسنل',
   ];
+
+  return stageLabels.map((label, index) => {
+    const stageNumber = index + 1;
+    let state: 'done' | 'active' | 'pending' = 'pending';
+    if (stageNumber === 1 && workflow.scenarios.length > 0) state = 'done';
+    if (stageNumber === 2) state = warningsResolved ? 'done' : 'active';
+    if (stageNumber === 3) state = workflow.comparisonStartedAt ? 'active' : (warningsResolved ? 'pending' : 'pending');
+    if (stageNumber === 4) state = workflow.votingOpen ? 'active' : 'pending';
+
+    if (workflow.comparisonStartedAt && stageNumber < 3) state = 'done';
+    if (workflow.votingOpen && stageNumber < 4) state = 'done';
+
+    return { number: stageNumber, label, state };
+  });
 }
 
 export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
@@ -136,7 +159,6 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
     currentUserId,
     votes,
     onSelectScenario,
-    onOpenWarnings,
     onStartComparison,
     onToggleVoting,
     onFinalize,
@@ -146,72 +168,47 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
   const meta = groupMeta[group];
   const warningsResolved = workflow.scenarios.length > 0 && workflow.scenarios.every((scenario) => scenario.relevantWarningCount === 0);
   const ranking = rankScenarios(workflow.scenarios);
-  const stages = stageState(workflow, warningsResolved);
-  const validProgramsLabel = `${workflow.scenarios.length} برنامه معتبر`;
+  const stages = buildStages(workflow, warningsResolved);
+  const currentStageLabel = workflow.votingOpen
+    ? 'نظرسنجی پرسنل فعال است'
+    : workflow.comparisonStartedAt
+      ? 'امتیازدهی سیستم فعال است'
+      : warningsResolved
+        ? 'آماده شروع امتیازدهی سیستم'
+        : 'در مرحله رفع هشدارها';
 
   return (
     <section className={`bg-gradient-to-r ${meta.surface} border ${meta.border} rounded-3xl shadow-sm overflow-hidden print:hidden`} dir="rtl">
       <div className="px-5 py-5 border-b border-slate-200/80 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-        <div className="space-y-3 flex-1">
+        <div className="space-y-4 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`text-[11px] font-black px-3 py-1 rounded-full ${meta.badge}`}>{meta.label}</span>
             <h3 className="text-base font-black text-slate-900">کارتابل مقایسه برنامه‌های پیشنهادی</h3>
-            {workflow.comparisonStartedAt && (
-              <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${meta.softBadge}`}>
-                امتیازدهی سیستم فعال است
-              </span>
-            )}
-            {workflow.votingOpen && (
-              <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-700">
-                نظرسنجی پرسنل باز است
-              </span>
-            )}
+            <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${meta.softBadge}`}>
+              {currentStageLabel}
+            </span>
           </div>
 
-          <p className="text-xs font-bold text-slate-600 leading-6 max-w-4xl">
-            در این بخش برنامه‌های پیشنهادی به‌صورت کارت‌های فشرده و حرفه‌ای نمایش داده می‌شوند. با انتخاب هر کارت، همان برنامه در جدول اصلی دیده می‌شود؛ بنابراین داشبورد شلوغ نمی‌شود و مقایسه هم شفاف می‌ماند.
-          </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-                <div className="text-[10px] font-black text-slate-500 mb-1">خروجی فعلی</div>
-                <div className="text-sm font-black text-slate-900">{validProgramsLabel}</div>
-                <div className="text-[11px] font-bold text-slate-500 mt-1">سامانه فقط برنامه‌های معتبر و متمایز را نمایش می‌دهد.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-                <div className="text-[10px] font-black text-slate-500 mb-1">سقف هشدار سخت برای ساخت</div>
-                <div className="text-sm font-black text-slate-900">کمتر از ۵ مورد</div>
-                <div className="text-[11px] font-bold text-slate-500 mt-1">برنامه‌ای که ۰ تا ۴ هشدار سخت داشته باشد همچنان ساخته و نمایش داده می‌شود.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-                <div className="text-[10px] font-black text-slate-500 mb-1">وضعیت هشدارها</div>
-                <div className={`text-sm font-black ${warningsResolved ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {warningsResolved ? 'همه هشدارها رفع شده‌اند' : 'رفع هشدارها هنوز ادامه دارد'}
-                </div>
-                <div className="text-[11px] font-bold text-slate-500 mt-1">تا صفر شدن هشدارها، امتیازدهی شروع نمی‌شود.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-                <div className="text-[10px] font-black text-slate-500 mb-1">مرحله جاری</div>
-                <div className="text-sm font-black text-slate-900">
-                  {workflow.votingOpen ? 'نظرسنجی پرسنل' : workflow.comparisonStartedAt ? 'مقایسه و امتیازدهی' : warningsResolved ? 'آماده شروع امتیازدهی' : 'در حال رفع هشدار'}
-                </div>
-                <div className="text-[11px] font-bold text-slate-500 mt-1">سرپرستار هر زمان بخواهد می‌تواند مرحله بعد را آغاز کند.</div>
-              </div>
-            </div>
-
-          <div className="rounded-2xl border border-white/80 bg-white/70 px-4 py-3">
+          <div className="rounded-2xl border border-white/80 bg-white/70 px-4 py-4">
             <div className="flex flex-wrap items-center gap-3">
-              {stages.map((stage, index) => (
-                <div key={`${group}-stage-${stage.label}`} className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2.5 h-2.5 rounded-full ${stage.active ? meta.stageDot : 'bg-slate-300'}`}></span>
-                    <span className={`text-[11px] font-black ${stage.active ? 'text-slate-900' : 'text-slate-400'}`}>
-                      {index + 1}. {stage.label}
-                    </span>
+              {stages.map((stage, index) => {
+                const stateClass = stage.state === 'active'
+                  ? meta.stageActive
+                  : stage.state === 'done'
+                    ? meta.stageDone
+                    : meta.stagePending;
+                return (
+                  <div key={`${group}-stage-${stage.number}`} className="flex items-center gap-3">
+                    <div className={`flex items-center gap-2 border rounded-2xl px-3 py-2 ${stateClass}`}>
+                      <span className="text-[11px] font-black min-w-5 text-center">
+                        {stage.state === 'done' ? '✓' : stage.number}
+                      </span>
+                      <span className="text-[11px] font-black whitespace-nowrap">{stage.label}</span>
+                    </div>
+                    {index < stages.length - 1 && <span className="w-7 h-px bg-slate-300"></span>}
                   </div>
-                  {index < stages.length - 1 && <span className="w-8 h-px bg-slate-300"></span>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -269,7 +266,7 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
           <div className="flex items-start gap-2 text-[11px] font-bold text-amber-900 leading-6">
             <MessageSquareWarning className="w-4 h-4 mt-0.5 text-amber-600 shrink-0" />
             <div>
-              ابتدا هشدارهای هر برنامه را به‌صورت واقعی برطرف کنید. تا زمانی که برای همه برنامه‌های این گروه تعداد هشدارها به صفر نرسد، مقایسه و امتیازدهی سیستم آغاز نخواهد شد.
+              برای ادامه، یکی از برنامه‌ها را در جدول فعال کنید و هشدارهای همان برنامه را از پنجره اصلی هشدارهای نارنجی بالای صفحه برطرف کنید. با تغییر برنامه فعال، همان پنجره نارنجی نیز با هشدارهای برنامه جدید به‌روز می‌شود.
             </div>
           </div>
         </div>
@@ -294,9 +291,6 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
           const userRating = currentUserId ? scenarioVotes[currentUserId] || 0 : 0;
           const isSelected = selectedScenarioId === scenario.id;
           const rank = ranking.get(scenario.id) || 0;
-          const pairwiseText = scenario.pairwiseDifference
-            ? Object.entries(scenario.pairwiseDifference).map(([key, value]) => `${key}: ${value.toFixed(1)}٪`).join(' • ')
-            : null;
           const scenarioStageLabel = scenario.relevantWarningCount > 0
             ? 'در مرحله رفع هشدار'
             : workflow.votingOpen
@@ -329,11 +323,6 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
                   </div>
                   <div className="text-[11px] font-bold text-slate-500">{scenarioStageLabel}</div>
                 </div>
-
-                <div className="text-left" dir="ltr">
-                  <div className="text-[10px] font-bold text-slate-400">Diff</div>
-                  <div className="text-sm font-black text-slate-900">{pairwiseText ? pairwiseText : '—'}</div>
-                </div>
               </div>
 
               <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3 grid grid-cols-3 gap-2 text-center">
@@ -348,21 +337,6 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
                 <div>
                   <div className="text-[10px] font-black text-slate-500">بهینه‌سازی</div>
                   <div className="text-sm font-black text-slate-900">{scenario.weights.optimization}%</div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
-                  <div className="text-[10px] font-black text-slate-500">کل هشدارها</div>
-                  <div className={`text-lg font-black ${scenario.relevantWarningCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>{scenario.relevantWarningCount}</div>
-                </div>
-                <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
-                  <div className="text-[10px] font-black text-slate-500">هشدارهای سخت</div>
-                  <div className={`text-lg font-black ${scenario.relevantHardWarningCount === 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{scenario.relevantHardWarningCount}</div>
-                </div>
-                <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
-                  <div className="text-[10px] font-black text-slate-500">امتیاز کل سیستم</div>
-                  <div className="text-lg font-black text-slate-900">{workflow.comparisonStartedAt ? `${scenario.totalScore.toFixed(1)}٪` : '—'}</div>
                 </div>
               </div>
 
@@ -418,18 +392,6 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
                       {isSelected ? 'در جدول فعال است' : 'نمایش در جدول'}
                     </span>
                   </button>
-                  {canManage && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenWarnings(scenario)}
-                      className="text-xs font-black px-3 py-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-all"
-                    >
-                      <span className="inline-flex items-center gap-1.5">
-                        <MessageSquareWarning className="w-4 h-4" />
-                        بررسی هشدارها
-                      </span>
-                    </button>
-                  )}
                 </div>
 
                 {(workflow.votingOpen || canManage) && (

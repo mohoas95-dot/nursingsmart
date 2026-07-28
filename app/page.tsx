@@ -88,7 +88,6 @@ import type { SchedulePersistence, ScheduleUIFeedback } from '../features/schedu
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
-import { ScenarioWarningsModal } from '../features/scheduling/components/ScenarioWarningsModal';
 import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
@@ -349,7 +348,6 @@ export default function Home() {
 
   const [dismissedAlertWarnings, setDismissedAlertWarnings] = useState<{ [key: string]: boolean }>({});
   const [showAlertCenter, setShowAlertCenter] = useState<boolean>(false);
-  const [scenarioWarningsTarget, setScenarioWarningsTarget] = useState<{ group: JobGroup; scenarioId: number } | null>(null);
   const [expandedAlertSections, setExpandedAlertSections] = useState<{general: boolean, personnel: boolean, generalNurse: boolean, generalAssistant: boolean, generalOther: boolean}>({general: true, personnel: true, generalNurse: true, generalAssistant: true, generalOther: true});
   const [highlightedCellId, setHighlightedCellId] = useState<string | null>(null);
   // هایلایت کل ستون یک روز (برای هشدارهای عمومی مانند کمبود/مازاد نیرو)
@@ -1413,7 +1411,7 @@ export default function Home() {
     }
   };
 
-  const alertCenterSchedule = currentScenarioNurse || currentScenarioAssistant ? schedule : displayedSchedule;
+  const alertCenterSchedule = displayedSchedule;
 
   const getVisibleWarnings = () => {
     if (!alertCenterSchedule) return [];
@@ -1458,18 +1456,6 @@ export default function Home() {
     const warningsForDialog = filterActiveWarnings(alertCenterSchedule.warnings, dismissedWarnings);
     return aggregateWarnings(warningsForDialog, personnel);
   }, [alertCenterSchedule, dismissedWarnings, personnel]);
-
-  const activeScenarioWarningSelection = React.useMemo(() => {
-    if (!scenarioWarningsTarget) return null;
-    const workflow = getWorkflowForGroup(scenarioWarningsTarget.group);
-    const scenario = workflow?.scenarios.find(item => item.id === scenarioWarningsTarget.scenarioId) || null;
-    return scenario ? { group: scenarioWarningsTarget.group, scenario } : null;
-  }, [getWorkflowForGroup, scenarioWarningsTarget]);
-
-  const scenarioWarningAlerts = React.useMemo<AggregatedAlert[]>(() => {
-    if (!activeScenarioWarningSelection) return [];
-    return aggregateWarnings(activeScenarioWarningSelection.scenario.schedule.warnings || [], personnel);
-  }, [activeScenarioWarningSelection, personnel]);
 
   // ====== بازگشت خودکار به موقعیت قبلی پس از رفع هشدار ======
   // اگر کاربر با «رفتن به سلول» به سلول پرید و پس از ویرایش دستی، همان هشدار
@@ -2137,7 +2123,10 @@ export default function Home() {
 
   const buildPairwiseDifferences = React.useCallback((scenariosList: ScoredSchedule[], group: JobGroup) => {
     const totalDays = getJalaliMonthDays(currentYear, currentMonth);
-    const groupIds = personnelRef.current.filter(person => person.active && person.jobGroup === group).map(person => person.id);
+    const lockedIds = new Set(lockedRowsRef.current);
+    const groupIds = personnelRef.current
+      .filter(person => person.active && person.jobGroup === group && !lockedIds.has(person.id))
+      .map(person => person.id);
     return scenariosList.map(scenario => ({
       ...scenario,
       pairwiseDifference: Object.fromEntries(
@@ -2295,7 +2284,8 @@ export default function Home() {
         optimizerFirstDay === -1 ? undefined : optimizerFirstDay,
         optimizerDutyHours,
         jobGroup,
-        currentAssignmentsForMerge as any
+        currentAssignmentsForMerge as any,
+        lockedRowsRef.current
       );
 
       if (top3.length === 0) {
@@ -2312,7 +2302,6 @@ export default function Home() {
         votingOpen: false,
       }), { resetVotes: true });
 
-      setScenarioWarningsTarget(null);
       setSelectedScenarioIndexForGroup(jobGroup, scenariosWithDiff.length > 0 ? 0 : -1);
       setSolvingTarget(null);
       return;
@@ -2450,7 +2439,6 @@ export default function Home() {
       return;
     }
 
-    setScenarioWarningsTarget(null);
     setSelectedScenarioIndexForGroup(jobGroup, -1);
   };
 
@@ -4488,7 +4476,7 @@ export default function Home() {
           </div>
 
           {/* ====== مرکز هشدارها فقط برای داشبورد سرپرستار ====== */}
-          {role === 'headnurse' && activeTab === 'schedule' && schedule && getVisibleWarnings().length > 0 && (
+          {role === 'headnurse' && activeTab === 'schedule' && displayedSchedule && getVisibleWarnings().length > 0 && (
             <div className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden">
               <div className="bg-amber-50/70 px-5 py-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-2">
@@ -4754,7 +4742,6 @@ export default function Home() {
                   currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
                   votes={normalizedScenarioVotes.nurse}
                   onSelectScenario={(scenarioId) => setSelectedScenarioByIdForGroup('nurse', scenarioId)}
-                  onOpenWarnings={(scenario) => { setSelectedScenarioByIdForGroup('nurse', scenario.id); setScenarioWarningsTarget({ group: 'nurse', scenarioId: scenario.id }); }}
                   onStartComparison={() => handleStartScenarioComparison('nurse')}
                   onToggleVoting={() => handleToggleScenarioVoting('nurse')}
                   onFinalize={(scenario) => handleApplyScenario(scenario, 'nurse')}
@@ -4772,7 +4759,6 @@ export default function Home() {
                   currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
                   votes={normalizedScenarioVotes.assistant}
                   onSelectScenario={(scenarioId) => setSelectedScenarioByIdForGroup('assistant', scenarioId)}
-                  onOpenWarnings={(scenario) => { setSelectedScenarioByIdForGroup('assistant', scenario.id); setScenarioWarningsTarget({ group: 'assistant', scenarioId: scenario.id }); }}
                   onStartComparison={() => handleStartScenarioComparison('assistant')}
                   onToggleVoting={() => handleToggleScenarioVoting('assistant')}
                   onFinalize={(scenario) => handleApplyScenario(scenario, 'assistant')}
@@ -6675,16 +6661,6 @@ export default function Home() {
         </div>
       </main>
 
-      <ScenarioWarningsModal
-        isOpen={!!scenarioWarningsTarget}
-        group={activeScenarioWarningSelection?.group || null}
-        scenario={activeScenarioWarningSelection?.scenario || null}
-        alerts={scenarioWarningAlerts}
-        extractWarningDay={extractWarningDay}
-        onClose={() => setScenarioWarningsTarget(null)}
-        onNavigateToCell={handleAlertClick}
-        onNavigateToDay={handleDayAlertClick}
-      />
 
       <DeleteConfirmModal
         isOpen={!!deleteTarget}

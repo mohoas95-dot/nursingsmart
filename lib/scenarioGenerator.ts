@@ -1,5 +1,6 @@
 import { generateJalaliMonthCalendar } from './jalali';
 import { verifyCoverageAndLeaders, solveWithPriority, generatePersonnelReports } from './solver';
+import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
 import {
   JobGroup,
   MonthlySchedule,
@@ -50,6 +51,7 @@ interface ScenarioContext {
   monthlyDutyHours?: any;
   targetJobGroup?: JobGroup;
   currentAssignments?: Record<string, Record<number, ShiftType>> | null;
+  lockedRows: string[];
   totalDays: number;
   targetPersonnel: Personnel[];
   targetPersonnelIds: string[];
@@ -143,11 +145,13 @@ function mergePreservedAssignments(
   optimized: Record<string, Record<number, ShiftType>>,
   context: ScenarioContext
 ): Record<string, Record<number, ShiftType>> {
-  if (!context.targetJobGroup || !context.currentAssignments) return optimized;
+  if (!context.currentAssignments) return optimized;
   const merged = cloneAssignments(optimized);
+  const lockedIds = new Set(context.lockedRows);
 
   for (const person of context.personnelList) {
-    if (person.jobGroup === context.targetJobGroup) continue;
+    const shouldPreserve = lockedIds.has(person.id) || (!!context.targetJobGroup && person.jobGroup !== context.targetJobGroup);
+    if (!shouldPreserve) continue;
     if (context.currentAssignments[person.id]) {
       merged[person.id] = { ...(context.currentAssignments[person.id] as Record<number, ShiftType>) };
     }
@@ -160,11 +164,26 @@ function verifyScenarioSchedule(
   assignments: Record<string, Record<number, ShiftType>>,
   context: ScenarioContext
 ): MonthlySchedule {
+  const reconciled = reconcileStaffingCoverage(
+    assignments,
+    context.personnelList,
+    context.settings,
+    generateJalaliMonthCalendar(
+      context.year,
+      context.month,
+      context.customHolidays,
+      context.firstDayOfWeekIndex
+    ).map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+    context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
+    context.lockedRows,
+    context.requests
+  ).assignments;
+
   const verification = verifyCoverageAndLeaders(
     context.year,
     context.month,
     context.personnelList,
-    assignments,
+    reconciled,
     context.settings,
     context.customHolidays,
     context.firstDayOfWeekIndex,
@@ -180,7 +199,7 @@ function verifyScenarioSchedule(
   return {
     year: context.year,
     month: context.month,
-    assignments,
+    assignments: reconciled,
     shiftLeaders: verification.shiftLeaders,
     warnings: relevantWarnings,
   };
@@ -307,7 +326,10 @@ function reorderPersonnelForScenario(
     requestLoadByPerson.set(person.id, countApplicableRequestDays(person, context.requests, calendar));
   }
 
-  const targetPeople = personnelList.filter(person => !context.targetJobGroup || person.jobGroup === context.targetJobGroup);
+  const lockedIds = new Set(context.lockedRows);
+  const targetPeople = personnelList.filter(person =>
+    !lockedIds.has(person.id) && (!context.targetJobGroup || person.jobGroup === context.targetJobGroup)
+  );
 
   const sortedTarget = [...targetPeople].sort((left, right) => {
     const leftRequestLoad = requestLoadByPerson.get(left.id) || 0;
@@ -345,7 +367,10 @@ function buildSeedPersonnelVariants(
   scenarioType: ScenarioType,
   context: ScenarioContext
 ): Personnel[][] {
-  const targetPeople = personnelList.filter(person => !context.targetJobGroup || person.jobGroup === context.targetJobGroup);
+  const lockedIds = new Set(context.lockedRows);
+  const targetPeople = personnelList.filter(person =>
+    !lockedIds.has(person.id) && (!context.targetJobGroup || person.jobGroup === context.targetJobGroup)
+  );
   if (targetPeople.length === 0) return [[...personnelList]];
 
   const baseVariant = reorderPersonnelForScenario(personnelList, scenarioType, context)
@@ -768,19 +793,6 @@ function applyScenarioOperation(
   return verifyScenarioSchedule(assignments, context);
 }
 
-function differenceBonus(candidate: ScoredSchedule, accepted: readonly ScoredSchedule[], context: ScenarioContext): number {
-  if (accepted.length === 0) return 0;
-  const differences = accepted.map(item =>
-    calculateScenarioDifferencePercent(item.schedule, candidate.schedule, context.targetPersonnelIds, context.totalDays)
-  );
-
-  return Math.min(...differences.map(diff => {
-    if (diff < MIN_DIFFERENCE_PERCENT) return diff * 1.8;
-    if (diff <= MAX_DIFFERENCE_PERCENT) return 50 - Math.abs(25 - diff);
-    return Math.max(0, 35 - ((diff - MAX_DIFFERENCE_PERCENT) * 2));
-  }));
-}
-
 function localSearchScenario(
   initial: ScoredSchedule,
   scenarioType: ScenarioType,
@@ -926,7 +938,7 @@ function chooseScenarioCandidate(
   scenarioId: number,
   accepted: readonly ScoredSchedule[],
   context: ScenarioContext
-): { candidate: ScoredSchedule; attempts: number; foundInRange: boolean } {
+): { candidate: ScoredSchedule; attempts: number } {
   const seedVariants = buildSeedPersonnelVariants(context.personnelList, scenarioType, context);
   let attempts = 0;
   let bestCandidate: ScoredSchedule | null = null;
@@ -960,7 +972,6 @@ function chooseScenarioCandidate(
   return {
     candidate: bestInRangeCandidate || bestCandidate || initialScoredSchedule(scenarioType, scenarioId, context, seedVariants[0] || context.personnelList),
     attempts,
-    foundInRange: !!bestInRangeCandidate,
   };
 }
 
@@ -974,10 +985,16 @@ export function generateAndScoreScenarios(
   firstDayOfWeekIndex?: number,
   monthlyDutyHours?: any,
   targetJobGroup?: 'nurse' | 'assistant',
-  currentAssignments?: Record<string, Record<number, ShiftType>> | null
+  currentAssignments?: Record<string, Record<number, ShiftType>> | null,
+  lockedRows: string[] = []
 ): ScenarioGenerationResult {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
-  const targetPersonnel = personnelList.filter(person => person.active && (!targetJobGroup || person.jobGroup === targetJobGroup));
+  const lockedIds = new Set(lockedRows);
+  const targetPersonnel = personnelList.filter(person =>
+    person.active &&
+    !lockedIds.has(person.id) &&
+    (!targetJobGroup || person.jobGroup === targetJobGroup)
+  );
   const context: ScenarioContext = {
     year,
     month,
@@ -989,6 +1006,7 @@ export function generateAndScoreScenarios(
     monthlyDutyHours,
     targetJobGroup,
     currentAssignments,
+    lockedRows,
     totalDays: calendar.length,
     targetPersonnel,
     targetPersonnelIds: targetPersonnel.map(person => person.id),
@@ -1000,7 +1018,7 @@ export function generateAndScoreScenarios(
 
   let scenarioId = 1;
   for (const scenarioType of scenarioOrder) {
-    const { candidate, attempts, foundInRange } = chooseScenarioCandidate(scenarioType, scenarioId++, accepted, context);
+    const { candidate, attempts } = chooseScenarioCandidate(scenarioType, scenarioId++, accepted, context);
     explored.push(candidate);
 
     const hardWarningCount = countHardConstraintWarnings(candidate.schedule.warnings);
@@ -1018,15 +1036,6 @@ export function generateAndScoreScenarios(
       generationLog.push(reason);
       console.warn('[scenario-generator]', reason);
       continue;
-    }
-
-    if (hardWarningCount > 0) {
-      const note = `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} دور تلاش با ${hardWarningCount} هشدار سخت پذیرفته شد و همان هشدارها در فهرست هشدارهای برنامه نمایش داده می‌شوند.`;
-      generationLog.push(note);
-      console.warn('[scenario-generator]', note);
-    } else if (foundInRange) {
-      const note = `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} دور تلاش با اختلاف هدف‌گذاری‌شده ${MIN_DIFFERENCE_PERCENT} تا ${MAX_DIFFERENCE_PERCENT} درصد ساخته شد.`;
-      generationLog.push(note);
     }
 
     accepted.push(candidate);
