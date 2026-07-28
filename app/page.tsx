@@ -2300,7 +2300,7 @@ export default function Home() {
 
       if (top3.length === 0) {
         const joined = generationLog.length > 0 ? `\n\nجزئیات: \n- ${generationLog.join('\n- ')}` : '';
-        alert(`هیچ سناریوی معتبر و به‌اندازه کافی متفاوتی برای این گروه تولید نشد.${joined}`);
+        alert(`هیچ سناریوی معتبر و به‌اندازه کافی متفاوتی برای این گروه تولید نشد. سناریو فقط وقتی کنار گذاشته می‌شود که تعداد هشدارهای سخت آن به ۵ مورد یا بیشتر برسد.${joined}`);
       }
 
       const scenariosWithDiff = buildPairwiseDifferences(top3, jobGroup);

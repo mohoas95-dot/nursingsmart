@@ -172,27 +172,32 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
             در این بخش برنامه‌های پیشنهادی به‌صورت کارت‌های فشرده و حرفه‌ای نمایش داده می‌شوند. با انتخاب هر کارت، همان برنامه در جدول اصلی دیده می‌شود؛ بنابراین داشبورد شلوغ نمی‌شود و مقایسه هم شفاف می‌ماند.
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-              <div className="text-[10px] font-black text-slate-500 mb-1">خروجی فعلی</div>
-              <div className="text-sm font-black text-slate-900">{validProgramsLabel}</div>
-              <div className="text-[11px] font-bold text-slate-500 mt-1">سامانه فقط برنامه‌های معتبر و متمایز را نمایش می‌دهد.</div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-              <div className="text-[10px] font-black text-slate-500 mb-1">وضعیت هشدارها</div>
-              <div className={`text-sm font-black ${warningsResolved ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {warningsResolved ? 'همه هشدارها رفع شده‌اند' : 'رفع هشدارها هنوز ادامه دارد'}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
+                <div className="text-[10px] font-black text-slate-500 mb-1">خروجی فعلی</div>
+                <div className="text-sm font-black text-slate-900">{validProgramsLabel}</div>
+                <div className="text-[11px] font-bold text-slate-500 mt-1">سامانه فقط برنامه‌های معتبر و متمایز را نمایش می‌دهد.</div>
               </div>
-              <div className="text-[11px] font-bold text-slate-500 mt-1">تا صفر شدن هشدارها، امتیازدهی شروع نمی‌شود.</div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-              <div className="text-[10px] font-black text-slate-500 mb-1">مرحله جاری</div>
-              <div className="text-sm font-black text-slate-900">
-                {workflow.votingOpen ? 'نظرسنجی پرسنل' : workflow.comparisonStartedAt ? 'مقایسه و امتیازدهی' : warningsResolved ? 'آماده شروع امتیازدهی' : 'در حال رفع هشدار'}
+              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
+                <div className="text-[10px] font-black text-slate-500 mb-1">سقف هشدار سخت برای ساخت</div>
+                <div className="text-sm font-black text-slate-900">کمتر از ۵ مورد</div>
+                <div className="text-[11px] font-bold text-slate-500 mt-1">برنامه‌ای که ۰ تا ۴ هشدار سخت داشته باشد همچنان ساخته و نمایش داده می‌شود.</div>
               </div>
-              <div className="text-[11px] font-bold text-slate-500 mt-1">سرپرستار هر زمان بخواهد می‌تواند مرحله بعد را آغاز کند.</div>
+              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
+                <div className="text-[10px] font-black text-slate-500 mb-1">وضعیت هشدارها</div>
+                <div className={`text-sm font-black ${warningsResolved ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {warningsResolved ? 'همه هشدارها رفع شده‌اند' : 'رفع هشدارها هنوز ادامه دارد'}
+                </div>
+                <div className="text-[11px] font-bold text-slate-500 mt-1">تا صفر شدن هشدارها، امتیازدهی شروع نمی‌شود.</div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
+                <div className="text-[10px] font-black text-slate-500 mb-1">مرحله جاری</div>
+                <div className="text-sm font-black text-slate-900">
+                  {workflow.votingOpen ? 'نظرسنجی پرسنل' : workflow.comparisonStartedAt ? 'مقایسه و امتیازدهی' : warningsResolved ? 'آماده شروع امتیازدهی' : 'در حال رفع هشدار'}
+                </div>
+                <div className="text-[11px] font-bold text-slate-500 mt-1">سرپرستار هر زمان بخواهد می‌تواند مرحله بعد را آغاز کند.</div>
+              </div>
             </div>
-          </div>
 
           <div className="rounded-2xl border border-white/80 bg-white/70 px-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
@@ -346,10 +351,14 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
-                  <div className="text-[10px] font-black text-slate-500">هشدارهای باقی‌مانده</div>
+                  <div className="text-[10px] font-black text-slate-500">کل هشدارها</div>
                   <div className={`text-lg font-black ${scenario.relevantWarningCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>{scenario.relevantWarningCount}</div>
+                </div>
+                <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
+                  <div className="text-[10px] font-black text-slate-500">هشدارهای سخت</div>
+                  <div className={`text-lg font-black ${scenario.relevantHardWarningCount === 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{scenario.relevantHardWarningCount}</div>
                 </div>
                 <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
                   <div className="text-[10px] font-black text-slate-500">امتیاز کل سیستم</div>

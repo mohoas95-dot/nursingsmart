@@ -13,6 +13,8 @@ import {
   countHardConstraintWarnings,
   evaluateScenarioSchedule,
   filterWarningsForScenarioGroup,
+  isHardWarningCountAcceptable,
+  MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO,
   SCENARIO_KEYS,
   SCENARIO_TITLES,
   type ScoredSchedule,
@@ -604,7 +606,8 @@ function localSearchScenario(
     for (const operation of operations) {
       const updatedSchedule = applyScenarioOperation(current.schedule, operation, context);
       if (!updatedSchedule) continue;
-      if (countHardConstraintWarnings(updatedSchedule.warnings) > 0) continue;
+      const updatedHardWarningCount = countHardConstraintWarnings(updatedSchedule.warnings);
+      if (!isHardWarningCountAcceptable(updatedHardWarningCount)) continue;
 
       const candidate = evaluateScenario(updatedSchedule, scenarioType, initial.id, context);
       if (candidate.totalScore + 8 < startingScore) continue;
@@ -712,8 +715,9 @@ export function generateAndScoreScenarios(
     const refined = localSearchScenario(initial, scenarioType, accepted, context);
     explored.push(refined);
 
-    if (countHardConstraintWarnings(refined.schedule.warnings) > 0) {
-      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} کنار گذاشته شد چون هنوز ${countHardConstraintWarnings(refined.schedule.warnings)} هشدار سخت دارد.`;
+    const refinedHardWarningCount = countHardConstraintWarnings(refined.schedule.warnings);
+    if (!isHardWarningCountAcceptable(refinedHardWarningCount)) {
+      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} کنار گذاشته شد چون ${refinedHardWarningCount} هشدار سخت دارد و سقف مجاز برای ساخت سناریو ${MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO} مورد است.`;
       generationLog.push(reason);
       console.warn('[scenario-generator]', reason);
       continue;
@@ -725,6 +729,12 @@ export function generateAndScoreScenarios(
       generationLog.push(reason);
       console.warn('[scenario-generator]', reason);
       continue;
+    }
+
+    if (refinedHardWarningCount > 0) {
+      const note = `سناریوی ${SCENARIO_KEYS[scenarioType]} با ${refinedHardWarningCount} هشدار سخت پذیرفته شد و برای بررسی در کرکره «هشدارهای سخت» نمایش داده می‌شود.`;
+      generationLog.push(note);
+      console.warn('[scenario-generator]', note);
     }
 
     accepted.push(refined);

@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { evaluateScenarioSchedule, filterWarningsForScenarioGroup, countHardConstraintWarnings } from '../lib/scoring';
+import {
+  countHardConstraintWarnings,
+  evaluateScenarioSchedule,
+  filterWarningsForScenarioGroup,
+  getHardConstraintWarnings,
+  isHardWarningCountAcceptable,
+  MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO,
+} from '../lib/scoring';
 import type { MonthlySchedule, Personnel, ShiftRequest, SystemSettings } from '../lib/types';
 
 function person(id: string, jobGroup: 'nurse' | 'assistant'): Personnel {
@@ -186,4 +193,22 @@ test('group filtering keeps only the warnings that belong to the selected job gr
   assert.equal(nurseWarnings.length, 2);
   assert.equal(assistantWarnings.length, 1);
   assert.equal(countHardConstraintWarnings(nurseWarnings), 2);
+});
+
+test('hard warnings are extracted correctly and up to 4 remain eligible for scenario generation', () => {
+  const warnings = [
+    'Coverage Shortage: کمبود نیرو (پرستار) در روز 1 شیفت M',
+    'Overstaffing: نیروی مازاد (پرستار) در روز 2 شیفت M',
+    'Missing Shift Leader: نبود سرشیفت در نوبت عصر روز 2',
+    'Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای n1 test از روز 1 (M) تا روز 2 (E)',
+    'Mandatory Rest: پرسنل n1 test در پایان این ماه به سقف ۵ شیفت متوالی رسیده است',
+    'Mismatched Request: برای n2 test در روز 2 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است',
+  ];
+
+  const hardWarnings = getHardConstraintWarnings(warnings);
+  assert.equal(hardWarnings.length, 5);
+  assert.equal(countHardConstraintWarnings(warnings), 5);
+  assert.equal(MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO, 4);
+  assert.equal(isHardWarningCountAcceptable(4), true);
+  assert.equal(isHardWarningCountAcceptable(5), false);
 });

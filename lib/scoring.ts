@@ -57,13 +57,23 @@ export interface ScoredSchedule {
   pairwiseDifference?: Record<string, number>;
 }
 
-const HARD_WARNING_PREFIXES = [
+export const HARD_WARNING_PREFIXES = [
   'Coverage Shortage:',
   'Overstaffing:',
   'Missing Shift Leader:',
   'Max Consecutive:',
   'Mandatory Rest:',
 ] as const;
+
+export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number], string> = {
+  'Coverage Shortage:': 'کمبود نیرو',
+  'Overstaffing:': 'نیروی مازاد',
+  'Missing Shift Leader:': 'نبود سرشیفت',
+  'Max Consecutive:': 'نقض سقف شیفت متوالی',
+  'Mandatory Rest:': 'لزوم استراحت اجباری',
+};
+
+export const MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO = 4;
 
 export const SCENARIO_WEIGHTS: Record<ScenarioType, ScenarioWeights> = {
   REQUESTS: { request: 70, fairness: 20, optimization: 10 },
@@ -155,8 +165,20 @@ export function filterWarningsForScenarioGroup(
   return warnings.filter(warning => warningTargetsGroup(warning, personnelList, targetJobGroup));
 }
 
+export function isHardConstraintWarning(warning: string): boolean {
+  return HARD_WARNING_PREFIXES.some(prefix => warning.startsWith(prefix));
+}
+
+export function getHardConstraintWarnings(warnings: readonly string[]): string[] {
+  return warnings.filter(isHardConstraintWarning);
+}
+
 export function countHardConstraintWarnings(warnings: readonly string[]): number {
-  return warnings.filter(warning => HARD_WARNING_PREFIXES.some(prefix => warning.startsWith(prefix))).length;
+  return getHardConstraintWarnings(warnings).length;
+}
+
+export function isHardWarningCountAcceptable(hardWarningCount: number): boolean {
+  return hardWarningCount <= MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO;
 }
 
 function shiftSatisfiesPreferred(assigned: ShiftType, preferred: string): boolean {
