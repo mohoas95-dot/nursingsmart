@@ -346,21 +346,18 @@ function GeneralSubSection(props: GeneralSubSectionProps) {
           </div>
 
           <div className="space-y-2">
-            {warnings.map((warn, idx) => {
+            {warnings.filter(warn => !dismissedAlertWarnings[warn]).map((warn, idx) => {
               const day = extractWarningDay(warn);
-              const isDismissed = !!dismissedAlertWarnings[warn];
 
               return (
                 <div
                   key={`general-${idx}`}
-                  className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${
-                    isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'
-                  }`}
+                  className="border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all bg-white border-slate-200"
                 >
                   <div className="flex items-start gap-2 flex-1">
-                    <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                    <span className="font-black mt-0.5 text-amber-600">•</span>
                     <div className="space-y-1">
-                      <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                      <div className="text-xs font-bold leading-6 text-slate-700">
                         {warn}
                       </div>
                       {day !== null && (
@@ -372,32 +369,26 @@ function GeneralSubSection(props: GeneralSubSectionProps) {
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    {!isDismissed ? (
-                      day !== null ? (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onDayAlertClick(day, warn); }}
-                          className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all cursor-pointer"
-                          title={`اسکرول به ستون روز ${day} و هایلایت کل آن روز`}
-                        >
-                          رفتن به روز {day}
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
-                          فاقد سلول مستقیم
-                        </span>
-                      )
-                    ) : null}
+                    {day !== null ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDayAlertClick(day, warn); }}
+                        className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-all cursor-pointer"
+                        title={`اسکرول به ستون روز ${day} و هایلایت کل آن روز`}
+                      >
+                        رفتن به روز {day}
+                      </button>
+                    ) : (
+                      <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
+                        فاقد سلول مستقیم
+                      </span>
+                    )}
 
                     <button
                       onClick={(e) => { e.stopPropagation(); onDismissAlert(warn); }}
-                      className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
-                        isDismissed
-                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-                      }`}
-                      title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
+                      className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+                      title="نادیده گرفتن این هشدار"
                     >
-                      {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
+                      نادیده گرفتن
                     </button>
                   </div>
                 </div>
@@ -519,22 +510,19 @@ function AlertSection(props: AlertSectionProps) {
             </div>
 
             <div className="mt-4 space-y-2">
-              {allWarnings.map((warn, idx) => {
+              {allWarnings.filter(warn => !dismissedAlertWarnings[warn]).map((warn, idx) => {
                 const day = extractWarningDay(warn);
                 const canNavigateToCell = day !== null && colorScheme === 'amber';
-                const isDismissed = !!dismissedAlertWarnings[warn];
 
                 return (
                   <div
                     key={`${alert.personnelId}-${idx}`}
-                    className={`border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all ${
-                      isDismissed ? 'bg-slate-50 border-slate-200 opacity-50' : 'bg-white border-slate-200'
-                    }`}
+                    className="border rounded-xl p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between transition-all bg-white border-slate-200"
                   >
                     <div className="flex items-start gap-2 flex-1">
-                      <span className={`font-black mt-0.5 ${isDismissed ? 'text-slate-300' : 'text-amber-600'}`}>•</span>
+                      <span className="font-black mt-0.5 text-amber-600">•</span>
                       <div className="space-y-1">
-                        <div className={`text-xs font-bold leading-6 ${isDismissed ? 'text-slate-400 line-through' : 'text-slate-700'}`}>
+                        <div className="text-xs font-bold leading-6 text-slate-700">
                           {warn}
                         </div>
                         {day !== null && (
@@ -546,29 +534,25 @@ function AlertSection(props: AlertSectionProps) {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      {canNavigateToCell && day !== null && !isDismissed ? (
+                      {canNavigateToCell && day !== null ? (
                         <button
                           onClick={() => onAlertClick(alert.personnelId, day, warn)}
                           className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
                         >
                           رفتن به سلول
                         </button>
-                      ) : !isDismissed ? (
+                      ) : (
                         <span className="text-[10px] font-bold px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500">
                           فاقد سلول مستقیم
                         </span>
-                      ) : null}
+                      )}
 
                       <button
                         onClick={(e) => { e.stopPropagation(); onDismissAlert(warn); }}
-                        className={`text-[10px] font-black px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
-                          isDismissed
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
-                        }`}
-                        title={isDismissed ? 'بازگرداندن این هشدار' : 'نادیده گرفتن این هشدار'}
+                        className="text-[10px] font-black px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+                        title="نادیده گرفتن این هشدار"
                       >
-                        {isDismissed ? 'بازگرداندن' : 'نادیده گرفتن'}
+                        نادیده گرفتن
                       </button>
                     </div>
                   </div>
