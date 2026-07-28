@@ -36,6 +36,8 @@ export interface AlertCenterProps {
   allAlerts: AggregatedAlert[];
   visibleWarningsCount: number;
   dismissedAlertWarnings: Record<string, boolean>;
+  contextLabel?: string;
+  contextDescription?: string;
 
   // UI state
   expandedSections: {
@@ -64,6 +66,8 @@ export function AlertCenter(props: AlertCenterProps) {
     allAlerts,
     visibleWarningsCount,
     dismissedAlertWarnings,
+    contextLabel,
+    contextDescription,
     expandedSections,
     onToggleSection,
     onDismissAlert,
@@ -111,12 +115,17 @@ export function AlertCenter(props: AlertCenterProps) {
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-200 bg-amber-50/70 flex items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <AlertTriangle className="w-5 h-5 text-amber-600" />
               <h3 className="text-base font-black text-slate-800">پنجره هشدارهای باقی‌مانده</h3>
+              {contextLabel && (
+                <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-amber-200 bg-white text-amber-800">
+                  {contextLabel}
+                </span>
+              )}
             </div>
             <p className="text-xs font-bold text-slate-600 mt-1">
-              روی هر بخش کلیک کنید تا هشدارها باز/بسته شوند.
+              {contextDescription || 'روی هر بخش کلیک کنید تا هشدارها باز/بسته شوند.'}
             </p>
           </div>
           <div className="flex items-center gap-2">
