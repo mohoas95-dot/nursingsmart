@@ -498,12 +498,31 @@ export default function Home() {
     : null;
 
   const displayedSchedule = React.useMemo(() => {
+    const preserveLockedRows = (candidate: MonthlySchedule | null): MonthlySchedule | null => {
+      if (!candidate) return candidate;
+      if (!schedule || lockedRows.length === 0) return candidate;
+
+      const nextAssignments: Record<string, Record<number, ShiftType>> = {
+        ...candidate.assignments,
+      };
+      for (const personnelId of lockedRows) {
+        if (schedule.assignments[personnelId]) {
+          nextAssignments[personnelId] = { ...schedule.assignments[personnelId] };
+        }
+      }
+
+      return {
+        ...candidate,
+        assignments: nextAssignments,
+      };
+    };
+
     if (!schedule && !currentScenarioNurse && !currentScenarioAssistant) return schedule;
     if (currentScenarioNurse && !currentScenarioAssistant) {
-      return currentScenarioNurse.schedule;
+      return preserveLockedRows(currentScenarioNurse.schedule);
     }
     if (!currentScenarioNurse && currentScenarioAssistant) {
-      return currentScenarioAssistant.schedule;
+      return preserveLockedRows(currentScenarioAssistant.schedule);
     }
     if (currentScenarioNurse && currentScenarioAssistant) {
       const mergedAssignments: Record<string, Record<number, ShiftType>> = { ...(schedule?.assignments || {}) };
@@ -519,7 +538,7 @@ export default function Home() {
           mergedAssignments[personnelId] = days as Record<number, ShiftType>;
         }
       }
-      return {
+      return preserveLockedRows({
         ...(schedule || currentScenarioNurse.schedule),
         assignments: mergedAssignments,
         warnings: [
@@ -531,10 +550,10 @@ export default function Home() {
           ...(currentScenarioNurse.schedule.shiftLeaders || {}),
           ...(currentScenarioAssistant.schedule.shiftLeaders || {}),
         },
-      } as MonthlySchedule;
+      } as MonthlySchedule);
     }
     return schedule;
-  }, [schedule, personnel, currentScenarioNurse, currentScenarioAssistant]);
+  }, [schedule, personnel, currentScenarioNurse, currentScenarioAssistant, lockedRows]);
 
   // Compiled reports from current schedule dynamically and reactively
   React.useEffect(() => {
@@ -1449,6 +1468,26 @@ export default function Home() {
     return filterActiveWarnings(alertCenterSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
   }, [alertCenterSchedule, dismissedWarnings, dismissedAlertWarnings]);
+
+  const alertCenterContextLabel = React.useMemo(() => {
+    if (currentScenarioNurse && currentScenarioAssistant) {
+      return `هشدارهای در حال نمایش: ${currentScenarioNurse.scenarioKey} پرستاران + ${currentScenarioAssistant.scenarioKey} کمک‌بهیاران`;
+    }
+    if (currentScenarioNurse) {
+      return `هشدارهای در حال نمایش: برنامه ${currentScenarioNurse.scenarioKey} پرستاران`;
+    }
+    if (currentScenarioAssistant) {
+      return `هشدارهای در حال نمایش: برنامه ${currentScenarioAssistant.scenarioKey} کمک‌بهیاران`;
+    }
+    return 'هشدارهای در حال نمایش: برنامه مبنا';
+  }, [currentScenarioAssistant, currentScenarioNurse]);
+
+  const alertCenterContextDescription = React.useMemo(() => {
+    if (currentScenarioNurse || currentScenarioAssistant) {
+      return 'با تغییر برنامه فعال در جدول، همین پنجره نارنجی هم بلافاصله با هشدارهای همان برنامه به‌روزرسانی می‌شود.';
+    }
+    return 'در حال حاضر هشدارهای برنامه مبنا نمایش داده می‌شود.';
+  }, [currentScenarioAssistant, currentScenarioNurse]);
 
   // تمام هشدارها (شامل نادیده‌گرفته‌شده‌ها) برای پنجره هشدار
   const allAlertsForDialog = React.useMemo<AggregatedAlert[]>(() => {
@@ -4480,7 +4519,7 @@ export default function Home() {
             <div className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden">
               <div className="bg-amber-50/70 px-5 py-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <AlertTriangle className="w-5 h-5 text-amber-600" />
                     <h3 className="text-sm font-black text-slate-800">
                       مرکز هشدارهای باقی‌مانده
@@ -4488,9 +4527,12 @@ export default function Home() {
                     <span className="bg-amber-100 text-amber-800 text-xs font-black px-2.5 py-0.5 rounded-full">
                       {getVisibleWarnings().length} مورد
                     </span>
+                    <span className="bg-white text-amber-800 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-amber-200">
+                      {alertCenterContextLabel}
+                    </span>
                   </div>
                   <p className="text-xs font-bold text-slate-600">
-                    هشدارها فقط در داشبورد پنل سرپرستار نمایش داده می‌شوند و با یک کلیک در پنجره جداگانه باز خواهند شد.
+                    {alertCenterContextDescription}
                   </p>
                 </div>
 
@@ -6898,6 +6940,8 @@ export default function Home() {
         allAlerts={allAlertsForDialog}
         visibleWarningsCount={getVisibleWarnings().length}
         dismissedAlertWarnings={dismissedAlertWarnings}
+        contextLabel={alertCenterContextLabel}
+        contextDescription={alertCenterContextDescription}
         expandedSections={expandedAlertSections}
         onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
         onDismissAlert={handleDismissAlert}
