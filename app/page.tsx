@@ -104,7 +104,6 @@ import { BusyOverlay } from '../features/shared/components/BusyOverlay';
 import { EventLogPanel } from '../features/reports/components/EventLogPanel';
 import { useTaskProgress } from '../features/shared/hooks/useTaskProgress';
 import {
-  AI_PHASES,
   SAVE_PHASES,
   SOLVER_PHASES,
 } from '../features/shared/progress-phases';
@@ -144,8 +143,7 @@ import {
   User,
   Activity,
   Menu,
-  X,
-  Settings2
+  X
 } from 'lucide-react';
 
 // Department interface for multi-department management
@@ -159,6 +157,40 @@ interface Department {
 interface ScenarioWorkflowGroup extends ScenarioWorkflowView {
   targetJobGroup: JobGroup;
 }
+
+type QuickRequestTemplateId = 'en' | 'men' | 'long_off' | 'off' | 'leave';
+type QuickRequestScope = 'odd' | 'even' | 'weekly_odd' | 'weekly_even';
+
+const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
+  id: QuickRequestTemplateId;
+  title: string;
+  subtitle: string;
+  accentClass: string;
+}> = [
+  { id: 'en', title: 'EN', subtitle: 'عصر و شب', accentClass: 'from-indigo-500 to-violet-600' },
+  { id: 'men', title: 'MEN', subtitle: 'شیفت 24', accentClass: 'from-sky-500 to-cyan-600' },
+  { id: 'long_off', title: 'لانگ آف', subtitle: 'ME یک‌روزدرمیان', accentClass: 'from-teal-500 to-emerald-600' },
+  { id: 'off', title: 'OFF 😴', subtitle: 'آف با انتخاب روز', accentClass: 'from-slate-600 to-slate-800' },
+  { id: 'leave', title: 'مرخصی 🏖', subtitle: 'انتخاب روزهای مرخصی', accentClass: 'from-amber-500 to-orange-600' },
+];
+
+const QUICK_REQUEST_SCOPE_OPTIONS: ReadonlyArray<{
+  id: QuickRequestScope;
+  title: string;
+  subtitle: string;
+}> = [
+  { id: 'odd', title: 'تاریخ فرد', subtitle: '۱، ۳، ۵...' },
+  { id: 'even', title: 'تاریخ زوج', subtitle: '۲، ۴، ۶...' },
+  { id: 'weekly_odd', title: 'روز فرد', subtitle: 'یکشنبه، سه‌شنبه، پنجشنبه' },
+  { id: 'weekly_even', title: 'روز زوج', subtitle: 'شنبه، دوشنبه، چهارشنبه' },
+];
+
+const QUICK_COMPLEMENT_SCOPE: Record<QuickRequestScope, QuickRequestScope> = {
+  odd: 'even',
+  even: 'odd',
+  weekly_odd: 'weekly_even',
+  weekly_even: 'weekly_odd',
+};
 
 // خطای تداخل قفل خوش‌بینانه (ETag) — برای شناسایی داخلی و بازیابی خودکار در صف ذخیره‌سازی.
 class ConcurrencyConflictError extends Error {
@@ -368,7 +400,6 @@ export default function Home() {
   // اولیه عمداً کنار گذاشته شده‌اند تا صفحهٔ لودینگ سبک و سریع بماند.
   const solverProgress = useTaskProgress(SOLVER_PHASES, { storageKey: 'solver' });
   const saveProgress = useTaskProgress(SAVE_PHASES, { storageKey: 'save' });
-  const aiProgress = useTaskProgress(AI_PHASES, { storageKey: 'ai' });
 
   // saveDbState و handleRunOptimizer توابع معمولی (نه useCallback) هستند و در هر
   // رندر بازساخته می‌شوند؛ با ref همیشه به تازه‌ترین کنترل‌های تراکر دسترسی دارند.
@@ -1951,10 +1982,11 @@ export default function Home() {
   // Additional system request states
   const [draftRequests, setDraftRequests] = useState<ShiftRequest[]>([]);
   const [showSplitRequests, setShowSplitRequests] = useState<boolean>(false);
-  const [aiPromptInput, setAiPromptInput] = useState<string>('');
-  const [isAiProcessing, setIsAiProcessing] = useState<boolean>(false);
-  const [aiProposedRequests, setAiProposedRequests] = useState<ShiftRequest[]>([]);
-  const [aiSelectedPersonnelId, setAiSelectedPersonnelId] = useState<string>('');
+  const [quickSelectedTemplateId, setQuickSelectedTemplateId] = useState<QuickRequestTemplateId | null>('en');
+  const [quickSelectedScope, setQuickSelectedScope] = useState<QuickRequestScope>('odd');
+  const [quickSelectedDays, setQuickSelectedDays] = useState<number[]>([]);
+  const [quickPersonnelId, setQuickPersonnelId] = useState<string>('');
+  const [isQuickRequestSubmitting, setIsQuickRequestSubmitting] = useState<boolean>(false);
 
   // عملیات حساس مدیریت بخش: حذف دائمی بخش (با احراز هویت مجدد) و انتقال امن مدیریت
   const [showDeleteDeptModal, setShowDeleteDeptModal] = useState<boolean>(false);
@@ -1968,6 +2000,15 @@ export default function Home() {
   const [transferNewFirstName, setTransferNewFirstName] = useState<string>('');
   const [transferNewLastName, setTransferNewLastName] = useState<string>('');
   const [isTransferringDept, setIsTransferringDept] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    if (role === 'personnel' && selectedPersonnelUser?.id) {
+      setQuickPersonnelId(selectedPersonnelUser.id);
+      return;
+    }
+    if (quickPersonnelId && personnel.some(person => person.id === quickPersonnelId)) return;
+    setQuickPersonnelId(personnel[0]?.id || '');
+  }, [personnel, quickPersonnelId, role, selectedPersonnelUser]);
 
   const getRequestSummaryText = (r: ShiftRequest): string => {
     const shiftLabel = r.preferredShift === 'M' ? 'صبح (M)' :
@@ -3182,6 +3223,104 @@ export default function Home() {
   };
 
   // --- Requests UI Helpers ---
+  const handleQuickSubmitRequest = async () => {
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+
+    const targetPersonnelId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : quickPersonnelId;
+    if (!targetPersonnelId) {
+      alert('لطفاً ابتدا پرسنل متقاضی را انتخاب کنید.');
+      return;
+    }
+    if (!quickSelectedTemplateId) {
+      alert('لطفاً یکی از درخواست‌های پرکاربرد را انتخاب کنید.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const baseRequest = {
+      personnelId: targetPersonnelId,
+      isEssential: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    let newRequests: ShiftRequest[] = [];
+    if (quickSelectedTemplateId === 'off' || quickSelectedTemplateId === 'leave') {
+      if (quickSelectedDays.length === 0) {
+        alert('لطفاً از تقویم، روزهای مورد نظر را انتخاب کنید.');
+        return;
+      }
+      newRequests = [{
+        ...baseRequest,
+        id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        requestType: quickSelectedTemplateId === 'off' ? 'OFF' : 'leave',
+        preferredShift: quickSelectedTemplateId === 'off' ? 'OFF' : 'L',
+        offHardness: quickSelectedTemplateId === 'off' ? 'hard' : undefined,
+        scope: 'custom_days',
+        selectedDays: [...quickSelectedDays].sort((a, b) => a - b),
+      }];
+    } else {
+      const preferredShift: ShiftRequest['preferredShift'] = quickSelectedTemplateId === 'en'
+        ? 'EN'
+        : quickSelectedTemplateId === 'men'
+          ? 'MEN'
+          : 'ME';
+      newRequests = [{
+        ...baseRequest,
+        id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        requestType: 'shift',
+        preferredShift,
+        scope: quickSelectedScope,
+      }];
+
+      // لانگ‌آف یعنی حضور ME یک‌روزدرمیان؛ برای روزهای مقابل، آف نرم ثبت می‌شود
+      // تا موتور زمان‌بندی ترجیح استراحت بین دو لانگ را بداند ولی در بن‌بست نشکند.
+      if (quickSelectedTemplateId === 'long_off') {
+        newRequests.push({
+          ...baseRequest,
+          id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          requestType: 'OFF',
+          preferredShift: 'OFF',
+          offHardness: 'soft',
+          scope: QUICK_COMPLEMENT_SCOPE[quickSelectedScope],
+        });
+      }
+    }
+
+    try {
+      setIsQuickRequestSubmitting(true);
+      const updatedRequests = [...requests, ...newRequests];
+      await saveState(personnel, updatedRequests, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [targetPersonnelId],
+      });
+      const requesterPerson = personnel.find(item => item.id === targetPersonnelId);
+      const selectedTemplate = QUICK_REQUEST_TEMPLATES.find(item => item.id === quickSelectedTemplateId);
+      logEvent({
+        category: 'requests',
+        severity: 'success',
+        title: `${newRequests.length} درخواست فوری ثبت شد`,
+        detail: `الگو: ${selectedTemplate?.title || quickSelectedTemplateId} — پرسنل: ${requesterPerson ? `${requesterPerson.firstName} ${requesterPerson.lastName}` : targetPersonnelId} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+      });
+      setQuickSelectedDays([]);
+      alert('درخواست فوری با موفقیت ثبت شد.');
+    } catch (error) {
+      console.error('Error submitting quick request:', error);
+      logEvent({
+        category: 'requests',
+        severity: 'error',
+        title: 'ثبت درخواست فوری ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      alert('خطا در ثبت درخواست فوری: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsQuickRequestSubmitting(false);
+    }
+  };
+
   const handleAddDraftRequest = () => {
     const pid = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : reqPersonnelId;
     if (!pid) {
@@ -4208,22 +4347,18 @@ export default function Home() {
       ? 'تولید برنامه پرستاران'
       : solvingTarget === 'assistant'
         ? 'تولید برنامه کمک‌بهیاران'
-        : isAiProcessing
-          ? 'پردازش با هوش مصنوعی'
-          : isBlockingDbSave
-            ? 'ذخیره‌سازی اطلاعات'
-            : null;
+        : isBlockingDbSave
+          ? 'ذخیره‌سازی اطلاعات'
+          : null;
 
   // تراکر فعال با توجه به عملیات جاری انتخاب می‌شود تا نوار درصد دقیقاً
   // مراحل همان عملیات را نشان دهد (نه یک انیمیشن تزئینی و ساختگی).
   const activeProgress =
     solvingTarget !== null
       ? solverProgress
-      : isAiProcessing
-        ? aiProgress
-        : isBlockingDbSave
-          ? saveProgress
-          : null;
+      : isBlockingDbSave
+        ? saveProgress
+        : null;
 
   const busyOverlayProgressProps = activeProgress
     ? {
@@ -5683,9 +5818,9 @@ export default function Home() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" /> سامانه دوگانه ثبت درخواست‌های مرخصی و آف
+                    <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" /> ثبت سریع درخواست‌های پرسنل
                   </h3>
-                  <p className="text-slate-400 text-xs font-bold mt-0.5">ثبت ترجیحات زمانی و مرخصی جهت اعمال دقیق در الگوریتم هوشمند بهینه‌سازی شیفت کادر</p>
+                  <p className="text-slate-400 text-xs font-bold mt-0.5">انتخاب الگوهای آماده برای ثبت درخواست در چند ثانیه و کاهش خطای ورود اطلاعات</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -5714,268 +5849,207 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-                <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm flex flex-col justify-between hover:border-indigo-200 hover:shadow-md transition-all">
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-indigo-50 p-2.5 rounded-2xl">
-                        <Plus className="w-5 h-5 text-indigo-600" />
+              <div className="bg-gradient-to-br from-indigo-50 via-white to-emerald-50/60 border border-indigo-100 rounded-[2rem] shadow-sm overflow-hidden">
+                <div className="p-5 sm:p-6 border-b border-indigo-100/70 bg-white/70">
+                  <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="inline-flex items-center gap-2 bg-indigo-600 text-white px-3 py-1.5 rounded-full text-[11px] font-black shadow-md shadow-indigo-100">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-200 fill-amber-200" /> درخواست‌های پر کاربرد
                       </div>
-                      <div>
-                        <h4 className="text-sm font-black text-slate-800">روش اول) ثبت گام‌به‌گام و دستی درخواست‌ها</h4>
-                        <p className="text-[11px] text-slate-400 font-bold">فرم کلاسیک جهت تعریف آف، کشیک‌ها و مرخصی‌های تک‌به‌تک</p>
-                      </div>
+                      <h4 className="text-xl font-black text-slate-900 leading-8">اگر درخواست‌ روتین داری همیجا فوری وارد کن!</h4>
+                      <p className="text-xs sm:text-sm font-extrabold text-slate-500">اگر درخواستت طولانیه برو به 🤩 !CHAT BOX</p>
                     </div>
 
-                    <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl space-y-2.5 text-xs text-slate-600 font-bold leading-relaxed">
-                      <p className="text-indigo-900 font-black mb-1">💡 قابلیت‌های کلیدی پنل ثبت دستی:</p>
-                      <div className="flex items-start gap-1.5">
-                        <span className="text-indigo-500">•</span>
-                        <span>تعیین دقیق دامنه تاریخ (روزهای زوج/فرد، تمام ماه یا روزهای انتخابی از تقویم)</span>
+                    {role !== 'personnel' ? (
+                      <div className="w-full lg:w-80 bg-white border border-slate-200 rounded-2xl p-3 shadow-xs">
+                        <label className="block text-[11px] font-black text-slate-500 mb-1.5">متقاضی درخواست فوری</label>
+                        <select
+                          value={quickPersonnelId}
+                          onChange={(event) => setQuickPersonnelId(event.target.value)}
+                          className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
+                        >
+                          <option value="">-- انتخاب پرسنل --</option>
+                          {personnel.map(person => (
+                            <option key={`quick-person-${person.id}`} value={person.id}>
+                              {person.firstName} {person.lastName} ({person.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})
+                            </option>
+                          ))}
+                        </select>
                       </div>
-                      <div className="flex items-start gap-1.5">
-                        <span className="text-indigo-500">•</span>
-                        <span><b>امکان ثبت چندگانه:</b> اضافه کردن نامحدود نوع کشیک به لیست موقت و سپس ثبت نهایی در یک نوبت</span>
+                    ) : (
+                      <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-4 py-3 rounded-2xl text-xs font-black">
+                        متقاضی: {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
                       </div>
-                      <div className="flex items-start gap-1.5">
-                        <span className="text-indigo-500">•</span>
-                        <span>تسهیل نمایش کلیه درخواست‌های کادر در یک خط مجزا و شکیل</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-6">
-                    <button
-                      onClick={() => {
-                        setReqPersonnelId(role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : personnel[0]?.id || '');
-                        setReqType('shift');
-                        setReqPreferredShift('M');
-                        setReqIsEssential(false);
-                        setReqScope('all');
-                        setDraftRequests([]);
-                        setShowAddRequestModal(true);
-                      }}
-                      className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-3 rounded-2xl shadow-lg hover:shadow-indigo-500/10 transition-all cursor-pointer"
-                      id="btn-trigger-add-req-bifurcated"
-                    >
-                      <Plus className="w-4 h-4"/> ایجاد و مدیریت درخواست‌های دستی کادر
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-gradient-to-br from-indigo-50/40 via-white to-purple-50/30 border border-purple-100 rounded-3xl p-6 shadow-xs flex flex-col justify-between hover:border-purple-200 hover:shadow-md transition-all relative overflow-hidden">
-                  <div className="absolute top-0 left-0 bg-purple-500 text-white text-[9px] font-black px-3 py-1 rounded-br-2xl animate-pulse tracking-wider">
-                    Powered by Gemini AI (Beta)
-                  </div>
-
-                  <div className="space-y-4 pt-2">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-purple-50 p-2.5 rounded-2xl">
-                        <Sparkles className="w-5 h-5 text-purple-600 fill-purple-100" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-slate-800">روش دوم) ثبت هوشمند نوشتاری با هوش مصنوعی</h4>
-                        <p className="text-[11px] text-slate-400 font-bold">بدون نیاز به کار با دکمه‌ها! جملهٔ مد نظر خود را به فارسی بنویسید</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3">
-                      {role !== 'personnel' ? (
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-500 mb-1">پرستار متقاضی:</label>
-                          <select
-                            value={aiSelectedPersonnelId}
-                            onChange={(e) => setAiSelectedPersonnelId(e.target.value)}
-                            className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-3 py-2 focus:border-purple-500 focus:outline-none"
-                          >
-                            <option value="">-- انتخاب پرسنل متقاضی --</option>
-                            {personnel.map(p => (
-                              <option key={`ai-p-${p.id}`} value={p.id}>{p.firstName} {p.lastName} ({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک بهیار'})</option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : (
-                        <div className="bg-emerald-50 text-emerald-800 border border-emerald-150 p-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center">
-                          متقاضی: {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
-                        </div>
-                      )}
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-500 mb-1">درخواست خود را بنویسید:</label>
-                        <textarea
-                          value={aiPromptInput}
-                          onChange={(e) => setAiPromptInput(e.target.value)}
-                          placeholder="نمونه: دهم و دوازدهم آف باشم، ۱۵ام تا ۱۸ام مرخصی روزانه و ۲۰ام شیفت شب باشم و ۲۲ام شب و عصر (EN) نباشم"
-                          className="w-full text-xs font-bold bg-white border border-slate-300 rounded-xl px-4 py-2 focus:border-purple-500 focus:outline-none min-h-[50px] h-[58px] resize-none"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 flex justify-end gap-2 text-xs">
-                    {aiProposedRequests.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAiProposedRequests([]);
-                          setAiPromptInput('');
-                        }}
-                        className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2.5 rounded-xl font-bold transition-all cursor-pointer"
-                      >
-                        پاک کردن نتایج
-                      </button>
                     )}
-                    <button
-                      type="button"
-                      disabled={isAiProcessing}
-                      onClick={async () => {
-                        const targetPId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : aiSelectedPersonnelId;
-                        if (!targetPId) {
-                          alert("لطفاً ابتدا پرسنل مورد نظر را انتخاب کنید.");
-                          return;
-                        }
-                        if (!aiPromptInput.trim()) {
-                          alert("لطفاً ابتدا درخواست خود را بنویسید.");
-                          return;
-                        }
-                        setIsAiProcessing(true);
-                        setAiProposedRequests([]);
-                        // نوار درصد با مراحل واقعی پردازش هوش مصنوعی هم‌گام می‌شود.
-                        aiProgress.start('send');
-                        try {
-                          aiProgress.beginPhase('analyze');
-                          const res = await fetch("/api/gemini/parse-requests", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              text: aiPromptInput,
-                              year: currentYear,
-                              month: currentMonth
-                            })
-                          });
-                          if (!res.ok) {
-                            const errData = await res.json();
-                            throw new Error(errData.error || "خطا در برقراری ارتباط با سرور");
-                          }
-                          aiProgress.beginPhase('normalize');
-                          const data = await res.json();
-                          const mapped = (data.requests || []).map((r: any, idx: number) => ({
-                            ...r,
-                            id: `ai_req_${Date.now()}_${idx}`,
-                            personnelId: targetPId
-                          }));
-                          setAiProposedRequests(mapped);
-                          aiProgress.complete();
-                          logEvent({
-                            category: 'ai',
-                            severity: 'success',
-                            title: `هوش مصنوعی ${mapped.length} درخواست را از متن استخراج کرد`,
-                            detail: `پرسنل هدف: ${(() => {
-                              const p = personnel.find(item => item.id === targetPId);
-                              return p ? `${p.firstName} ${p.lastName}` : targetPId;
-                            })()}`,
-                          });
-                        } catch (err) {
-                          console.error(err);
-                          aiProgress.reset();
-                          logEvent({
-                            category: 'ai',
-                            severity: 'error',
-                            title: 'پردازش درخواست با هوش مصنوعی ناموفق بود',
-                            detail: err instanceof Error ? err.message : String(err),
-                          });
-                          alert("خطا در پردازش هوش مصنوعی: " + (err instanceof Error ? err.message : String(err)));
-                        } finally {
-                          setIsAiProcessing(false);
-                        }
-                      }}
-                      className="w-full flex items-center justify-center gap-1.5 bg-purple-700 hover:bg-purple-800 disabled:bg-purple-300 text-white text-xs font-bold py-3 px-5 rounded-2xl shadow-md transition-all cursor-pointer"
-                    >
-                      {isAiProcessing ? (
-                        <>
-                          <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                          در حال پردازش هوشمند...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4 text-amber-200 fill-amber-200" /> پردازش با هوش مصنوعی گوگل
-                        </>
-                      )}
-                    </button>
                   </div>
                 </div>
 
-              </div>
-
-              {aiProposedRequests.length > 0 && (
-                <div className="bg-white border border-purple-100 p-5 rounded-3xl space-y-3 shadow-md animate-fadeIn">
-                  <div className="flex items-center justify-between border-b pb-2 border-slate-105">
-                    <span className="text-xs font-black text-purple-800 flex items-center gap-1.5">
-                      <Sparkles className="w-4 h-4 text-purple-600 fill-purple-200" /> نتایج استخراج شده هوشمند (نیاز به تایید شما):
-                    </span>
-                    <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-mono font-bold">
-                      {aiProposedRequests.length} مورد یافت شد
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[160px] overflow-y-auto p-1">
-                    {aiProposedRequests.map((r, idx) => {
-                      const targetPId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : aiSelectedPersonnelId;
-                      const p = personnel.find(per => per.id === targetPId) || selectedPersonnelUser;
+                <div className="p-4 sm:p-6 space-y-5">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {QUICK_REQUEST_TEMPLATES.map(template => {
+                      const isSelected = quickSelectedTemplateId === template.id;
                       return (
-                        <div key={`ai-prop-${idx}`} className="flex items-center justify-between p-2 rounded-xl border border-slate-100 bg-purple-50/20 hover:bg-purple-50/40 text-xs">
-                          <div className="flex items-center gap-2 font-bold text-slate-705">
-                            <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-705 text-[10px] font-mono">#{idx+1}</span>
-                            <span>{getRequestSummaryText(r)}</span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-bold border border-slate-200 px-1.5 py-0.5 rounded bg-white">{p ? `${p.firstName} ${p.lastName}` : "پرسنل"}</span>
-                        </div>
+                        <button
+                          type="button"
+                          key={template.id}
+                          onClick={() => {
+                            setQuickSelectedTemplateId(template.id);
+                            setQuickSelectedDays([]);
+                          }}
+                          className={`group relative overflow-hidden rounded-2xl border p-3 min-h-[94px] text-right transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-white border-indigo-300 shadow-lg shadow-indigo-100 scale-[1.02]'
+                              : 'bg-white/80 border-slate-200 hover:border-indigo-200 hover:shadow-md'
+                          }`}
+                          aria-pressed={isSelected}
+                        >
+                          <span className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-l ${template.accentClass}`} />
+                          <span className="block text-base font-black text-slate-900 mb-1">{template.title}</span>
+                          <span className="block text-[10px] font-extrabold text-slate-400 leading-5">{template.subtitle}</span>
+                          {isSelected && (
+                            <span className="absolute left-2 bottom-2 bg-indigo-600 text-white rounded-full p-1 shadow-sm">
+                              <Check className="w-3 h-3" />
+                            </span>
+                          )}
+                        </button>
                       );
                     })}
                   </div>
 
-                  <div className="flex flex-col sm:flex-row items-center justify-between pt-2 border-t border-slate-100 gap-2">
-                    <p className="text-[10px] text-rose-500 font-extrabold">در صورت تایید، تغییرات مستقیماً در صف درخواست‌های این ماه پرستار ثبت خواهد شد.</p>
+                  {quickSelectedTemplateId && quickSelectedTemplateId !== 'off' && quickSelectedTemplateId !== 'leave' && (
+                    <div className="bg-white/85 border border-slate-200 rounded-3xl p-4 space-y-4 shadow-xs animate-fadeIn">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h5 className="text-sm font-black text-slate-800">زیرشاخه سریع را انتخاب کن</h5>
+                          <p className="text-[10px] font-bold text-slate-400 mt-1">جمعه‌ها در گزینه‌های «روز فرد/زوج» محاسبه نمی‌شوند.</p>
+                        </div>
+                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 rounded-full">
+                          {quickSelectedTemplateId === 'long_off' ? 'لانگ‌آف = ME + OFF نرم روز مقابل' : 'ثبت مستقیم درخواست شیفت'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        {QUICK_REQUEST_SCOPE_OPTIONS.map(option => {
+                          const isScopeSelected = quickSelectedScope === option.id;
+                          return (
+                            <button
+                              type="button"
+                              key={option.id}
+                              onClick={() => setQuickSelectedScope(option.id)}
+                              className={`rounded-2xl border px-3 py-3 text-right transition-all cursor-pointer ${
+                                isScopeSelected
+                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
+                                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
+                              }`}
+                            >
+                              <span className="block text-xs font-black">{option.title}</span>
+                              <span className={`block text-[9px] mt-1 font-bold ${isScopeSelected ? 'text-indigo-100' : 'text-slate-400'}`}>{option.subtitle}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {(quickSelectedTemplateId === 'off' || quickSelectedTemplateId === 'leave') && (
+                    <div className="bg-white/90 border border-slate-200 p-4 rounded-3xl space-y-3 shadow-xs animate-fadeIn">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h5 className="text-sm font-black text-slate-800">
+                            {quickSelectedTemplateId === 'off' ? 'روزهای OFF 😴 را از تقویم انتخاب کن' : 'روزهای مرخصی 🏖 را از تقویم انتخاب کن'}
+                          </h5>
+                          <p className="text-[10px] text-slate-400 mt-1 font-bold">همان تقویم ماه جاری استفاده می‌شود؛ هر روز با یک کلیک انتخاب/حذف می‌شود.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (quickSelectedDays.length === calendarDays.length) {
+                              setQuickSelectedDays([]);
+                            } else {
+                              setQuickSelectedDays(calendarDays.map(day => day.day));
+                            }
+                          }}
+                          className="text-[10px] bg-indigo-50 border border-indigo-150 text-indigo-700 px-3 py-2 rounded-xl hover:bg-indigo-100 font-black transition-all cursor-pointer"
+                        >
+                          {quickSelectedDays.length === calendarDays.length ? 'حذف همه' : 'انتخاب کل ماه'}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-7 gap-1.5 max-h-[260px] overflow-y-auto p-2 scrollbar-thin rounded-2xl border border-slate-200 bg-white shadow-inner">
+                        {WEEKDAYS.map((weekday, index) => (
+                          <div key={`quick-weekday-${weekday}`} className={`sticky top-0 z-10 rounded-lg py-1 text-center text-[8px] font-black ${index === 6 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{weekday[0]}</div>
+                        ))}
+                        {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, index) => <span key={`quick-empty-${index}`} />)}
+                        {calendarDays.map(dayInfo => {
+                          const isSelected = quickSelectedDays.includes(dayInfo.day);
+                          return (
+                            <button
+                              type="button"
+                              key={`quick-custom-day-btn-${dayInfo.day}`}
+                              onClick={() => {
+                                if (isSelected) {
+                                  setQuickSelectedDays(quickSelectedDays.filter(day => day !== dayInfo.day));
+                                } else {
+                                  setQuickSelectedDays([...quickSelectedDays, dayInfo.day].sort((a, b) => a - b));
+                                }
+                              }}
+                              title={dayInfo.holidayTitle || (calendarOccasions[dayInfo.day] || []).join('، ')}
+                              className={`relative min-h-12 py-1.5 text-[11px] font-black rounded-xl border transition-all flex flex-col items-center justify-center cursor-pointer ${
+                                isSelected
+                                  ? dayInfo.isHoliday
+                                    ? 'bg-rose-600 text-white border-rose-700 shadow-md scale-105'
+                                    : 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105'
+                                  : dayInfo.isHoliday
+                                    ? 'bg-rose-100 text-rose-700 border-rose-300 hover:bg-rose-200'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
+                              }`}
+                            >
+                              {dayInfo.isHoliday && <span className={`absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-rose-500'}`} />}
+                              <span className="text-xs font-mono font-extrabold">{dayInfo.day}</span>
+                              <span className="text-[8px] opacity-75">{WEEKDAYS[dayInfo.dayOfWeek][0]}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[10px] font-bold text-slate-500">
+                        <span>تعداد انتخاب: <b className="text-indigo-700">{quickSelectedDays.length}</b> روز</span>
+                        <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-indigo-600" /> انتخاب‌شده</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white border border-slate-200 rounded-3xl p-4 shadow-xs">
+                    <div className="text-xs font-bold text-slate-500 leading-6">
+                      {quickSelectedTemplateId ? (
+                        <>
+                          <span className="font-black text-slate-800">آماده ثبت: </span>
+                          {QUICK_REQUEST_TEMPLATES.find(template => template.id === quickSelectedTemplateId)?.title}
+                          {quickSelectedTemplateId !== 'off' && quickSelectedTemplateId !== 'leave'
+                            ? ` / ${QUICK_REQUEST_SCOPE_OPTIONS.find(option => option.id === quickSelectedScope)?.title}`
+                            : ` / ${quickSelectedDays.length} روز انتخاب شده`}
+                        </>
+                      ) : 'یک الگو را انتخاب کنید.'}
+                    </div>
                     <button
                       type="button"
-                      onClick={async () => {
-                        const targetPId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : aiSelectedPersonnelId;
-                        if (!targetPId) {
-                          alert("لطفاً ابتدا پرسنل مورد نظر را انتخاب کنید.");
-                          return;
-                        }
-                        try {
-                          const newRequests = aiProposedRequests.map(item => ({
-                            ...item,
-                            id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                            personnelId: targetPId
-                          }));
-
-                          let updatedR = [...requests];
-                          for (const reqData of newRequests) {
-                            updatedR.push(reqData);
-                          }
-
-                          await saveState(personnel, updatedR, settings, customHolidays, {
-                            mode: 'refresh_personnel',
-                            personnelIds: [targetPId]
-                          });
-                          alert("درخواست‌های هوشمند با موفقیت ثبت شدند!");
-                          setAiProposedRequests([]);
-                          setAiPromptInput('');
-                        } catch (e) {
-                          console.error(e);
-                          alert("خطا در ذخیره‌سازی درخواست هوشمند: " + (e instanceof Error ? e.message : String(e)));
-                        }
-                      }}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow cursor-pointer transition-colors"
+                      disabled={isQuickRequestSubmitting || !quickSelectedTemplateId}
+                      onClick={handleQuickSubmitRequest}
+                      className="w-full lg:w-auto min-w-44 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black text-xs py-3 px-6 rounded-2xl shadow-lg shadow-emerald-100 transition-all cursor-pointer flex items-center justify-center gap-2"
                     >
-                      ✓ تایید نهایی و اضافه کردن به سامانه
+                      {isQuickRequestSubmitting ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> در حال ثبت...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4" /> تأیید
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
-              )}
+              </div>
 
               <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto w-full">
@@ -6157,33 +6231,7 @@ export default function Home() {
                                   )}
                                 </td>
                                 <td className="px-6 py-3.5 text-center flex items-center justify-center gap-1">
-                                  <button
-                                    onClick={() => {
-                                      const isLocked = requestsLockedMonths.includes(`${currentYear}_${currentMonth}`);
-                                      if (isLocked && role === 'personnel') {
-                                        alert('مهلت ویرایش درخواست برای این ماه به پایان رسیده است.');
-                                        return;
-                                      }
-                                      setEditingRequest(r);
-                                      setReqPersonnelId(r.personnelId);
-                                      setReqType(r.requestType);
-                                      if (r.requestType === 'shift' || r.requestType === 'avoid_shift') {
-                                        setReqPreferredShift(r.preferredShift as any || 'M');
-                                      }
-                                      setReqPatternInput(r.patternSteps ? r.patternSteps.join(' ') : 'EN OFF OFF');
-                                      setReqIsEssential(r.isEssential || false);
-                                      setReqOffHardness(r.offHardness);
-                                      setReqScope(r.scope || 'all');
-                                      if (r.startDate) setReqStartDate(r.startDate);
-                                      if (r.endDate) setReqEndDate(r.endDate);
-                                      setReqSelectedDays(r.selectedDays || []);
-                                      setShowAddRequestModal(true);
-                                    }}
-                                    className="text-blue-500 hover:text-blue-700 p-1.5 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
-                                    title="ویرایش درخواست"
-                                  >
-                                    <Settings2 className="w-4 h-4" />
-                                  </button>
+
                                   <button
                                     onClick={() => setDeleteTarget({
                                       id: r.id,
