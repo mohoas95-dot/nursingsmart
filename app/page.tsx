@@ -6355,7 +6355,7 @@ export default function Home() {
                         <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini 3.6 Flash</span>
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
-                      <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ 😉</h4>
+                      <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
                       <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
                       </p>
