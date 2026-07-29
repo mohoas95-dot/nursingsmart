@@ -1,6 +1,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 
+// Model is configurable via the GEMINI_MODEL env var so it can be swapped
+// from Vercel settings without a code change when Google deprecates a version.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
   if (!apiKey) {
@@ -87,7 +91,7 @@ export async function POST(req: NextRequest) {
     const ai = getGeminiClient();
 
     const systemPrompt = `
-You are Gemini 2.5 Flash acting as a warm Persian chat assistant inside a hospital nursing scheduling app.
+You are a warm Persian chat assistant running on Google Gemini inside a hospital nursing scheduling app.
 Speak conversational Persian, friendly and concise. The user is a nurse/personnel. If a first name is provided, greet and refer to them naturally by first name.
 
 Your goal is to turn natural Persian scheduling conversations into clean structured shift requests ONLY when the user's intent is unambiguous.
@@ -141,7 +145,7 @@ summary should be a compact Persian recap starting with or suitable after "من�
     };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_MODEL,
       contents: `CONTEXT_JSON:\n${JSON.stringify(context)}\n\nAnalyze the conversation and respond with the requested JSON object.`,
       config: {
         systemInstruction: systemPrompt,

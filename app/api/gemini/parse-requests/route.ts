@@ -1,9 +1,13 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 
+// Model is configurable via the GEMINI_MODEL env var so it can be swapped
+// from Vercel settings without a code change when Google deprecates a version.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+
 // We initialize the client inside the route handler lazy-fashion to avoid crashing at module load if API key is not set.
 function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not defined in environment variables.");
   }
@@ -72,7 +76,7 @@ Respond ONLY with the filled JSON array as defined in the response schema. Keep 
 `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: GEMINI_MODEL,
       contents: text,
       config: {
         systemInstruction: systemPrompt,
