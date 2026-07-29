@@ -1,14 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-
-// We initialize the client inside the route handler lazy-fashion to avoid crashing at module load if API key is not set.
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not defined in environment variables.");
-  }
-  return new GoogleGenAI({ apiKey });
-}
+import { generateContentWithRetry, getGeminiClient, ModelBusyError } from "@/lib/gemini";
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,19 +22,25 @@ CONTEXT:
 
 RULES FOR PARSING:
 1. "M" = Morning (صبح), "E" = Afternoon (عصر), "N" = Night (شب), "ME" = Morning-Afternoon (عصر-صبح), "EN" = Afternoon-Night (شب-عصر), "MN" = Night-Morning (شب-صبح), "MEN" = Whole day (ترکیبی کل روز).
-2. If request is NOT TO BE in a shift (e.g. "در تاریخ... شیفت... نباشم"), map:
+2. Persian shift slang — map instantly, never ignore or misread them:
+   - «عصر و شب» / «عصر-شب» -> EN
+   - «لانگ» / «شیفت لانگ» -> ME
+   - «۲۴» / «24» / «۲۴ ساعته» / «شیفت ۲۴» -> MEN
+   - «صبح تک» -> M، «عصر تک» -> E، «شب تک» -> N
+3. MULTI-REQUEST: one message often holds several requests; extract ALL of them as separate array items, never only the first.
+4. If request is NOT TO BE in a shift (e.g. "در تاریخ... شیفت... نباشم"), map:
    - requestType = "avoid_shift"
    - preferredShift = the shift to avoid (e.g., "M", "E", "N", "ME", "EN")
-3. If request is to be assigned a shift (e.g. "در تاریخ... شیفت... باشم"), map:
+5. If request is to be assigned a shift (e.g. "در تاریخ... شیفت... باشم"), map:
    - requestType = "shift"
    - preferredShift = the desired shift (M, E, N, ME, EN, MN, MEN)
-4. If request is strict Off/Day off (e.g. "آف باشم", "تعطیل باشم", "کشیک نباشم کل روز"), map:
+6. If request is strict Off/Day off (e.g. "آف باشم", "تعطیل باشم", "کشیک نباشم کل روز"), map:
    - requestType = "OFF"
    - preferredShift = "OFF"
-5. If request is for annual leave (e.g. "مرخصی باشم", "استحقاقی"), map:
+7. If request is for annual leave (e.g. "مرخصی باشم", "استحقاقی"), map:
    - requestType = "leave"
    - preferredShift = "L"
-6. Identify the calendar days correctly:
+8. Identify the calendar days correctly:
    - "۱۰ام" or "دهم" or "10" -> day 10
    - "شنبه‌ها" -> find Saturday days of the month or just use are of selectedDays.
    - If a range is mentioned e.g., "۱۲ام تا ۱۵ام" -> you can specify scope: "custom_days" and list the selectedDays as [12, 13, 14, 15] or scope: "range" with startDate and endDate. Using scope: "custom_days" is preferred and safest.
@@ -68,11 +66,18 @@ EXAMPLES:
     { "requestType": "avoid_shift", "preferredShift": "ME", "scope": "custom_days", "selectedDays": [5], "description": "نبودن در شیفت صبح-عصر (ME) در روز ۵" }
   ]
 
+- User: "۱۲ام لانگ باشم و ۱۸ و ۱۹ عصر و شب نباشم و ۲۵ام شیفت ۲۴ می‌خوام"
+  Parsed Array:
+  [
+    { "requestType": "shift", "preferredShift": "ME", "scope": "custom_days", "selectedDays": [12], "description": "شیفت لانگ (ME) در روز ۱۲" },
+    { "requestType": "avoid_shift", "preferredShift": "EN", "scope": "custom_days", "selectedDays": [18, 19], "description": "نبودن در شیفت عصر و شب (EN) در روزهای ۱۸ و ۱۹" },
+    { "requestType": "shift", "preferredShift": "MEN", "scope": "custom_days", "selectedDays": [25], "description": "شیفت ۲۴ ساعته (MEN) در روز ۲۵" }
+  ]
+
 Respond ONLY with the filled JSON array as defined in the response schema. Keep descriptions neat and in Persian.
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await generateContentWithRetry(ai, {
       contents: text,
       config: {
         systemInstruction: systemPrompt,
@@ -117,6 +122,9 @@ Respond ONLY with the filled JSON array as defined in the response schema. Keep 
     const parsedData = JSON.parse(response.text || "{}");
     return NextResponse.json({ requests: parsedData.requests || [] });
   } catch (error) {
+    if (error instanceof ModelBusyError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error("Error parsing smart requests via Gemini API:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش هوش مصنوعی" },

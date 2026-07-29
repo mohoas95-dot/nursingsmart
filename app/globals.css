@@ -77,6 +77,24 @@
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* حرکت نرم بالا و پایین فلش داخل ابر — هم‌گام با شناوری ابر (۲.۶ ثانیه) */
+@keyframes cloud-arrow {
+  0%, 100% { transform: translateY(3px); }
+  50% { transform: translateY(-4px); }
+}
+
+/* شناوری آرام کل ابر — حس سه‌بعدی و زنده بودن */
+@keyframes cloud-float {
+  0%, 100% { transform: translateY(1px); }
+  50% { transform: translateY(-4px); }
+}
+
+/* نوار پیشرفت نامعین — لغزش پیوسته از چپ به راست */
+@keyframes indeterminate-bar {
+  0% { transform: translateX(-140%); }
+  100% { transform: translateX(340%); }
+}
+
 .animate-progress-shimmer {
   animation: progress-shimmer 1.6s ease-in-out infinite;
 }
@@ -89,10 +107,25 @@
   animation: overlay-pop 0.32s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.animate-cloud-arrow {
+  animation: cloud-arrow 2.6s ease-in-out infinite;
+}
+
+.animate-cloud-float {
+  animation: cloud-float 2.6s ease-in-out infinite;
+}
+
+.animate-indeterminate-bar {
+  animation: indeterminate-bar 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-progress-shimmer,
   .animate-soft-glow,
-  .animate-overlay-pop {
+  .animate-overlay-pop,
+  .animate-cloud-arrow,
+  .animate-cloud-float,
+  .animate-indeterminate-bar {
     animation: none !important;
   }
 }
