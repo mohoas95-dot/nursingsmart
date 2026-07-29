@@ -63,20 +63,46 @@ export function BusyOverlay({
           aria-live="polite"
           aria-busy="true"
         >
-          {/* ابر آپلود + نقاط رنگی شناور */}
-          <div className="relative flex h-24 w-full items-center justify-center" aria-hidden="true">
+          {/* ابر آپلود سه‌بعدی + نقاط رنگی شناور */}
+          <div className="relative flex h-28 w-full items-center justify-center" aria-hidden="true">
             {/* نقاط رنگی با ضربان‌های نامتقارن — حس جشن و زنده بودن */}
             <span className="absolute left-[18%] top-1 h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" style={{ animationDelay: '0.15s' }} />
             <span className="absolute left-[10%] top-1/2 h-2 w-2 rounded-full bg-amber-400 animate-pulse" style={{ animationDelay: '0.9s' }} />
-            <span className="absolute left-[26%] bottom-1 h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" style={{ animationDelay: '1.4s' }} />
+            <span className="absolute left-[26%] bottom-3 h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" style={{ animationDelay: '1.4s' }} />
             <span className="absolute right-[16%] top-0 h-1.5 w-1.5 rounded-full bg-sky-300 animate-pulse" style={{ animationDelay: '0.5s' }} />
             <span className="absolute right-[10%] top-1/3 h-1.5 w-1.5 rounded-full bg-teal-300 animate-pulse" style={{ animationDelay: '1.1s' }} />
-            <span className="absolute right-[22%] bottom-2 h-2 w-2 rounded-full bg-rose-300 animate-pulse" style={{ animationDelay: '1.8s' }} />
+            <span className="absolute right-[22%] bottom-4 h-2 w-2 rounded-full bg-rose-300 animate-pulse" style={{ animationDelay: '1.8s' }} />
 
-            <div className="relative drop-shadow-xl">
-              <Cloud className="h-24 w-24 fill-sky-200 text-sky-300" strokeWidth={1} />
+            {/* سایهٔ نرم زیر ابر — عمق و حس سه‌بعدی */}
+            <div className="absolute bottom-1.5 h-3 w-24 rounded-full bg-sky-900/15 blur-md" />
+
+            {/* گرادیان حجمی ابر (روشن بالا → آبی‌تر پایین) */}
+            <svg width="0" height="0" className="absolute" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="busy-cloud-gradient" x1="0" y1="0" x2="0.35" y2="1">
+                  <stop offset="0%" stopColor="#f0f9ff" />
+                  <stop offset="45%" stopColor="#bae6fd" />
+                  <stop offset="100%" stopColor="#7dd3fc" />
+                </linearGradient>
+              </defs>
+            </svg>
+
+            <div className="animate-cloud-float relative">
+              <Cloud
+                className="h-24 w-24 text-sky-400"
+                strokeWidth={1.2}
+                fill="url(#busy-cloud-gradient)"
+                style={{ filter: 'drop-shadow(0 10px 14px rgba(56, 189, 248, 0.35))' }}
+              />
+              {/* هایلایت سفید بالای ابر — برجستگی سه‌بعدی */}
+              <span className="pointer-events-none absolute left-4 top-2.5 h-3 w-8 rounded-full bg-white/75 blur-[3px]" />
+              {/* فلش آپلود کلفت با سایهٔ درخشان */}
               <span className="absolute inset-0 flex items-center justify-center pt-2">
-                <ArrowUp className="animate-cloud-arrow h-8 w-8 text-white" strokeWidth={2.5} />
+                <ArrowUp
+                  className="animate-cloud-arrow h-9 w-9 text-white"
+                  strokeWidth={3.5}
+                  style={{ filter: 'drop-shadow(0 2px 5px rgba(2, 132, 199, 0.5))' }}
+                />
               </span>
             </div>
           </div>

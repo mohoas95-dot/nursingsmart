@@ -6478,8 +6478,8 @@ export default function Home() {
                             <p className="text-[10px] font-bold text-slate-400 mt-1 leading-5">ثبت نهایی فقط بعد از تأیید شما انجام می‌شود.</p>
                           )}
                         </div>
-                        {isChatFullscreen && chatProposedRequests.length > 0 && (
-                          <span className="shrink-0 rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-[9px] font-black text-indigo-600">
+                        {chatProposedRequests.length > 0 && (
+                          <span className={`shrink-0 rounded-full bg-indigo-50 border border-indigo-100 font-black text-indigo-600 ${isChatFullscreen ? 'px-2 py-0.5 text-[9px]' : 'px-3 py-1 text-[10px]'}`}>
                             {chatProposedRequests.length} درخواست آماده ثبت
                           </span>
                         )}
