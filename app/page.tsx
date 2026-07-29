@@ -5307,6 +5307,8 @@ export default function Home() {
             </div>
           )}
 
+          {/* کارت «بازه برنامه‌ریزی» فقط برای مدیر و سرپرستار — پرسنل نیازی به این توضیحات ندارند */}
+          {role !== 'personnel' && (
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-3 text-xs flex-wrap">
               <span className="bg-indigo-50 text-indigo-700 p-1.5 rounded-xl border border-indigo-100"><Sparkles className="w-4 h-4"/></span>
@@ -5324,7 +5326,6 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2.5">
-              {role !== 'personnel' && (
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => handleRunOptimizer('nurse')}
@@ -5345,9 +5346,9 @@ export default function Home() {
                     {solvingTarget === 'assistant' ? 'در حال تولید برنامه‌های پیشنهادی کمک‌بهیاران...' : 'تولید برنامه‌های پیشنهادی کمک‌بهیاران'}
                   </button>
                 </div>
-              )}
             </div>
           </div>
+          )}
 
           {/* ====== مرکز هشدارها فقط برای داشبورد سرپرستار ====== */}
           {role === 'headnurse' && activeTab === 'schedule' && displayedSchedule && getVisibleWarnings().length > 0 && (
@@ -6811,11 +6812,13 @@ export default function Home() {
 
               </div>
 
-              {/* لاگ‌ها و اتفاقات: همه هشدارها، رویدادها و گزارش پردازش موتور هوشمند */}
-              <EventLogPanel
-                events={eventLogs}
-                monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
-              />
+              {/* لاگ‌ها و اتفاقات — فقط مدیر و سرپرستار؛ در پنل پرسنل نمایش داده نمی‌شود */}
+              {role !== 'personnel' && (
+                <EventLogPanel
+                  events={eventLogs}
+                  monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
+                />
+              )}
 
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="reports-table-container">
                 <div className="overflow-x-auto w-full">

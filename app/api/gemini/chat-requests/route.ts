@@ -128,6 +128,12 @@ status meanings:
 - "chat": supportive or advisory answer with no final requests yet.
 reply should be what the chat bubble says to the user.
 summary should be a compact Persian recap starting with or suitable after "منظور شما این است؟" when status="ready".
+
+SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
+- AFTER building the requests array, write reply and summary FROM that exact array — treat the array as the only source of truth.
+- Mention EVERY item of requests in reply/summary, one short clause per item (e.g. «صبح تک در روزهای غیرتعطیل»، «۲۴ ساعته برای ۱۳ مرداد»، «آف در مابقی تعطیلات»).
+- NEVER announce a request, pattern or shift in reply/summary that is NOT present in the requests array. If something cannot be expressed as a structured item, leave it out of the spoken summary too (you may mention it only as a caveat in warnings).
+- If you produce 3 items, describe 3 items; if 1, describe 1. What the assistant says must equal what the user sees in the analysis panel.
 `;
 
     const context = {
