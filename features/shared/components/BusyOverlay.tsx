@@ -2,52 +2,99 @@
 
 import React from 'react';
 import { Activity } from 'lucide-react';
+import { ProgressMeter } from './ProgressMeter';
 
 /**
  * BusyOverlay — Presentational Component
  *
  * RESPONSIBILITY:
- *   Render a full-screen overlay with loading animation when the app is busy
- *   (e.g., solving, saving, AI processing).
+ *   کارت لودینگ سامانه هنگام عملیات سنگین (تولید برنامه، ذخیره‌سازی، هوش
+ *   مصنوعی) به‌همراه نوار پیشرفت ۰ تا ۱۰۰ درصد هم‌گام با مراحل واقعی.
+ *
+ * تعادل طراحی:
+ *   کارت فشرده می‌ماند (پهنای ~۲۰rem) اما رنگ، پویایی و هویت بصری سامانه
+ *   حفظ شده است: نوار گرادیانی بالا، هاله‌های رنگی تنفس‌کننده، لوگوی
+ *   بیمارستان در مرکز حلقه، عنوان درشت «لطفا شکیبا باشید» و نشان وضعیت زنده.
  *
  * Extracted from: app/page.tsx (Phase 6)
  */
 
 export interface BusyOverlayProps {
+  /** نام کوتاه عملیات در حال انجام (مثلاً «تولید برنامه پرستاران»). */
   subtitle: string;
+  /** درصد پیشرفت (۰ تا ۱۰۰). اگر تعریف نشود انیمیشن نامعین نمایش داده می‌شود. */
+  percent?: number;
+  /** برچسب مرحلهٔ جاری. */
+  phaseLabel?: string;
+  phaseNumber?: number;
+  phaseCount?: number;
+  /** متن زمان باقی‌مانده. */
+  remainingLabel?: string;
+  /** عنوان اصلی کارت. */
+  title?: string;
 }
 
-export function BusyOverlay({ subtitle }: BusyOverlayProps) {
+export function BusyOverlay({
+  subtitle,
+  percent,
+  phaseLabel,
+  phaseNumber,
+  phaseCount,
+  remainingLabel,
+  title = 'لطفا شکیبا باشید',
+}: BusyOverlayProps) {
+  const hasProgress = typeof percent === 'number' && Number.isFinite(percent);
+
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/35 backdrop-blur-md p-4 cursor-progress">
-      <div className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-white/50 bg-white/80 shadow-2xl shadow-slate-900/25">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/40 backdrop-blur-md p-4 cursor-progress">
+      <div className="animate-overlay-pop relative w-full max-w-[20.5rem] overflow-hidden rounded-[1.75rem] border border-white/60 bg-white/90 shadow-2xl shadow-slate-900/30">
+        {/* نوار گرادیانی هویت سامانه */}
         <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-l from-indigo-500 via-sky-500 to-emerald-500" />
-        <div className="absolute -top-20 -right-16 h-44 w-44 rounded-full bg-sky-400/20 blur-3xl" />
-        <div className="absolute -bottom-20 -left-12 h-40 w-40 rounded-full bg-emerald-400/20 blur-3xl" />
+
+        {/* هاله‌های رنگی تنفس‌کننده — عمق و پویایی بدون اشغال فضا */}
+        <div className="pointer-events-none absolute -top-16 -right-12 h-36 w-36 rounded-full bg-sky-400/25 blur-3xl animate-soft-glow" />
+        <div
+          className="pointer-events-none absolute -bottom-16 -left-10 h-32 w-32 rounded-full bg-emerald-400/25 blur-3xl animate-soft-glow"
+          style={{ animationDelay: '1.2s' }}
+        />
 
         <div
-          className="relative flex flex-col items-center gap-5 px-8 py-9 text-center"
+          className="relative flex flex-col items-center gap-3.5 px-6 pb-6 pt-7 text-center"
           role="status"
           aria-live="polite"
           aria-busy="true"
         >
-          <div className="relative flex h-24 w-24 items-center justify-center">
-            <div className="absolute inset-0 rounded-full border-4 border-indigo-200/80" />
-            <div className="absolute inset-2 rounded-full border-[3px] border-transparent border-t-indigo-600 border-r-sky-500 animate-spin" />
-            <div className="absolute inset-5 rounded-full border-2 border-emerald-200/70 border-b-emerald-500 animate-spin [animation-direction:reverse] [animation-duration:1.4s]" />
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 via-sky-500 to-emerald-500 text-white shadow-lg shadow-sky-500/30">
-              <Activity className="h-6 w-6 animate-pulse" />
+          {hasProgress ? (
+            <ProgressMeter
+              percent={percent as number}
+              phaseLabel={phaseLabel}
+              phaseNumber={phaseNumber}
+              phaseCount={phaseCount}
+              remainingLabel={remainingLabel}
+              size={116}
+            />
+          ) : (
+            /* حالت نامعین: همان حلقه‌های چرخان رنگی نسخهٔ اصلی */
+            <div className="relative flex h-20 w-20 items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-indigo-200/80" />
+              <div className="absolute inset-1.5 rounded-full border-[3px] border-transparent border-t-indigo-600 border-r-sky-500 animate-spin" />
+              <div className="absolute inset-4 rounded-full border-2 border-emerald-200/70 border-b-emerald-500 animate-spin [animation-direction:reverse] [animation-duration:1.4s]" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 via-sky-500 to-emerald-500 text-white shadow-lg shadow-sky-500/30">
+                <Activity className="h-5 w-5 animate-pulse" />
+              </div>
             </div>
+          )}
+
+          {/* عنوان درشت و خوانا — همان تأکید بصری نسخهٔ اصلی */}
+          <div className="space-y-1">
+            <h3 className="text-xl font-black leading-tight text-slate-900">{title}</h3>
+            <p className="text-xs font-extrabold text-slate-500">{subtitle}</p>
           </div>
 
-          <div className="space-y-2">
-            <h3 className="text-2xl font-black text-slate-900">لطفا شکیبا باشید</h3>
-            <p className="text-sm font-bold leading-7 text-slate-600">{subtitle}</p>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-4 py-2 text-[11px] font-extrabold text-slate-500 shadow-sm">
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-            در حال انجام عملیات، لطفاً صفحه را نبندید.
+          {/* نشان وضعیت زنده */}
+          <div className="flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white/80 px-3 py-1.5 text-[10px] font-extrabold text-slate-500 shadow-sm">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            صفحه را نبندید
           </div>
         </div>
       </div>

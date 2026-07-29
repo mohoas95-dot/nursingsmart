@@ -1,5 +1,13 @@
 // lib/types.ts - نسخه به‌روز‌شده با فیلدهای جدید
 
+import type { SystemEventLog } from '../domain/logging/system-events';
+
+export type {
+  SystemEventLog,
+  SystemEventCategory,
+  SystemEventSeverity,
+} from '../domain/logging/system-events';
+
 export type JobGroup = 'nurse' | 'assistant';
 
 export type NursePosition = 'supervisor' | 'staff' | 'general' | 'none';
@@ -116,7 +124,10 @@ export interface MonthlySchedule {
   finalizedAssistants?: boolean;
   requestsLocked?: boolean;
   dismissedWarnings?: string[];
+  /** @deprecated جای خود را به eventLogs داده است؛ فقط برای خواندن داده‌های قدیمی می‌ماند. */
   changeLogs?: string[];
+  /** لاگ‌ها و اتفاقات سامانه؛ حداکثر ۳۰ رویداد آخر (MAX_SYSTEM_EVENT_LOGS). */
+  eventLogs?: SystemEventLog[];
   lockedRows?: string[];
   autoSubstitutions?: AutoSubstitutionRecord[]; // فیلد جدید برای ثبت جایگزینی‌های خودکار
 }

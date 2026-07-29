@@ -131,6 +131,23 @@ const AutoSubstitutionSchema = z.object({
   timestamp: z.string().max(100),
 }).strict();
 
+// «لاگ‌ها و اتفاقات»: فقط ۳۰ رویداد آخر ذخیره می‌شود تا سند ماهانه بی‌وقفه رشد نکند.
+export const MAX_STORED_EVENT_LOGS = 30;
+
+const SystemEventLogSchema = z.object({
+  id: z.string().min(1).max(80),
+  // رویدادهای مهاجرت‌شده از changeLogs قدیمی زمان دقیق ندارند و رشتهٔ خالی می‌گیرند.
+  at: z.string().max(40),
+  category: z.enum([
+    'solver', 'schedule', 'alert', 'lock', 'requests',
+    'personnel', 'settings', 'calendar', 'ai', 'storage',
+  ]),
+  severity: z.enum(['info', 'success', 'warning', 'error']),
+  title: z.string().min(1).max(300),
+  detail: z.string().max(1500).optional(),
+  actor: z.string().max(120).optional(),
+}).strict();
+
 export const MonthlyScheduleSchema = z.object({
   year: z.number().int().min(1300).max(1500),
   month: z.number().int().min(1).max(12),
@@ -147,6 +164,8 @@ export const MonthlyScheduleSchema = z.object({
   requestsLocked: z.boolean().optional(),
   dismissedWarnings: z.array(z.string().max(5000)).optional(),
   changeLogs: z.array(z.string().max(5000)).optional(),
+  // سقف در سطح ذخیره‌سازی هم اعمال می‌شود: هیچ کلاینتی نمی‌تواند بیش از ۳۰ رویداد بنویسد.
+  eventLogs: z.array(SystemEventLogSchema).max(MAX_STORED_EVENT_LOGS).optional(),
   lockedRows: z.array(nonEmptyId).optional(),
   autoSubstitutions: z.array(AutoSubstitutionSchema).optional(),
 }).strict();

@@ -141,3 +141,28 @@ export {
   pruneDismissedWarningMap,
   pruneDismissedWarnings,
 } from './scheduling/alert-lifecycle';
+
+// ============================================================================
+// System Event Log — لاگ‌ها و اتفاقات (نگهداری ۳۰ رویداد آخر)
+// ============================================================================
+
+export {
+  MAX_SYSTEM_EVENT_LOGS,
+  SYSTEM_EVENT_CATEGORIES,
+  SYSTEM_EVENT_SEVERITIES,
+  appendSystemEventLogs,
+  createSystemEventId,
+  createSystemEventLog,
+  formatSystemEventTime,
+  migrateLegacyChangeLogs,
+  normalizeSystemEventLogs,
+  orderEventLogsForDisplay,
+  summarizeEventLogs,
+} from './logging/system-events';
+
+export type {
+  SystemEventCategory,
+  SystemEventInput,
+  SystemEventLog,
+  SystemEventSeverity,
+} from './logging/system-events';

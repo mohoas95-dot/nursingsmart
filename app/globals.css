@@ -53,3 +53,46 @@
     break-inside: avoid !important;
   }
 }
+
+/* ==========================================================================
+   انیمیشن‌های کارت لودینگ (BusyOverlay / ProgressMeter)
+   با prefers-reduced-motion غیرفعال می‌شوند تا برای کاربران حساس آزاردهنده نباشد.
+   ========================================================================== */
+
+/* درخشش عبوری روی نوار پیشرفت — حس «در حال انجام» را منتقل می‌کند */
+@keyframes progress-shimmer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(220%); }
+}
+
+/* تنفس آرام هاله‌های رنگی پس‌زمینه */
+@keyframes soft-glow {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(1.12); }
+}
+
+/* ورود نرم کارت لودینگ */
+@keyframes overlay-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-progress-shimmer {
+  animation: progress-shimmer 1.6s ease-in-out infinite;
+}
+
+.animate-soft-glow {
+  animation: soft-glow 3.4s ease-in-out infinite;
+}
+
+.animate-overlay-pop {
+  animation: overlay-pop 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-progress-shimmer,
+  .animate-soft-glow,
+  .animate-overlay-pop {
+    animation: none !important;
+  }
+}

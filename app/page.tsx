@@ -57,7 +57,7 @@ import {
 import {
   generateSmartSuggestions
 } from '../lib/smartSuggestion';
-import { generateAndScoreScenarios } from '../lib/scenarioGenerator';
+import { generateAndScoreScenariosWithProgress } from '../lib/scenarioGenerator';
 import {
   calculateScenarioDifferencePercent,
   evaluateScenarioSchedule,
@@ -83,6 +83,15 @@ import {
   pruneDismissedWarningMap,
   pruneDismissedWarnings,
 } from '../domain/scheduling/alert-lifecycle';
+import {
+  MAX_SYSTEM_EVENT_LOGS,
+  appendSystemEventLogs,
+  createSystemEventLog,
+  normalizeSystemEventLogs,
+  type SystemEventInput,
+  type SystemEventLog,
+} from '../domain/logging/system-events';
+import { buildSolverRunEvents } from '../domain/logging/solver-report';
 import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
@@ -92,6 +101,13 @@ import { PrintScheduleSheet } from '../features/scheduling/components/PrintSched
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
+import { EventLogPanel } from '../features/reports/components/EventLogPanel';
+import { useTaskProgress } from '../features/shared/hooks/useTaskProgress';
+import {
+  AI_PHASES,
+  SAVE_PHASES,
+  SOLVER_PHASES,
+} from '../features/shared/progress-phases';
 import { useScheduleState } from '../features/scheduling/hooks/useScheduleState';
 import { usePersonnelForm } from '../features/personnel/hooks/usePersonnelForm';
 import {
@@ -129,8 +145,7 @@ import {
   Activity,
   Menu,
   X,
-  Settings2,
-  History
+  Settings2
 } from 'lucide-react';
 
 // Department interface for multi-department management
@@ -343,6 +358,28 @@ export default function Home() {
     isScheduleLocked,
     isRowLocked,
   } = useScheduleState();
+
+  // ==========================================================================
+  // نوار پیشرفت ۰ تا ۱۰۰ درصد — کاملاً هم‌گام با مراحل واقعی پردازش
+  // ==========================================================================
+  // هر عملیات سنگین تراکر مستقل خود را دارد. مدت واقعی هر مرحله یاد گرفته و در
+  // localStorage نگه داشته می‌شود تا تخمین «زمان باقی‌مانده» با هر اجرا دقیق‌تر شود.
+  // فقط عملیات واقعاً طولانی نوار درصدی دارند. ورود به سامانه و راه‌اندازی
+  // اولیه عمداً کنار گذاشته شده‌اند تا صفحهٔ لودینگ سبک و سریع بماند.
+  const solverProgress = useTaskProgress(SOLVER_PHASES, { storageKey: 'solver' });
+  const saveProgress = useTaskProgress(SAVE_PHASES, { storageKey: 'save' });
+  const aiProgress = useTaskProgress(AI_PHASES, { storageKey: 'ai' });
+
+  // saveDbState و handleRunOptimizer توابع معمولی (نه useCallback) هستند و در هر
+  // رندر بازساخته می‌شوند؛ با ref همیشه به تازه‌ترین کنترل‌های تراکر دسترسی دارند.
+  // به‌روزرسانی ref در effect انجام می‌شود تا فاز رندر خالص بماند؛ این توابع فقط
+  // از دل رویدادها و effectها صدا زده می‌شوند، نه حین رندر.
+  const saveProgressRef = React.useRef(saveProgress);
+  const solverProgressRef = React.useRef(solverProgress);
+  useEffect(() => {
+    saveProgressRef.current = saveProgress;
+    solverProgressRef.current = solverProgress;
+  }, [saveProgress, solverProgress]);
 
   // درخواست ۸: state برای ویرایش درخواست در پنل پرسنل
 
@@ -1043,6 +1080,10 @@ export default function Home() {
     setFullDbState(updatedDb);
     syncLocalStateFromDb(updatedDb);
 
+    // پیشرفت واقعی ذخیره‌سازی = نسبت منابع نوشته‌شده به کل منابع تغییر‌یافته.
+    const totalMutations = Math.max(1, mutations.length);
+    let completedMutations = 0;
+
     const writeMutationOnce = async (mutation: StorageMutation) => {
       const versionId = versionIdForResource(mutation.resource);
       const expectedETag = storageVersionsRef.current[versionId];
@@ -1066,11 +1107,20 @@ export default function Home() {
         throw new Error(result.error || `خطای ذخیره منبع ${versionId}`);
       }
       storageVersionsRef.current[versionId] = result.etag;
+      completedMutations += 1;
+      if (showBusyOverlay) {
+        saveProgressRef.current.reportPhaseFraction(completedMutations / totalMutations);
+      }
     };
 
     const execute = async () => {
       setPendingDbSaveCount(count => count + 1);
-      if (showBusyOverlay) setBlockingDbSaveCount(count => count + 1);
+      if (showBusyOverlay) {
+        // نوار پیشرفت فقط برای ذخیره‌سازی‌های مسدودکننده (که پوشش لودینگ دارند) اجرا می‌شود.
+        saveProgressRef.current.start('validate');
+        saveProgressRef.current.beginPhase('upload');
+        setBlockingDbSaveCount(count => count + 1);
+      }
       try {
         let pendingMutations = mutations;
         // خطای تداخل نباید یک ذخیره معتبر را زمین‌گیر کند: در تداخل، جدیدترین وضعیت سرور
@@ -1116,14 +1166,19 @@ export default function Home() {
               existed: readCommittedResourceValue(snapshot.state, m.resource) !== undefined,
             }));
         }
+        if (showBusyOverlay) saveProgressRef.current.beginPhase('sync');
       } catch (error) {
         // A batch can span multiple objects and S3 has no multi-object transaction.
         // Fail closed after any partial failure; a reload is required before more writes.
         storageWriteBlockedRef.current = true;
+        if (showBusyOverlay) saveProgressRef.current.reset();
         throw error;
       } finally {
         setPendingDbSaveCount(count => Math.max(0, count - 1));
-        if (showBusyOverlay) setBlockingDbSaveCount(count => Math.max(0, count - 1));
+        if (showBusyOverlay) {
+          saveProgressRef.current.complete();
+          setBlockingDbSaveCount(count => Math.max(0, count - 1));
+        }
       }
     };
 
@@ -1131,6 +1186,121 @@ export default function Home() {
     saveQueueRef.current = queuedSave.catch(() => undefined);
     return queuedSave;
   };
+
+  // ==========================================================================
+  // لاگ‌ها و اتفاقات — ثبت مرکزی رویدادها در «کارنامه و گزارشات»
+  // ==========================================================================
+  // همهٔ هشدارها و اتفاقات مهم سامانه (از جمله گزارش پردازش موتور هوشمند) در
+  // برنامهٔ همان ماه ذخیره می‌شوند. فقط MAX_SYSTEM_EVENT_LOGS (۳۰) رویداد آخر
+  // نگه داشته می‌شود و قدیمی‌ترها به‌صورت خودکار حذف می‌شوند تا فضای
+  // ذخیره‌سازی پر نشود.
+
+  /** برچسب کاربر جاری برای ستون «ثبت‌کننده» در لاگ. */
+  const currentActorLabel = React.useMemo(() => {
+    if (!authenticatedUser) return undefined;
+    const roleLabel = authenticatedUser.role === 'ADMIN'
+      ? 'مدیر سامانه'
+      : authenticatedUser.role === 'HEAD_NURSE'
+        ? 'سرپرستار بخش'
+        : 'پرسنل';
+    return `${authenticatedUser.firstName} ${authenticatedUser.lastName} (${roleLabel})`;
+  }, [authenticatedUser]);
+
+  const currentActorRef = React.useRef<string | undefined>(undefined);
+  useEffect(() => {
+    currentActorRef.current = currentActorLabel;
+  }, [currentActorLabel]);
+
+  /** رویدادهای ماه جاری، پس از ادغام رکوردهای متنی قدیمی و اعمال سقف ۳۰تایی. */
+  const eventLogs = React.useMemo<SystemEventLog[]>(
+    () => normalizeSystemEventLogs(schedule?.eventLogs, schedule?.changeLogs),
+    [schedule?.eventLogs, schedule?.changeLogs]
+  );
+
+  /**
+   * چند رویداد را روی سند برنامهٔ ماه مشخص می‌نشاند و سقف نگهداری را اعمال می‌کند.
+   * اگر برنامه‌ای برای آن ماه وجود نداشته باشد، یک سند خالی معتبر ساخته می‌شود
+   * تا رویداد از دست نرود.
+   */
+  const attachEventLogsToDb = React.useCallback((
+    nextDb: AppDatabaseState,
+    newEvents: ReadonlyArray<SystemEventLog>,
+    targetMonthKey?: string
+  ): AppDatabaseState => {
+    if (newEvents.length === 0) return nextDb;
+    const deptId = selectedDepartmentId || 'sepehr';
+    const key = targetMonthKey || `${currentYear}_${currentMonth}`;
+    const dept = (nextDb.deptData || {})[deptId] as any;
+    if (!dept) return nextDb;
+
+    const [yearPart, monthPart] = key.split('_');
+    const existingSchedule = dept.schedules?.[key];
+    const baseSchedule = existingSchedule || {
+      year: Number(yearPart) || currentYear,
+      month: Number(monthPart) || currentMonth,
+      assignments: {},
+      shiftLeaders: {},
+      warnings: [],
+    };
+
+    const merged = appendSystemEventLogs(
+      normalizeSystemEventLogs(baseSchedule.eventLogs, baseSchedule.changeLogs),
+      newEvents,
+      MAX_SYSTEM_EVENT_LOGS
+    );
+
+    const nextSchedule: any = { ...baseSchedule, eventLogs: merged };
+    // رکوردهای متنی قدیمی پس از مهاجرت به رویداد ساخت‌یافته حذف می‌شوند تا
+    // داده تکراری در فضای ذخیره‌سازی باقی نماند.
+    if (nextSchedule.changeLogs) delete nextSchedule.changeLogs;
+
+    nextDb.deptData[deptId] = {
+      ...dept,
+      schedules: { ...(dept.schedules || {}), [key]: nextSchedule },
+    };
+    return nextDb;
+  }, [currentMonth, currentYear, selectedDepartmentId]);
+
+  /**
+   * ثبت رویداد در «لاگ‌ها و اتفاقات» و ذخیرهٔ آن در فضای ذخیره‌سازی.
+   * fire-and-forget است: شکست ثبت لاگ هرگز نباید عملیات اصلی کاربر را خراب کند.
+   *
+   * عمداً useCallback نیست: به saveDbState/getFreshDbCopy وابسته است که در هر
+   * رندر بازساخته می‌شوند و باید تازه‌ترین وضعیت را ببینند. دسترسی پایدار از
+   * طریق recordEventsRef فراهم می‌شود.
+   */
+  const recordEvents = async (
+    inputs: SystemEventInput | ReadonlyArray<SystemEventInput>,
+    options: { monthKey?: string } = {}
+  ) => {
+    const list = Array.isArray(inputs) ? inputs : [inputs as SystemEventInput];
+    if (list.length === 0) return;
+    try {
+      const now = new Date();
+      const built = list.map(input => createSystemEventLog({
+        actor: currentActorRef.current,
+        ...input,
+      }, now));
+      const nextDb = attachEventLogsToDb(getFreshDbCopy(), built, options.monthKey);
+      await saveDbState(nextDb, { showBusyOverlay: false });
+    } catch (error) {
+      // ثبت لاگ نباید مسیر اصلی را بشکند؛ فقط در کنسول گزارش می‌شود.
+      console.warn('ثبت رویداد در لاگ‌ها و اتفاقات انجام نشد:', error);
+    }
+  };
+
+  const recordEventsRef = React.useRef(recordEvents);
+  useEffect(() => {
+    recordEventsRef.current = recordEvents;
+  });
+
+  /** نسخهٔ بدون await برای فراخوانی از داخل هندلرهای همگام. */
+  const logEvent = React.useCallback((
+    input: SystemEventInput,
+    options: { monthKey?: string } = {}
+  ) => {
+    void recordEventsRef.current(input, options);
+  }, []);
 
   // Load whole state from S3 on mount or department/month change
   useEffect(() => {
@@ -2065,6 +2235,26 @@ export default function Home() {
         overtime: Number(calculatedMonthlyDutyHours.overtime) || 0,
       } : null;
 
+      const nextMonthSchedule: any = {
+        ...solved,
+        finalizedNurses: isLockedNurses,
+        finalizedAssistants: isLockedAssistants,
+        requestsLocked: isReqLocked,
+        // پس از هر بازتولید، هشدارهایی که دیگر مصداق ندارند از فهرست
+        // نادیده‌گرفته‌ها هم پاک می‌شوند تا هشدار رفع‌شده کاملاً از سیستم برود.
+        dismissedWarnings: pruneDismissedWarnings(solved.warnings || [], dismissedWarnings),
+        lockedRows: lockedRows,
+        // «لاگ‌ها و اتفاقات» ماه حفظ می‌شود؛ رکوردهای متنی قدیمی هم در همین
+        // مسیر به رویداد ساخت‌یافته مهاجرت می‌کنند و سقف ۳۰تایی اعمال می‌گردد.
+        eventLogs: normalizeSystemEventLogs(
+          oldDept.schedules?.[monthKey]?.eventLogs ?? schedule?.eventLogs,
+          oldDept.schedules?.[monthKey]?.changeLogs ?? schedule?.changeLogs
+        ),
+      };
+      // پس از مهاجرت، نسخهٔ متنی قدیمی حذف می‌شود تا دادهٔ تکراری در فضای
+      // ذخیره‌سازی نماند (رویدادهای آن در eventLogs حفظ شده‌اند).
+      delete nextMonthSchedule.changeLogs;
+
       const updatedDept = {
         ...oldDept,
         personnel: updatedP,
@@ -2085,17 +2275,7 @@ export default function Home() {
         },
         schedules: {
           ...oldDept.schedules,
-          [monthKey]: {
-            ...solved,
-            finalizedNurses: isLockedNurses,
-            finalizedAssistants: isLockedAssistants,
-            requestsLocked: isReqLocked,
-            // پس از هر بازتولید، هشدارهایی که دیگر مصداق ندارند از فهرست
-            // نادیده‌گرفته‌ها هم پاک می‌شوند تا هشدار رفع‌شده کاملاً از سیستم برود.
-            dismissedWarnings: pruneDismissedWarnings(solved.warnings || [], dismissedWarnings),
-            lockedRows: lockedRows,
-            changeLogs: schedule?.changeLogs || []
-          }
+          [monthKey]: nextMonthSchedule,
         }
       };
 
@@ -2103,6 +2283,12 @@ export default function Home() {
       await saveDbState(nextDb);
     } catch (error) {
       console.error("Error in saveState:", error);
+      logEvent({
+        category: 'storage',
+        severity: 'error',
+        title: 'ذخیره‌سازی اطلاعات در فضای ابری ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       alert("خطا در ذخیره‌سازی داده‌ها: " + (error instanceof Error ? error.message : String(error)));
       throw error;
     }
@@ -2307,30 +2493,63 @@ export default function Home() {
     // Scenario Generation Phase (New Feature)
     // -------------------------------------------------------------
     setSolvingTarget(jobGroup);
-    
+
+    // نوار پیشرفت ۰ تا ۱۰۰ درصد از همین‌جا و دقیقاً هم‌گام با مراحل واقعی موتور شروع می‌شود.
+    const progress = solverProgressRef.current;
+    progress.start('prepare');
+
     // Allow UI to render loading state
     await new Promise(resolve => setTimeout(resolve, 100));
 
+    const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
+    const monthLabel = `${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`;
+
     try {
       const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
-      const { top3, generationLog } = generateAndScoreScenarios(
-        currentYear,
-        currentMonth,
-        optimizerPersonnel,
-        optimizerRequests,
-        optimizerSettings,
-        optimizerHolidays,
-        optimizerFirstDay === -1 ? undefined : optimizerFirstDay,
-        optimizerDutyHours,
-        jobGroup,
-        currentAssignmentsForMerge as any,
-        lockedRowsRef.current
-      );
+      const scenarioPhaseIds = ['scenario-a', 'scenario-b', 'scenario-c'] as const;
+
+      const { top3, generationLog, durationMs, targetPersonnelCount } = await generateAndScoreScenariosWithProgress({
+        year: currentYear,
+        month: currentMonth,
+        personnelList: optimizerPersonnel,
+        requests: optimizerRequests,
+        settings: optimizerSettings,
+        customHolidays: optimizerHolidays,
+        firstDayOfWeekIndex: optimizerFirstDay === -1 ? undefined : optimizerFirstDay,
+        monthlyDutyHours: optimizerDutyHours,
+        targetJobGroup: jobGroup,
+        currentAssignments: currentAssignmentsForMerge as any,
+        lockedRows: lockedRowsRef.current,
+        // هر مرحلهٔ واقعی موتور، مرحلهٔ متناظر نوار پیشرفت را فعال می‌کند تا درصد
+        // نمایش‌داده‌شده هرگز از پردازش واقعی جلو یا عقب نیفتد.
+        // beginPhase خودش در برابر فراخوانی تکراری برای همان مرحله ایمن است
+        // (تایمر مرحله ریست نمی‌شود)، پس بدون اتکا به state کهنه صدا زده می‌شود.
+        onProgress: event => {
+          if (event.stage === 'prepare') {
+            progress.reportPhaseFraction(event.fraction);
+            return;
+          }
+          if (event.stage === 'scenario' && event.scenarioIndex) {
+            const phaseId = scenarioPhaseIds[event.scenarioIndex - 1];
+            if (phaseId) progress.beginPhase(phaseId);
+            progress.reportPhaseFraction(event.fraction);
+            return;
+          }
+          if (event.stage === 'scoring') {
+            progress.beginPhase('scoring');
+            progress.reportPhaseFraction(event.fraction);
+          }
+        },
+        // فرصت رندر به مرورگر تا انیمیشن لودینگ حین محاسبات سنگین یخ نزند.
+        yieldToUi: () => new Promise<void>(resolve => setTimeout(resolve, 0)),
+      });
 
       if (top3.length === 0) {
         const joined = generationLog.length > 0 ? `\n\nجزئیات: \n- ${generationLog.join('\n- ')}` : '';
         alert(`هیچ سناریوی معتبر و به‌اندازه کافی متفاوتی برای این گروه تولید نشد. سناریو فقط وقتی کنار گذاشته می‌شود که تعداد هشدارهای سخت آن به ۵ مورد یا بیشتر برسد.${joined}`);
       }
+
+      progress.beginPhase('persist');
 
       const scenariosWithDiff = buildPairwiseDifferences(top3, jobGroup);
       await persistScenarioWorkflow(jobGroup, () => ({
@@ -2341,11 +2560,49 @@ export default function Home() {
         votingOpen: false,
       }), { resetVotes: true });
 
+      // گزارش کامل این اجرای solver در «لاگ‌ها و اتفاقات» ثبت می‌شود:
+      // چند برنامه تولید شد، چقدر طول کشید، هشدارها و دلیل کنار گذاشته شدن‌ها.
+      await recordEvents(
+        buildSolverRunEvents({
+          jobGroup,
+          year: currentYear,
+          month: currentMonth,
+          monthLabel,
+          scenarios: scenariosWithDiff.map(scenario => ({
+            scenarioKey: scenario.scenarioKey,
+            shortTitle: scenario.shortTitle,
+            totalScore: scenario.totalScore,
+            relevantWarningCount: scenario.relevantWarningCount,
+            relevantHardWarningCount: scenario.relevantHardWarningCount,
+            pairwiseDifference: scenario.pairwiseDifference,
+          })),
+          generationLog,
+          durationMs,
+          targetPersonnelCount,
+          lockedRowCount: lockedRowsRef.current.length,
+          actor: currentActorRef.current,
+        }).map(event => ({
+          category: event.category,
+          severity: event.severity,
+          title: event.title,
+          detail: event.detail,
+          actor: event.actor,
+        }))
+      );
+
+      progress.complete();
       setSelectedScenarioIndexForGroup(jobGroup, scenariosWithDiff.length > 0 ? 0 : -1);
       setSolvingTarget(null);
       return;
     } catch (err) {
       console.error(err);
+      progress.reset();
+      logEvent({
+        category: 'solver',
+        severity: 'error',
+        title: `پردازش موتور هوشمند برای ${groupTitle} با خطا متوقف شد`,
+        detail: `ماه ${monthLabel} — ${err instanceof Error ? err.message : String(err)}`,
+      });
       alert('خطا در تولید سناریوها');
       setSolvingTarget(null);
       return;
@@ -2474,9 +2731,22 @@ export default function Home() {
     );
 
     if (!result.success && result.error) {
+      logEvent({
+        category: 'schedule',
+        severity: 'error',
+        title: 'اعمال برنامه انتخاب‌شده ناموفق بود',
+        detail: `${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} — ${result.error}`,
+      });
       alert('خطا در اعمال برنامه: ' + result.error);
       return;
     }
+
+    logEvent({
+      category: 'schedule',
+      severity: 'success',
+      title: `برنامه نهایی ${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} اعمال و ثبت شد`,
+      detail: `${selectedScenario.title} — امتیاز ${selectedScenario.totalScore.toFixed(1)} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear} — ${result.personnelUpdated} نفر به‌روزرسانی شدند`,
+    });
 
     setSelectedScenarioIndexForGroup(jobGroup, -1);
   };
@@ -2588,8 +2858,6 @@ export default function Home() {
         return;
       }
 
-      const updatedLogs = [...(existingSched.changeLogs || []), `تغییر وضعیت قفل ${groupTitle}: ${!isLocked ? 'قفل شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`];
-
       const updatedDept = {
         ...oldDept,
         schedules: {
@@ -2597,16 +2865,29 @@ export default function Home() {
           [key]: {
             ...existingSched,
             ...(isNurse ? { finalizedNurses: !isLocked } : { finalizedAssistants: !isLocked }),
-            changeLogs: updatedLogs
           }
         }
       };
 
       nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
+      // رویداد در همان تراکنش ذخیره می‌شود تا لاگ و تغییر وضعیت هرگز از هم جدا نیفتند.
+      const withLog = attachEventLogsToDb(nextDb, [createSystemEventLog({
+        category: 'lock',
+        severity: isLocked ? 'info' : 'success',
+        title: `برنامه ${groupTitle} ${!isLocked ? 'قفل و ثبت نهایی شد' : 'از حالت قفل خارج شد'}`,
+        detail: `ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+        actor: currentActorRef.current,
+      })], key);
+      await saveDbState(withLog);
       alert(`لیست شیفت‌های ${groupTitle} ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت ${!isLocked ? 'قفل گردید' : 'باز شد'}.`);
     } catch (error) {
       console.error("Error toggling lock:", error);
+      logEvent({
+        category: 'lock',
+        severity: 'error',
+        title: 'تغییر وضعیت قفل برنامه با خطا مواجه شد',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       alert("خطا در تغییر وضعیت قفل: " + (error instanceof Error ? error.message : String(error)));
     }
   };
@@ -2633,8 +2914,6 @@ export default function Home() {
 
       const existingSched = oldDept.schedules?.[key];
 
-      const updatedLogs = existingSched ? [...(existingSched.changeLogs || []), `تغییر وضعیت مهلت درخواست‌ها: ${!isLocked ? 'بسته شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`] : [`تغییر وضعیت مهلت درخواست‌ها: ${!isLocked ? 'بسته شد' : 'باز شد'} در تاریخ ${new Date().toLocaleString('fa-IR')}`];
-
       const updatedDept = {
         ...oldDept,
         schedules: {
@@ -2642,16 +2921,28 @@ export default function Home() {
           [key]: {
             ...(existingSched || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
             requestsLocked: !isLocked,
-            changeLogs: updatedLogs
           }
         }
       };
 
       nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb);
+      const withLog = attachEventLogsToDb(nextDb, [createSystemEventLog({
+        category: 'requests',
+        severity: 'info',
+        title: `مهلت ثبت درخواست‌ها ${!isLocked ? 'بسته شد' : 'دوباره باز شد'}`,
+        detail: `ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+        actor: currentActorRef.current,
+      })], key);
+      await saveDbState(withLog);
       alert(`مهلت ثبت درخواست‌های ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} با موفقیت ${!isLocked ? 'بسته شد' : 'تمدید شد'}.`);
     } catch (error) {
       console.error("Error toggling requests lock:", error);
+      logEvent({
+        category: 'requests',
+        severity: 'error',
+        title: 'تغییر وضعیت مهلت درخواست‌ها با خطا مواجه شد',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       alert("خطا در تغییر وضعیت مهلت درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
     }
   };
@@ -2690,7 +2981,15 @@ export default function Home() {
       };
 
       nextDb.deptData[deptId] = updatedDept;
-      await saveDbState(nextDb, { showBusyOverlay: false });
+      // نادیده‌گرفتن یک هشدار هم یک «اتفاق» است و باید در کارنامه ثبت شود.
+      const withLog = attachEventLogsToDb(nextDb, [createSystemEventLog({
+        category: 'alert',
+        severity: 'warning',
+        title: 'یک هشدار توسط سرپرستار نادیده گرفته شد',
+        detail: warnText,
+        actor: currentActorRef.current,
+      })], key);
+      await saveDbState(withLog, { showBusyOverlay: false });
     } catch (error) {
       console.error("Error dismissing warning:", error);
     }
@@ -2829,16 +3128,32 @@ export default function Home() {
       }
 
       await saveState(updatedList, requests, settings, customHolidays, { mode: 'full_resolve' });
+      logEvent({
+        category: 'personnel',
+        severity: 'success',
+        title: editingPersonnel
+          ? `اطلاعات پرسنل ${formFirstName} ${formLastName} ویرایش شد`
+          : `پرسنل جدید ${formFirstName} ${formLastName} به بخش اضافه شد`,
+        detail: `گروه شغلی: ${formJobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'} — نوع استخدام: ${formEmploymentType} — برنامه ماه بازتولید شد`,
+      });
       setPendingPersonnelId(null);
       setFormNationalId('');
       personnelForm.closeModal();
     } catch (error) {
       console.error("Error saving personnel:", error);
+      logEvent({
+        category: 'personnel',
+        severity: 'error',
+        title: 'ثبت اطلاعات پرسنل ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       alert("خطا در ثبت اطلاعات پرسنل: " + (error instanceof Error ? error.message : String(error)));
     }
   };
 
   const handleDeletePersonnel = async (id: string) => {
+    const removedPerson = personnel.find(p => p.id === id);
+    const removedRequestCount = requests.filter(r => r.personnelId === id).length;
     try {
       const updatedP = personnel.filter(p => p.id !== id);
       const updatedR = requests.filter(r => r.personnelId !== id);
@@ -2848,8 +3163,20 @@ export default function Home() {
       if (!accountResponse.ok || !accountResult.success) {
         throw new Error(accountResult.error || 'غیرفعال‌سازی حساب ورود پرسنل انجام نشد.');
       }
+      logEvent({
+        category: 'personnel',
+        severity: 'warning',
+        title: `پرسنل ${removedPerson ? `${removedPerson.firstName} ${removedPerson.lastName}` : id} از بخش حذف شد`,
+        detail: `${removedRequestCount} درخواست مرتبط نیز حذف و برنامه ماه بازتولید شد`,
+      });
     } catch (error) {
       console.error("Error deleting personnel:", error);
+      logEvent({
+        category: 'personnel',
+        severity: 'error',
+        title: 'حذف پرسنل ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       alert("خطا در حذف پرسنل: " + (error instanceof Error ? error.message : String(error)));
     }
   };
@@ -2926,6 +3253,13 @@ export default function Home() {
           personnelIds: Array.from(new Set(finalRequestsToSave.map(req => req.personnelId)))
         }
       );
+      const requesterPerson = personnel.find(item => item.id === pid);
+      logEvent({
+        category: 'requests',
+        severity: 'success',
+        title: `${finalRequestsToSave.length} درخواست شیفت ثبت شد`,
+        detail: `پرسنل: ${requesterPerson ? `${requesterPerson.firstName} ${requesterPerson.lastName}` : pid} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear} — برنامه همان پرسنل بازتولید شد`,
+      });
       setShowAddRequestModal(false);
 
       setDraftRequests([]);
@@ -2935,6 +3269,12 @@ export default function Home() {
       setReqSelectedDays([]);
     } catch (error) {
       console.error("Error submitting final requests:", error);
+      logEvent({
+        category: 'requests',
+        severity: 'error',
+        title: 'ثبت نهایی درخواست‌ها ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       alert("خطا در ثبت نهایی درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
     }
   };
@@ -3230,6 +3570,12 @@ export default function Home() {
       );
 
       if (!result.success) {
+        logEvent({
+          category: 'schedule',
+          severity: 'error',
+          title: 'تغییر دستی شیفت انجام نشد',
+          detail: result.error || 'خطای نامشخص',
+        });
         alert('خطا در تغییر دستی شیفت: ' + result.error);
       } else if (result.schedule) {
         const finalSchedule: MonthlySchedule = {
@@ -3245,6 +3591,22 @@ export default function Home() {
           setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
         }
 
+        // ویرایش دستی سرپرستار + هشدارهایی که با همین ویرایش رفع شدند، ثبت می‌شود.
+        const editedPersonForLog = currentPersonnel.find(item => item.id === pId);
+        const previousShift = latestSchedule.assignments?.[pId]?.[day] || 'OFF';
+        const resolvedCount = result.resolvedWarnings?.length ?? 0;
+        logEvent({
+          category: 'schedule',
+          severity: 'info',
+          title: `ویرایش دستی شیفت${editedPersonForLog ? ` ${editedPersonForLog.firstName} ${editedPersonForLog.lastName}` : ''} در روز ${day}`,
+          detail: [
+            `شیفت از «${previousShift}» به «${resolvedShift}» تغییر کرد`,
+            scenarioContext ? `در سناریوی ${scenarioContext.scenario.scenarioKey}` : `ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+            resolvedCount > 0 ? `${resolvedCount} هشدار با این تغییر رفع شد` : null,
+            (finalSchedule.warnings?.length ?? 0) > 0 ? `${finalSchedule.warnings.length} هشدار باقی‌مانده` : 'بدون هشدار باقی‌مانده',
+          ].filter(Boolean).join(' — '),
+        });
+
         setEditingCell(null);
       }
     } catch (error) {
@@ -3258,9 +3620,21 @@ export default function Home() {
     e.preventDefault();
     try {
       await saveState(personnel, requests, settings, customHolidays, { mode: 'full_resolve' });
+      logEvent({
+        category: 'settings',
+        severity: 'success',
+        title: 'تنظیمات موظفی و نیاز نیرویی بخش ذخیره شد',
+        detail: `موظفی طرح: ${settings.dutyHours.conscript} ساعت — سقف اضافه‌کار: ${settings.dutyHours.overtime} ساعت — برنامه ماه با قوانین جدید بازتولید شد`,
+      });
       alert('تنظیمات موظفی و نیاز نیرویی با موفقیت ذخیره شد.');
     } catch (error) {
       console.error("Error saving settings:", error);
+      logEvent({
+        category: 'settings',
+        severity: 'error',
+        title: 'ذخیره تنظیمات بخش ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -3269,7 +3643,8 @@ export default function Home() {
   // رابط کاربری را (خوش‌بینانه) تغییر می‌دهد و سپس نتیجه‌ی ادغام‌شده را ذخیره می‌کند.
   const applyHolidayOverrides = async (
     nextOverrides: { [day: number]: string },
-    strategy: ScheduleUpdateStrategy = { mode: 'full_resolve' }
+    strategy: ScheduleUpdateStrategy = { mode: 'full_resolve' },
+    logDescription?: string
   ) => {
     if (!canManageHolidays) return;
     const previousOverrides = holidayOverrides;
@@ -3282,17 +3657,36 @@ export default function Home() {
         mergeHolidayOverrides(officialHolidays, nextOverrides),
         strategy
       );
+      if (logDescription) {
+        logEvent({
+          category: 'calendar',
+          severity: 'info',
+          title: logDescription,
+          detail: `ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear} — ساعت موظفی و برنامه ماه با تقویم جدید بازمحاسبه شد`,
+        });
+      }
     } catch (error) {
       // ذخیره‌سازی ناموفق نباید تقویم نمایش‌داده‌شده را با سرور ناسازگار بگذارد.
       setHolidayOverrides(previousOverrides);
       console.error('Error saving holiday override:', error);
+      logEvent({
+        category: 'calendar',
+        severity: 'error',
+        title: 'ثبت تغییر تقویم و تعطیلات ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   };
 
   const handleToggleHoliday = async (day: number, title?: string) => {
+    const wasHoliday = isEffectiveHoliday(officialHolidays, holidayOverrides, day);
     try {
-      await applyHolidayOverrides(toggleHolidayOverride(officialHolidays, holidayOverrides, day, title));
+      await applyHolidayOverrides(
+        toggleHolidayOverride(officialHolidays, holidayOverrides, day, title),
+        { mode: 'full_resolve' },
+        `روز ${day} ${wasHoliday ? 'به روز کاری تبدیل شد' : 'تعطیل اعلام شد'}`
+      );
     } catch {
       /* پیام خطا در saveState به کاربر نمایش داده شده است. */
     }
@@ -3300,7 +3694,11 @@ export default function Home() {
 
   const handleRenameHoliday = async (day: number, title: string) => {
     try {
-      await applyHolidayOverrides(setHolidayOverride(officialHolidays, holidayOverrides, day, title));
+      await applyHolidayOverrides(
+        setHolidayOverride(officialHolidays, holidayOverrides, day, title),
+        { mode: 'full_resolve' },
+        `عنوان تعطیلی روز ${day} به «${title}» تغییر کرد`
+      );
     } catch {
       /* پیام خطا در saveState به کاربر نمایش داده شده است. */
     }
@@ -3317,7 +3715,9 @@ export default function Home() {
     if (!holidayTitleInput.trim()) return;
     try {
       await applyHolidayOverrides(
-        setHolidayOverride(officialHolidays, holidayOverrides, day, holidayTitleInput.trim())
+        setHolidayOverride(officialHolidays, holidayOverrides, day, holidayTitleInput.trim()),
+        { mode: 'full_resolve' },
+        `تعطیلی «${holidayTitleInput.trim()}» برای روز ${day} ثبت شد`
       );
       setHolidayTitleInput('');
       alert('تعطیلات با موفقیت ثبت شد.');
@@ -3328,7 +3728,11 @@ export default function Home() {
 
   const handleRemoveHoliday = async (day: number) => {
     try {
-      await applyHolidayOverrides(clearHolidayOverride(officialHolidays, holidayOverrides, day));
+      await applyHolidayOverrides(
+        clearHolidayOverride(officialHolidays, holidayOverrides, day),
+        { mode: 'full_resolve' },
+        `تعطیلی ثبت‌شده برای روز ${day} حذف شد`
+      );
     } catch (error) {
       console.error("Error removing holiday:", error);
     }
@@ -3797,17 +4201,42 @@ export default function Home() {
     }
   };
 
+  // متن‌ها عمداً کوتاه‌اند تا کارت لودینگ کوچک بماند؛ جزئیات مرحله زیر نوار
+  // پیشرفت نمایش داده می‌شود.
   const busyOverlaySubtitle =
     solvingTarget === 'nurse'
-      ? 'در حال بازتولید هوشمند برنامه پرستاران و ثبت تغییرات در سامانه...'
+      ? 'تولید برنامه پرستاران'
       : solvingTarget === 'assistant'
-        ? 'در حال بازتولید هوشمند برنامه کمک بهیاران و ثبت تغییرات در سامانه...'
+        ? 'تولید برنامه کمک‌بهیاران'
         : isAiProcessing
-          ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
+          ? 'پردازش با هوش مصنوعی'
           : isBlockingDbSave
-            ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
+            ? 'ذخیره‌سازی اطلاعات'
             : null;
 
+  // تراکر فعال با توجه به عملیات جاری انتخاب می‌شود تا نوار درصد دقیقاً
+  // مراحل همان عملیات را نشان دهد (نه یک انیمیشن تزئینی و ساختگی).
+  const activeProgress =
+    solvingTarget !== null
+      ? solverProgress
+      : isAiProcessing
+        ? aiProgress
+        : isBlockingDbSave
+          ? saveProgress
+          : null;
+
+  const busyOverlayProgressProps = activeProgress
+    ? {
+        percent: activeProgress.percent,
+        phaseLabel: activeProgress.phaseLabel,
+        phaseNumber: activeProgress.phaseNumber,
+        phaseCount: activeProgress.phaseCount,
+        remainingLabel: activeProgress.remainingLabel,
+      }
+    : {};
+
+  // صفحات ورود و راه‌اندازی اولیه عمداً نوار درصدی ندارند: این انتظارها کوتاه‌اند
+  // و همان اسپینر سبک قبلی، تجربهٔ سریع‌تر و سبک‌تری می‌دهد.
   if (!isMounted) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 font-sans animate-pulse" dir="rtl">
@@ -3836,7 +4265,7 @@ export default function Home() {
 
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
-        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
+        {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} {...busyOverlayProgressProps} />}
         {pendingLogin && (
           <WelcomeOverlay
             firstName={pendingLogin.user.firstName}
@@ -4177,7 +4606,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen h-screen w-full overflow-hidden bg-slate-50 font-sans" dir="rtl">
-      {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} />}
+      {busyOverlaySubtitle && <BusyOverlay subtitle={busyOverlaySubtitle} {...busyOverlayProgressProps} />}
 
       {isNavOpen && (
         <div
@@ -5412,7 +5841,10 @@ export default function Home() {
                         }
                         setIsAiProcessing(true);
                         setAiProposedRequests([]);
+                        // نوار درصد با مراحل واقعی پردازش هوش مصنوعی هم‌گام می‌شود.
+                        aiProgress.start('send');
                         try {
+                          aiProgress.beginPhase('analyze');
                           const res = await fetch("/api/gemini/parse-requests", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -5426,6 +5858,7 @@ export default function Home() {
                             const errData = await res.json();
                             throw new Error(errData.error || "خطا در برقراری ارتباط با سرور");
                           }
+                          aiProgress.beginPhase('normalize');
                           const data = await res.json();
                           const mapped = (data.requests || []).map((r: any, idx: number) => ({
                             ...r,
@@ -5433,8 +5866,25 @@ export default function Home() {
                             personnelId: targetPId
                           }));
                           setAiProposedRequests(mapped);
+                          aiProgress.complete();
+                          logEvent({
+                            category: 'ai',
+                            severity: 'success',
+                            title: `هوش مصنوعی ${mapped.length} درخواست را از متن استخراج کرد`,
+                            detail: `پرسنل هدف: ${(() => {
+                              const p = personnel.find(item => item.id === targetPId);
+                              return p ? `${p.firstName} ${p.lastName}` : targetPId;
+                            })()}`,
+                          });
                         } catch (err) {
                           console.error(err);
+                          aiProgress.reset();
+                          logEvent({
+                            category: 'ai',
+                            severity: 'error',
+                            title: 'پردازش درخواست با هوش مصنوعی ناموفق بود',
+                            detail: err instanceof Error ? err.message : String(err),
+                          });
                           alert("خطا در پردازش هوش مصنوعی: " + (err instanceof Error ? err.message : String(err)));
                         } finally {
                           setIsAiProcessing(false);
@@ -5819,22 +6269,11 @@ export default function Home() {
 
               </div>
 
-              {schedule?.changeLogs && schedule.changeLogs.length > 0 && (
-                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 print:hidden">
-                  <h4 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-4">
-                    <History className="w-5 h-5 text-indigo-500" />
-                    لاگ‌ها و اتفاقات (تاریخچه قفل‌ها و مهلت درخواست)
-                  </h4>
-                  <ul className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                    {schedule.changeLogs.slice().reverse().map((log: string, idx: number) => (
-                      <li key={idx} className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0"></div>
-                        {log}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {/* لاگ‌ها و اتفاقات: همه هشدارها، رویدادها و گزارش پردازش موتور هوشمند */}
+              <EventLogPanel
+                events={eventLogs}
+                monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
+              />
 
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="reports-table-container">
                 <div className="overflow-x-auto w-full">
