@@ -143,6 +143,7 @@ import {
   User,
   Activity,
   Menu,
+  Send,
   X
 } from 'lucide-react';
 
@@ -1999,6 +2000,40 @@ export default function Home() {
   const [isRequestChatProcessing, setIsRequestChatProcessing] = useState<boolean>(false);
   const [chatProposedRequests, setChatProposedRequests] = useState<ChatProposedShiftRequest[]>([]);
   const requestChatInputRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const [isChatFullscreen, setIsChatFullscreen] = useState<boolean>(false);
+  const requestChatScrollRef = React.useRef<HTMLDivElement | null>(null);
+
+  // اسکرول خودکار به جدیدترین پیام چت
+  useEffect(() => {
+    const container = requestChatScrollRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    }
+  }, [requestChatMessages, isRequestChatProcessing, isChatFullscreen]);
+
+  // در حالت تمام صفحه اسکرول پس‌زمینه قفل می‌شود؛ با خروج، ارتفاع تکست‌اریا ریست می‌شود
+  useEffect(() => {
+    if (isChatFullscreen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+    if (requestChatInputRef.current) {
+      requestChatInputRef.current.style.height = '';
+    }
+  }, [isChatFullscreen]);
+
+  // خروج از حالت تمام صفحه با کلید ESC
+  useEffect(() => {
+    if (!isChatFullscreen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsChatFullscreen(false);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isChatFullscreen]);
 
   // عملیات حساس مدیریت بخش: حذف دائمی بخش (با احراز هویت مجدد) و انتقال امن مدیریت
   const [showDeleteDeptModal, setShowDeleteDeptModal] = useState<boolean>(false);
@@ -6262,8 +6297,13 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden" id="request-chat-box">
-                <div className="bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 text-white p-5 sm:p-6">
+              <div
+                id="request-chat-box"
+                className={isChatFullscreen
+                  ? 'fixed inset-0 z-[60] bg-white flex flex-col overflow-hidden animate-fade-in'
+                  : 'bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden'}
+              >
+                <div className={`bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 text-white p-5 sm:p-6 ${isChatFullscreen ? 'shrink-0' : ''}`}>
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
@@ -6275,15 +6315,36 @@ export default function Home() {
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
                       </p>
                     </div>
-                    <div className="bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-xs font-black text-white/95">
-                      گفتگو برای: {requestChatPersonnel ? `${requestChatPersonnel.firstName} ${requestChatPersonnel.lastName}` : 'پرسنل انتخاب‌نشده'}
+                    <div className="flex items-center gap-2 self-start">
+                      <div className="bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-xs font-black text-white/95">
+                        گفتگو برای: {requestChatPersonnel ? `${requestChatPersonnel.firstName} ${requestChatPersonnel.lastName}` : 'پرسنل انتخاب‌نشده'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsChatFullscreen(prev => !prev)}
+                        aria-pressed={isChatFullscreen}
+                        title={isChatFullscreen ? 'خروج از حالت تمام صفحه (Esc)' : 'بزرگ کردن چت به تمام صفحه'}
+                        className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 active:scale-95 border border-white/25 text-white rounded-2xl px-3.5 py-3 text-xs font-black transition-all cursor-pointer"
+                      >
+                        <span className="text-sm leading-none">{isChatFullscreen ? '✕' : '↕️'}</span>
+                        <span>{isChatFullscreen ? 'خروج' : 'تمام صفحه'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px] gap-0 bg-slate-50/60">
-                  <div className="p-4 sm:p-5 space-y-4">
-                    <div className="h-[360px] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-inner space-y-3 scrollbar-thin">
+                <div className={isChatFullscreen
+                  ? 'flex-1 min-h-0 flex flex-col bg-slate-100'
+                  : 'grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px] gap-0 bg-slate-50/60'}
+                >
+                  <div className={isChatFullscreen ? 'flex-1 min-h-0 flex flex-col gap-3 p-4 sm:p-6' : 'p-4 sm:p-5 space-y-4'}>
+                    <div
+                      ref={requestChatScrollRef}
+                      className={isChatFullscreen
+                        ? 'flex-1 min-h-0 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-inner scrollbar-thin'
+                        : 'h-[360px] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-inner scrollbar-thin'}
+                    >
+                      <div className={isChatFullscreen ? 'mx-auto max-w-3xl space-y-3' : 'space-y-3'}>
                       {requestChatMessages.map(message => {
                         const isUser = message.role === 'user';
                         return (
@@ -6305,37 +6366,63 @@ export default function Home() {
                           </div>
                         </div>
                       )}
+                      </div>
                     </div>
 
-                    <form onSubmit={handleRequestChatSubmit} className="flex flex-col sm:flex-row gap-3">
+                    <form onSubmit={handleRequestChatSubmit} className={isChatFullscreen ? 'mx-auto w-full max-w-3xl flex items-end gap-2 shrink-0' : 'flex flex-col sm:flex-row gap-3'}>
                       <textarea
                         ref={requestChatInputRef}
                         value={requestChatInput}
-                        onChange={(event) => setRequestChatInput(event.target.value)}
+                        onChange={(event) => {
+                          setRequestChatInput(event.target.value);
+                          if (isChatFullscreen) {
+                            // رشد خودکار ارتفاع مثل پیام‌رسان‌ها (حداکثر ۱۴۴px)
+                            const element = event.target;
+                            element.style.height = 'auto';
+                            element.style.height = `${Math.min(element.scrollHeight, 144)}px`;
+                          }
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' && !event.shiftKey) {
                             event.preventDefault();
                             void handleRequestChatSubmit();
                           }
                         }}
+                        rows={isChatFullscreen ? 1 : undefined}
                         placeholder="مثلاً: دهم و دوازدهم آف باشم، بیستم شب بیام، پنجشنبه‌ها بیمارستان دیگه EN دارم پس اینجا اون شیفت نباشم..."
-                        className="min-h-[58px] flex-1 resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                        className={isChatFullscreen
+                          ? 'min-h-[44px] max-h-36 flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs sm:text-sm font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'
+                          : 'min-h-[58px] flex-1 resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'}
                       />
                       <button
                         type="submit"
                         disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
-                        className="sm:w-32 rounded-2xl bg-indigo-600 px-5 py-3 text-xs font-black text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer"
+                        title="ارسال پیام"
+                        className={isChatFullscreen
+                          ? 'shrink-0 w-11 h-11 rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95 disabled:bg-slate-300 cursor-pointer flex items-center justify-center'
+                          : 'sm:w-24 rounded-2xl bg-indigo-600 px-4 py-2.5 text-[11px] font-black text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer'}
                       >
-                        ارسال
+                        {isChatFullscreen ? <Send className="w-4 h-4 -scale-x-100" /> : 'ارسال'}
                       </button>
                     </form>
                   </div>
 
-                  <div className="border-t xl:border-t-0 xl:border-r border-slate-200 bg-white p-4 sm:p-5 space-y-4">
-                    <div>
-                      <h5 className="text-sm font-black text-slate-900">نتیجه تحلیل</h5>
-                      <p className="text-[10px] font-bold text-slate-400 mt-1 leading-5">ثبت نهایی فقط بعد از تأیید شما انجام می‌شود.</p>
-                    </div>
+                  <div className={isChatFullscreen
+                    ? 'shrink-0 w-full max-h-[36vh] overflow-y-auto border-t border-slate-200 bg-white scrollbar-thin'
+                    : 'border-t xl:border-t-0 xl:border-r border-slate-200 bg-white p-4 sm:p-5 space-y-4'}
+                  >
+                    <div className={isChatFullscreen ? 'mx-auto max-w-3xl p-3 sm:p-4 space-y-3' : 'contents'}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <h5 className="text-sm font-black text-slate-900">نتیجه تحلیل</h5>
+                          <p className="text-[10px] font-bold text-slate-400 mt-1 leading-5">ثبت نهایی فقط بعد از تأیید شما انجام می‌شود.</p>
+                        </div>
+                        {isChatFullscreen && chatProposedRequests.length > 0 && (
+                          <span className="shrink-0 rounded-full bg-indigo-50 border border-indigo-100 px-3 py-1 text-[10px] font-black text-indigo-600">
+                            {chatProposedRequests.length} درخواست آماده ثبت
+                          </span>
+                        )}
+                      </div>
 
                     {chatProposedRequests.length > 0 ? (
                       <div className="space-y-3 animate-fadeIn">
@@ -6385,6 +6472,7 @@ export default function Home() {
                         هنوز درخواست آماده ثبت نداریم. پیام بده؛ اگر کامل و روشن باشد، خلاصه ساختاری اینجا می‌آید.
                       </div>
                     )}
+                    </div>
                   </div>
                 </div>
               </div>
