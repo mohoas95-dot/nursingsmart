@@ -200,14 +200,15 @@ export function estimateRemainingMs(input: ProgressComputationInput): number {
 
 /** قالب‌بندی فارسی زمان باقی‌مانده برای نمایش زیر نوار پیشرفت. */
 export function formatRemainingTime(remainingMs: number): string {
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 'کمتر از یک ثانیه';
+  // متن کوتاه با ارقام لاتین، هماهنگ با عدد درصد در نوار پیشرفت.
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 'کمتر از ۱ ثانیه';
   const seconds = Math.ceil(remainingMs / 1000);
-  if (seconds <= 1) return 'کمتر از یک ثانیه';
-  if (seconds < 60) return `حدود ${seconds.toLocaleString('fa-IR')} ثانیه`;
+  if (seconds <= 1) return 'کمتر از ۱ ثانیه';
+  if (seconds < 60) return `~${seconds} ثانیه مانده`;
   const minutes = Math.floor(seconds / 60);
   const restSeconds = seconds % 60;
-  if (restSeconds === 0) return `حدود ${minutes.toLocaleString('fa-IR')} دقیقه`;
-  return `حدود ${minutes.toLocaleString('fa-IR')} دقیقه و ${restSeconds.toLocaleString('fa-IR')} ثانیه`;
+  if (restSeconds === 0) return `~${minutes} دقیقه مانده`;
+  return `~${minutes}:${String(restSeconds).padStart(2, '0')} دقیقه مانده`;
 }
 
 /**

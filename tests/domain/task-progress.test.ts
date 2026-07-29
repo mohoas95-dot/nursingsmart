@@ -175,10 +175,29 @@ test('تخمین با سیگنال واقعی موتور به سرعت مشاه�
   assert.ok(remaining < 4_000, `تخمین باید به مشاهده واقعی نزدیک باشد، ${remaining} دریافت شد`);
 });
 
-test('قالب‌بندی زمان باقی‌مانده خوانا و فارسی است', () => {
-  assert.equal(formatRemainingTime(0), 'کمتر از یک ثانیه');
+test('قالب‌بندی زمان باقی‌مانده کوتاه و خوانا است', () => {
+  assert.equal(formatRemainingTime(0), 'کمتر از ۱ ثانیه');
   assert.match(formatRemainingTime(5_000), /ثانیه/);
   assert.match(formatRemainingTime(125_000), /دقیقه/);
+});
+
+test('اعداد زمان باقی‌مانده لاتین‌اند تا با عدد درصد هماهنگ بمانند', () => {
+  // ارقام فارسی نباید در خروجی عددی ظاهر شوند (به‌جز واژهٔ ثابت «کمتر از ۱ ثانیه»).
+  const persianDigits = /[۰-۹]/;
+  assert.equal(persianDigits.test(formatRemainingTime(5_000)), false);
+  assert.equal(persianDigits.test(formatRemainingTime(45_000)), false);
+  assert.equal(persianDigits.test(formatRemainingTime(125_000)), false);
+  assert.match(formatRemainingTime(5_000), /5/);
+  assert.match(formatRemainingTime(125_000), /2:05/);
+});
+
+test('متن زمان باقی‌مانده کوتاه می‌ماند تا کارت لودینگ بزرگ نشود', () => {
+  for (const ms of [0, 5_000, 45_000, 125_000, 3_600_000]) {
+    assert.ok(
+      formatRemainingTime(ms).length <= 22,
+      `متن «${formatRemainingTime(ms)}» برای کارت فشرده بلند است`
+    );
+  }
 });
 
 // ============================================================================

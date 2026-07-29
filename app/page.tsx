@@ -101,13 +101,10 @@ import { PrintScheduleSheet } from '../features/scheduling/components/PrintSched
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
-import { ProgressMeter } from '../features/shared/components/ProgressMeter';
 import { EventLogPanel } from '../features/reports/components/EventLogPanel';
 import { useTaskProgress } from '../features/shared/hooks/useTaskProgress';
 import {
   AI_PHASES,
-  BOOT_PHASES,
-  LOGIN_PHASES,
   SAVE_PHASES,
   SOLVER_PHASES,
 } from '../features/shared/progress-phases';
@@ -367,11 +364,11 @@ export default function Home() {
   // ==========================================================================
   // هر عملیات سنگین تراکر مستقل خود را دارد. مدت واقعی هر مرحله یاد گرفته و در
   // localStorage نگه داشته می‌شود تا تخمین «زمان باقی‌مانده» با هر اجرا دقیق‌تر شود.
+  // فقط عملیات واقعاً طولانی نوار درصدی دارند. ورود به سامانه و راه‌اندازی
+  // اولیه عمداً کنار گذاشته شده‌اند تا صفحهٔ لودینگ سبک و سریع بماند.
   const solverProgress = useTaskProgress(SOLVER_PHASES, { storageKey: 'solver' });
   const saveProgress = useTaskProgress(SAVE_PHASES, { storageKey: 'save' });
   const aiProgress = useTaskProgress(AI_PHASES, { storageKey: 'ai' });
-  const loginProgress = useTaskProgress(LOGIN_PHASES, { storageKey: 'login' });
-  const bootProgress = useTaskProgress(BOOT_PHASES, { storageKey: 'boot', autoStart: true });
 
   // saveDbState و handleRunOptimizer توابع معمولی (نه useCallback) هستند و در هر
   // رندر بازساخته می‌شوند؛ با ref همیشه به تازه‌ترین کنترل‌های تراکر دسترسی دارند.
@@ -723,10 +720,7 @@ export default function Home() {
       return;
     }
     setIsPortalSubmitting(true);
-    // نوار درصد ورود با مراحل واقعی احراز هویت هم‌گام می‌شود.
-    loginProgress.start('validate');
     try {
-      loginProgress.beginPhase('authenticate');
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -734,11 +728,8 @@ export default function Home() {
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'ورود انجام نشد.');
-      loginProgress.beginPhase('prepare');
       setPendingLogin({ user: result.user, redirectTo: result.redirectTo });
-      loginProgress.complete();
     } catch (error) {
-      loginProgress.reset();
       setAuthError(error instanceof Error ? error.message : 'خطا در برقراری ارتباط با سرور.');
     } finally {
       setIsPortalSubmitting(false);
@@ -833,41 +824,6 @@ export default function Home() {
   // finalizedNursesMonths, finalizedAssistantsMonths, dismissedWarnings, lockedRows
   // now managed by useScheduleState hook
   const [requestsLockedMonths, setRequestsLockedMonths] = useState<string[]>([]);
-
-  // ==========================================================================
-  // هم‌گام‌سازی نوار پیشرفت راه‌اندازی با مراحل واقعی بوت سامانه
-  // ==========================================================================
-  // هر مرحله دقیقاً وقتی فعال می‌شود که کار واقعی همان مرحله شروع شده باشد؛
-  // بنابراین درصد نمایش‌داده‌شده یک انیمیشن تزئینی نیست.
-  useEffect(() => {
-    if (isAuthLoading) {
-      bootProgress.beginPhase('session');
-      return;
-    }
-    if (officialCalendarState.status === 'loading') {
-      bootProgress.beginPhase('calendar');
-      return;
-    }
-    if (isLoadingDb || !dbChecked || !isPersonnelLoaded || !isRequestsLoaded) {
-      bootProgress.beginPhase('department');
-      return;
-    }
-    if (!isMounted) {
-      bootProgress.beginPhase('render');
-      return;
-    }
-    bootProgress.complete();
-    // beginPhase/complete با useCallback پایدارند و در وابستگی‌ها لازم نیستند.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    isAuthLoading,
-    officialCalendarState.status,
-    isLoadingDb,
-    dbChecked,
-    isPersonnelLoaded,
-    isRequestsLoaded,
-    isMounted,
-  ]);
 
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
 
@@ -4245,15 +4201,17 @@ export default function Home() {
     }
   };
 
+  // متن‌ها عمداً کوتاه‌اند تا کارت لودینگ کوچک بماند؛ جزئیات مرحله زیر نوار
+  // پیشرفت نمایش داده می‌شود.
   const busyOverlaySubtitle =
     solvingTarget === 'nurse'
-      ? 'در حال بازتولید هوشمند برنامه پرستاران و ثبت تغییرات در سامانه...'
+      ? 'تولید برنامه پرستاران'
       : solvingTarget === 'assistant'
-        ? 'در حال بازتولید هوشمند برنامه کمک بهیاران و ثبت تغییرات در سامانه...'
+        ? 'تولید برنامه کمک‌بهیاران'
         : isAiProcessing
-          ? 'در حال پردازش درخواست شما با هوش مصنوعی و آماده سازی نتایج...'
+          ? 'پردازش با هوش مصنوعی'
           : isBlockingDbSave
-            ? 'اطلاعات در سامانه در حال ثبت و ذخیره سازی است. چند لحظه منتظر بمانید...'
+            ? 'ذخیره‌سازی اطلاعات'
             : null;
 
   // تراکر فعال با توجه به عملیات جاری انتخاب می‌شود تا نوار درصد دقیقاً
@@ -4274,38 +4232,31 @@ export default function Home() {
         phaseNumber: activeProgress.phaseNumber,
         phaseCount: activeProgress.phaseCount,
         remainingLabel: activeProgress.remainingLabel,
-        phases: activeProgress.phases,
       }
     : {};
 
-  // صفحات لودینگ اولیه: همان نوار درصد ۰ تا ۱۰۰ با مراحل واقعی راه‌اندازی
-  // (بررسی نشست → تقویم رسمی → داده بخش → چیدمان داشبورد).
-  const renderBootScreen = (subtitle: string) => (
-    <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 font-sans" dir="rtl">
-      <div className="relative w-full max-w-sm overflow-hidden rounded-[2rem] border border-slate-200/80 bg-white/90 p-8 shadow-xl shadow-slate-900/5">
-        <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-l from-indigo-500 via-sky-500 to-emerald-500" />
-        <div className="absolute -top-16 -right-12 h-36 w-36 rounded-full bg-sky-400/10 blur-3xl" />
-        <div className="relative flex flex-col items-center gap-5 text-center" role="status" aria-live="polite">
-          <ProgressMeter
-            percent={bootProgress.percent}
-            phaseLabel={bootProgress.phaseLabel}
-            phaseNumber={bootProgress.phaseNumber}
-            phaseCount={bootProgress.phaseCount}
-            remainingLabel={bootProgress.remainingLabel}
-            size={120}
-          />
-          <p className="text-sm font-black leading-7 text-slate-600">{subtitle}</p>
+  // صفحات ورود و راه‌اندازی اولیه عمداً نوار درصدی ندارند: این انتظارها کوتاه‌اند
+  // و همان اسپینر سبک قبلی، تجربهٔ سریع‌تر و سبک‌تری می‌دهد.
+  if (!isMounted) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 font-sans animate-pulse" dir="rtl">
+        <div className="text-center space-y-4">
+          <div className="w-12 h-12 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-sm font-black text-slate-600">در حال راه‌اندازی و همگام‌سازی سامانه هوشمند...</p>
         </div>
       </div>
-    </div>
-  );
-
-  if (!isMounted) {
-    return renderBootScreen('در حال راه‌اندازی و همگام‌سازی سامانه هوشمند...');
+    );
   }
 
   if (isAuthLoading) {
-    return renderBootScreen('در حال بررسی ورود امن شما به سامانه...');
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100" dir="rtl">
+        <div className="text-center">
+          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent" />
+          <p className="mt-4 text-sm font-black text-slate-600">در حال بررسی ورود امن...</p>
+        </div>
+      </div>
+    );
   }
 
   if (role === 'guest') {
@@ -4430,19 +4381,9 @@ export default function Home() {
             </div>
           )}
           {isPortalSubmitting && (
-            <div className="mb-6 mx-auto max-w-2xl rounded-2xl border border-sky-200 bg-sky-50/80 p-4 shadow-sm" role="status" aria-live="polite">
-              <div className="mb-3 flex items-center justify-center gap-2.5 text-xs font-black text-sky-800">
-                <span className="inline-block w-4 h-4 border-2 border-sky-600 border-t-transparent rounded-full animate-spin shrink-0"></span>
-                <span>در حال بررسی اطلاعات و ورود به سامانه، لطفاً شکیبا باشید...</span>
-              </div>
-              <ProgressMeter
-                percent={loginProgress.percent}
-                phaseLabel={loginProgress.phaseLabel}
-                phaseNumber={loginProgress.phaseNumber}
-                phaseCount={loginProgress.phaseCount}
-                remainingLabel={loginProgress.remainingLabel}
-                size={96}
-              />
+            <div className="mb-6 p-4 bg-sky-50 text-sky-800 border border-sky-300 text-xs rounded-xl font-black max-w-2xl mx-auto flex items-center justify-center gap-2.5 shadow-sm animate-pulse" role="status">
+              <span className="inline-block w-4 h-4 border-2 border-sky-600 border-t-transparent rounded-full animate-spin shrink-0"></span>
+              <span>در حال بررسی اطلاعات و ورود به سامانه، لطفاً شکیبا باشید...</span>
             </div>
           )}
           {portalNotice && (

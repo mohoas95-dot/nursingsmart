@@ -6,9 +6,12 @@ import React from 'react';
  * ProgressMeter — Presentational Component
  *
  * RESPONSIBILITY:
- *   نمایش حرفه‌ای درصد پیشرفت ۰ تا ۱۰۰ به‌صورت حلقهٔ گرادیانی + نوار خطی،
- *   کاملاً هماهنگ با زبان بصری سامانه (گرادیان نیلی/آبی/زمردی، گوشه‌های نرم،
- *   وزن فونت سنگین فارسی و چیدمان راست‌به‌چپ).
+ *   نمایش فشرده و مدرن درصد پیشرفت ۰ تا ۱۰۰ به‌صورت حلقهٔ گرادیانی + نوار خطی،
+ *   هماهنگ با زبان بصری سامانه (گرادیان نیلی/آبی/زمردی و گوشه‌های نرم).
+ *
+ * چرا ارقام لاتین؟
+ *   عدد درصد با فونت mono و ارقام لاتین (tabular-nums) نمایش داده می‌شود تا
+ *   ظاهری مدرن داشته باشد و هنگام تغییر سریع اعداد، عرض آن نلرزد.
  *
  * دسترس‌پذیری:
  *   ساختار role="progressbar" با aria-valuenow/min/max و متن جایگزین، تا
@@ -30,16 +33,10 @@ export interface ProgressMeterProps {
   size?: number;
   /** نمایش نوار خطی زیر حلقه. */
   showBar?: boolean;
-  /** آیکن یا محتوای مرکز حلقه (پیش‌فرض: درصد). */
   className?: string;
 }
 
-const RING_STROKE = 7;
-
-/** ارقام فارسی برای هماهنگی کامل با بقیهٔ رابط کاربری. */
-function toPersianDigits(value: string | number): string {
-  return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
-}
+const RING_STROKE = 6;
 
 export function ProgressMeter({
   percent,
@@ -47,7 +44,7 @@ export function ProgressMeter({
   phaseNumber,
   phaseCount,
   remainingLabel,
-  size = 128,
+  size = 104,
   showBar = true,
   className = '',
 }: ProgressMeterProps) {
@@ -59,7 +56,7 @@ export function ProgressMeter({
   const isComplete = rounded >= 100;
 
   return (
-    <div className={`flex w-full flex-col items-center gap-4 ${className}`}>
+    <div className={`flex w-full flex-col items-center gap-3 ${className}`}>
       <div
         className="relative flex items-center justify-center"
         style={{ width: size, height: size }}
@@ -69,9 +66,6 @@ export function ProgressMeter({
         aria-valuemax={100}
         aria-valuetext={`${rounded} درصد${phaseLabel ? ` — ${phaseLabel}` : ''}`}
       >
-        {/* هالهٔ نرم پشت حلقه برای عمق بصری */}
-        <div className="absolute inset-3 rounded-full bg-gradient-to-br from-indigo-500/10 via-sky-500/10 to-emerald-500/10 blur-xl" />
-
         <svg width={size} height={size} className="relative -rotate-90" aria-hidden="true">
           <defs>
             <linearGradient id="progress-meter-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -102,24 +96,20 @@ export function ProgressMeter({
           />
         </svg>
 
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
-          <div className="flex items-baseline gap-0.5 font-mono">
-            <span className="text-3xl font-black leading-none text-slate-900 tabular-nums">
-              {toPersianDigits(rounded)}
+        {/* عدد درصد: ارقام لاتین، فونت mono و عرض ثابت برای ظاهر مدرن و بدون لرزش */}
+        <div className="absolute inset-0 flex items-center justify-center" dir="ltr">
+          <div className="flex items-baseline gap-px font-mono">
+            <span className="text-2xl font-black leading-none tracking-tight text-slate-900 tabular-nums">
+              {rounded}
             </span>
-            <span className="text-sm font-black text-slate-400">٪</span>
+            <span className="text-xs font-bold text-slate-400">%</span>
           </div>
-          {phaseCount && phaseCount > 1 && phaseNumber ? (
-            <span className="text-[10px] font-extrabold text-slate-400">
-              گام {toPersianDigits(phaseNumber)} از {toPersianDigits(phaseCount)}
-            </span>
-          ) : null}
         </div>
       </div>
 
       {showBar && (
-        <div className="w-full space-y-2">
-          <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-200/80">
+        <div className="w-full space-y-1.5">
+          <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-200/80">
             <div
               className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-indigo-600 via-sky-500 to-emerald-500"
               style={{ width: `${safePercent}%`, transition: 'width 220ms cubic-bezier(0.4, 0, 0.2, 1)' }}
@@ -131,14 +121,16 @@ export function ProgressMeter({
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-3 text-[11px] font-extrabold">
+          <div className="flex items-center justify-between gap-2 text-[10px] font-extrabold">
             <span className="truncate text-slate-600">{phaseLabel || 'در حال پردازش…'}</span>
-            {remainingLabel && (
-              <span className="shrink-0 text-slate-400">
-                {isComplete ? 'تکمیل شد' : `زمان باقی‌مانده: ${remainingLabel}`}
-              </span>
-            )}
+            <span className="shrink-0 text-slate-400" dir="ltr">
+              {phaseCount && phaseCount > 1 && phaseNumber ? `${phaseNumber}/${phaseCount}` : ''}
+            </span>
           </div>
+
+          {remainingLabel && !isComplete && (
+            <p className="text-center text-[10px] font-bold text-slate-400">{remainingLabel}</p>
+          )}
         </div>
       )}
     </div>
