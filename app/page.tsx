@@ -2037,7 +2037,11 @@ export default function Home() {
   // Additional system request states
   const [draftRequests, setDraftRequests] = useState<ShiftRequest[]>([]);
   const [showSplitRequests, setShowSplitRequests] = useState<boolean>(false);
-  const [quickSelectedTemplateId, setQuickSelectedTemplateId] = useState<QuickRequestTemplateId | null>('en');
+  const [quickSelectedTemplateId, setQuickSelectedTemplateId] = useState<QuickRequestTemplateId | null>(null);
+  // زیرشاخه‌های هر الگو به‌صورت پیش‌فرض مخفی‌اند و فقط با کلیک روی همان کارت باز می‌شوند
+  const [quickScopePickerFor, setQuickScopePickerFor] = useState<QuickRequestTemplateId | null>(null);
+  // هر دو بخش «درخواست‌های پرکاربرد» و «CHAT BOX» در ابتدا بسته‌اند
+  const [openRequestPanel, setOpenRequestPanel] = useState<'quick' | 'chat' | null>(null);
   const [quickSelectedScope, setQuickSelectedScope] = useState<QuickRequestScope>('odd');
   const [quickSelectedDays, setQuickSelectedDays] = useState<number[]>([]);
   const [quickPersonnelId, setQuickPersonnelId] = useState<string>('');
@@ -5342,15 +5346,16 @@ export default function Home() {
         </div>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
-          <TehranDateTime lastSync={calendarSyncedAt} />
+          {/* کارت ساعت/تاریخ تهران فقط در داشبورد زمان‌بندی (همه نقش‌ها) نمایش داده می‌شود */}
+          {activeTab === 'schedule' && <TehranDateTime lastSync={calendarSyncedAt} />}
           {officialCalendarState.status !== 'ready' && (
             <div className={`rounded-2xl border p-4 text-xs font-black print:hidden ${officialCalendarState.status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`} role="status">
               {officialCalendarState.status === 'error' ? 'اتصال به تقویم رسمی کشور برقرار نشد؛ لطفاً اتصال اینترنت را بررسی و صفحه را تازه‌سازی کنید.' : 'در حال همگام‌سازی کامل روزها، مناسبت‌ها و تعطیلات رسمی ماه انتخاب‌شده…'}
             </div>
           )}
 
-          {/* کارت «بازه برنامه‌ریزی» فقط برای مدیر و سرپرستار — پرسنل نیازی به این توضیحات ندارند */}
-          {role !== 'personnel' && (
+          {/* کارت «بازه برنامه‌ریزی» و دکمه‌های بازتولید فقط برای مدیر/سرپرستار و فقط در داشبورد */}
+          {role !== 'personnel' && activeTab === 'schedule' && (
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-3 text-xs flex-wrap">
               <span className="bg-indigo-50 text-indigo-700 p-1.5 rounded-xl border border-indigo-100"><Sparkles className="w-4 h-4"/></span>
@@ -6163,6 +6168,54 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* دو بخش «درخواست‌های پرکاربرد» و «CHAT BOX» به‌صورت آکاردئونی و در ابتدا بسته هستند */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setOpenRequestPanel(prev => (prev === 'quick' ? null : 'quick'))}
+                  aria-expanded={openRequestPanel === 'quick'}
+                  className={`flex items-center justify-between gap-3 rounded-[1.5rem] border px-5 py-4 text-right transition-all cursor-pointer ${
+                    openRequestPanel === 'quick'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg shadow-indigo-100'
+                      : 'bg-white text-slate-800 border-indigo-100 hover:border-indigo-300 hover:shadow-md'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <Sparkles className={`w-4 h-4 shrink-0 ${openRequestPanel === 'quick' ? 'text-amber-200' : 'text-indigo-600'}`} />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-black">درخواست‌های پر کاربرد</span>
+                      <span className={`block text-[10px] font-bold mt-0.5 ${openRequestPanel === 'quick' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                        الگوهای آماده EN / MEN / لانگ‌آف / OFF / مرخصی
+                      </span>
+                    </span>
+                  </span>
+                  <ChevronLeft className={`w-4 h-4 shrink-0 transition-transform ${openRequestPanel === 'quick' ? '-rotate-90' : ''}`} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setOpenRequestPanel(prev => (prev === 'chat' ? null : 'chat'))}
+                  aria-expanded={openRequestPanel === 'chat'}
+                  className={`flex items-center justify-between gap-3 rounded-[1.5rem] border px-5 py-4 text-right transition-all cursor-pointer ${
+                    openRequestPanel === 'chat'
+                      ? 'bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 text-white border-indigo-600 shadow-lg shadow-indigo-100'
+                      : 'bg-white text-slate-800 border-indigo-100 hover:border-indigo-300 hover:shadow-md'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black ${openRequestPanel === 'chat' ? 'bg-amber-300 text-slate-900' : 'bg-indigo-50 text-indigo-700 border border-indigo-100'}`}>AI</span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-black">CHAT BOX 🤩</span>
+                      <span className={`block text-[10px] font-bold mt-0.5 ${openRequestPanel === 'chat' ? 'text-indigo-100' : 'text-slate-400'}`}>
+                        درخواست طولانی را فارسی و خودمونی بنویس
+                      </span>
+                    </span>
+                  </span>
+                  <ChevronLeft className={`w-4 h-4 shrink-0 transition-transform ${openRequestPanel === 'chat' ? '-rotate-90' : ''}`} />
+                </button>
+              </div>
+
+              {openRequestPanel === 'quick' && (
               <div className="bg-gradient-to-br from-indigo-50 via-white to-emerald-50/60 border border-indigo-100 rounded-[2rem] shadow-sm overflow-hidden">
                 <div className="p-5 sm:p-6 border-b border-indigo-100/70 bg-white/70">
                   <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
@@ -6202,14 +6255,20 @@ export default function Home() {
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {QUICK_REQUEST_TEMPLATES.map(template => {
                       const isSelected = quickSelectedTemplateId === template.id;
+                      const needsScope = template.id !== 'off' && template.id !== 'leave';
+                      const isScopePickerOpen = needsScope && quickScopePickerFor === template.id;
                       return (
+                        <React.Fragment key={`quick-template-cell-${template.id}`}>
                         <button
                           type="button"
                           key={template.id}
                           onClick={() => {
                             setQuickSelectedTemplateId(template.id);
                             setQuickSelectedDays([]);
+                            // زیرشاخه فقط برای الگوهای شیفتی و دقیقاً زیر همان کارت باز می‌شود
+                            setQuickScopePickerFor(prev => (needsScope && prev !== template.id ? template.id : null));
                           }}
+                          aria-expanded={isScopePickerOpen}
                           className={`group relative overflow-hidden rounded-2xl border p-3 min-h-[94px] text-right transition-all cursor-pointer ${
                             isSelected
                               ? 'bg-white border-indigo-300 shadow-lg shadow-indigo-100 scale-[1.02]'
@@ -6226,44 +6285,47 @@ export default function Home() {
                             </span>
                           )}
                         </button>
+
+                        {/* زیرشاخه‌ها فقط پس از کلیک روی همین کارت، همان‌جا ظاهر و پس از انتخاب محو می‌شوند */}
+                        {isScopePickerOpen && (
+                          <div className="col-span-2 md:col-span-5 bg-white/95 border border-indigo-200 rounded-3xl p-4 space-y-3 shadow-xs animate-fadeIn">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <h5 className="text-sm font-black text-slate-800">زیرشاخه «{template.title}» را انتخاب کن</h5>
+                                <p className="text-[10px] font-bold text-slate-400 mt-1">جمعه‌ها در گزینه‌های «روز فرد/زوج» محاسبه نمی‌شوند.</p>
+                              </div>
+                              <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 rounded-full">
+                                {template.id === 'long_off' ? 'لانگ‌آف = ME + OFF نرم روز مقابل' : 'ثبت مستقیم درخواست شیفت'}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                              {QUICK_REQUEST_SCOPE_OPTIONS.map(option => (
+                                <button
+                                  type="button"
+                                  key={`${template.id}-${option.id}`}
+                                  onClick={() => {
+                                    setQuickSelectedScope(option.id);
+                                    // پس از انتخاب، زیرشاخه دوباره محو می‌شود
+                                    setQuickScopePickerFor(null);
+                                  }}
+                                  className={`rounded-2xl border px-3 py-3 text-right transition-all cursor-pointer ${
+                                    quickSelectedScope === option.id
+                                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
+                                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
+                                  }`}
+                                >
+                                  <span className="block text-xs font-black">{option.title}</span>
+                                  <span className={`block text-[9px] mt-1 font-bold ${quickSelectedScope === option.id ? 'text-indigo-100' : 'text-slate-400'}`}>{option.subtitle}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </div>
-
-                  {quickSelectedTemplateId && quickSelectedTemplateId !== 'off' && quickSelectedTemplateId !== 'leave' && (
-                    <div className="bg-white/85 border border-slate-200 rounded-3xl p-4 space-y-4 shadow-xs animate-fadeIn">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <h5 className="text-sm font-black text-slate-800">زیرشاخه سریع را انتخاب کن</h5>
-                          <p className="text-[10px] font-bold text-slate-400 mt-1">جمعه‌ها در گزینه‌های «روز فرد/زوج» محاسبه نمی‌شوند.</p>
-                        </div>
-                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 rounded-full">
-                          {quickSelectedTemplateId === 'long_off' ? 'لانگ‌آف = ME + OFF نرم روز مقابل' : 'ثبت مستقیم درخواست شیفت'}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-                        {QUICK_REQUEST_SCOPE_OPTIONS.map(option => {
-                          const isScopeSelected = quickSelectedScope === option.id;
-                          return (
-                            <button
-                              type="button"
-                              key={option.id}
-                              onClick={() => setQuickSelectedScope(option.id)}
-                              className={`rounded-2xl border px-3 py-3 text-right transition-all cursor-pointer ${
-                                isScopeSelected
-                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
-                                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
-                              }`}
-                            >
-                              <span className="block text-xs font-black">{option.title}</span>
-                              <span className={`block text-[9px] mt-1 font-bold ${isScopeSelected ? 'text-indigo-100' : 'text-slate-400'}`}>{option.subtitle}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
 
                   {(quickSelectedTemplateId === 'off' || quickSelectedTemplateId === 'leave') && (
                     <div className="bg-white/90 border border-slate-200 p-4 rounded-3xl space-y-3 shadow-xs animate-fadeIn">
@@ -6364,7 +6426,9 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              )}
 
+              {(openRequestPanel === 'chat' || isChatFullscreen) && (
               <div
                 id="request-chat-box"
                 className={isChatFullscreen
@@ -6377,7 +6441,7 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
-                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini 3.6 Flash</span>
+                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini Flash</span>
                         <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -6399,7 +6463,7 @@ export default function Home() {
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini 3.6 Flash</span>
+                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini Flash</span>
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
@@ -6584,6 +6648,7 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              )}
 
               <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto w-full">
