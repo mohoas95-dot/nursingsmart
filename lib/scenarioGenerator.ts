@@ -32,6 +32,45 @@ export interface ScenarioGenerationResult {
   all: ScoredSchedule[];
   top3: ScoredSchedule[];
   generationLog: string[];
+  /** مدت واقعی پردازش به میلی‌ثانیه (برای ثبت در لاگ‌ها و اتفاقات). */
+  durationMs: number;
+  /** تعداد پرسنلی که این اجرا برایشان برنامه چید. */
+  targetPersonnelCount: number;
+}
+
+/** گزارش زندهٔ پیشرفت موتور سناریو برای هم‌گام‌سازی نوار لودینگ با پردازش واقعی. */
+export interface ScenarioProgressEvent {
+  /** مرحلهٔ جاری: آماده‌سازی، تولید یک سناریو، یا جمع‌بندی و امتیازدهی. */
+  stage: 'prepare' | 'scenario' | 'scoring';
+  /** شمارهٔ سناریوی در حال تولید (۱ تا ۳) — فقط در stage === 'scenario'. */
+  scenarioIndex?: number;
+  /** تعداد کل سناریوهایی که قرار است تولید شوند. */
+  scenarioCount: number;
+  /** نوع سناریوی جاری. */
+  scenarioType?: ScenarioType;
+  /** کسر پیشرفت داخل همین مرحله (۰ تا ۱). */
+  fraction: number;
+}
+
+export interface ScenarioGenerationOptions {
+  year: number;
+  month: number;
+  personnelList: readonly Personnel[];
+  requests: readonly ShiftRequest[];
+  settings: SystemSettings;
+  customHolidays: Readonly<Record<number, string>>;
+  firstDayOfWeekIndex?: number;
+  monthlyDutyHours?: any;
+  targetJobGroup?: JobGroup;
+  currentAssignments?: Record<string, Record<number, ShiftType>> | null;
+  lockedRows?: string[];
+  /** گزارش پیشرفت واقعی؛ نوار درصد دقیقاً با همین رویدادها جلو می‌رود. */
+  onProgress?: (event: ScenarioProgressEvent) => void;
+  /**
+   * فرصت دادن به مرورگر برای رندر (مثلاً await new Promise(r => setTimeout(r, 0))).
+   * بدون آن، پردازش سنگین رشتهٔ اصلی را قفل می‌کند و انیمیشن لودینگ یخ می‌زند.
+   */
+  yieldToUi?: () => Promise<void>;
 }
 
 type ScenarioOperation =
@@ -937,7 +976,8 @@ function chooseScenarioCandidate(
   scenarioType: ScenarioType,
   scenarioId: number,
   accepted: readonly ScoredSchedule[],
-  context: ScenarioContext
+  context: ScenarioContext,
+  onSeedProgress?: (fraction: number) => void
 ): { candidate: ScoredSchedule; attempts: number } {
   const seedVariants = buildSeedPersonnelVariants(context.personnelList, scenarioType, context);
   let attempts = 0;
@@ -948,6 +988,8 @@ function chooseScenarioCandidate(
 
   for (const personnelSeed of seedVariants) {
     attempts += 1;
+    // پیشرفت واقعی: نسبت seedهای بررسی‌شده به کل seedها.
+    onSeedProgress?.(seedVariants.length > 0 ? (attempts - 1) / seedVariants.length : 0);
     const initial = initialScoredSchedule(scenarioType, scenarioId, context, personnelSeed);
     const locallyOptimized = localSearchScenario(initial, scenarioType, accepted, context);
     const refined = refineScenarioForDifferenceWindow(locallyOptimized, scenarioType, accepted, context);
@@ -969,9 +1011,106 @@ function chooseScenarioCandidate(
     }
   }
 
+  onSeedProgress?.(1);
+
   return {
     candidate: bestInRangeCandidate || bestCandidate || initialScoredSchedule(scenarioType, scenarioId, context, seedVariants[0] || context.personnelList),
     attempts,
+  };
+}
+
+function buildScenarioContext(options: ScenarioGenerationOptions): ScenarioContext {
+  const {
+    year,
+    month,
+    personnelList,
+    requests,
+    settings,
+    customHolidays,
+    firstDayOfWeekIndex,
+    monthlyDutyHours,
+    targetJobGroup,
+    currentAssignments,
+    lockedRows = [],
+  } = options;
+
+  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
+  const lockedIds = new Set(lockedRows);
+  const targetPersonnel = personnelList.filter(person =>
+    person.active &&
+    !lockedIds.has(person.id) &&
+    (!targetJobGroup || person.jobGroup === targetJobGroup)
+  );
+
+  return {
+    year,
+    month,
+    personnelList,
+    requests,
+    settings,
+    customHolidays,
+    firstDayOfWeekIndex,
+    monthlyDutyHours,
+    targetJobGroup,
+    currentAssignments,
+    lockedRows,
+    totalDays: calendar.length,
+    targetPersonnel,
+    targetPersonnelIds: targetPersonnel.map(person => person.id),
+  };
+}
+
+/** بررسی پذیرش یک سناریو؛ در صورت رد شدن، دلیل دقیق برای «لاگ‌ها و اتفاقات» برمی‌گردد. */
+function evaluateScenarioAcceptance(
+  candidate: ScoredSchedule,
+  scenarioType: ScenarioType,
+  attempts: number,
+  accepted: readonly ScoredSchedule[],
+  context: ScenarioContext
+): { accepted: boolean; reason?: string } {
+  const hardWarningCount = countHardConstraintWarnings(candidate.schedule.warnings);
+  if (!isHardWarningCountAcceptable(hardWarningCount)) {
+    return {
+      accepted: false,
+      reason: `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} تلاش، ${hardWarningCount} هشدار سخت داشت و چون از سقف مجاز ${MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO} مورد عبور کرد کنار گذاشته شد.`,
+    };
+  }
+
+  const differenceCheck = differencesAreAcceptable(candidate, accepted, context);
+  if (!differenceCheck.ok) {
+    const differences = getCandidateDifferences(candidate, accepted, context);
+    return {
+      accepted: false,
+      reason: `سناریوی ${SCENARIO_KEYS[scenarioType]} با وجود ${attempts} دور تلاش و اعمال swap / move / multi-swap / chain-swap، هنوز به بازه اختلاف ${MIN_DIFFERENCE_PERCENT} تا ${MAX_DIFFERENCE_PERCENT} درصد نرسید. اختلاف‌های فعلی: ${differences.map(diff => `${diff.toFixed(1)}٪`).join(' ، ')}.`,
+    };
+  }
+
+  return { accepted: true };
+}
+
+function finalizeScenarioResult(
+  explored: readonly ScoredSchedule[],
+  accepted: readonly ScoredSchedule[],
+  generationLog: string[],
+  context: ScenarioContext,
+  startedAt: number
+): ScenarioGenerationResult {
+  if (accepted.length < 3) {
+    const reason = `فقط ${accepted.length} سناریوی معتبر و به‌اندازه کافی متفاوت تولید شد؛ از ساخت نسخه‌های بسیار مشابه خودداری شد.`;
+    generationLog.push(reason);
+    console.warn('[scenario-generator]', reason);
+  }
+
+  return {
+    all: explored.map(scenario => ({
+      ...scenario,
+      title: SCENARIO_TITLES[scenario.type].title,
+      shortTitle: SCENARIO_TITLES[scenario.type].shortTitle,
+    })),
+    top3: annotatePairwiseDifferences([...accepted], context),
+    generationLog,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    targetPersonnelCount: context.targetPersonnel.length,
   };
 }
 
@@ -988,14 +1127,8 @@ export function generateAndScoreScenarios(
   currentAssignments?: Record<string, Record<number, ShiftType>> | null,
   lockedRows: string[] = []
 ): ScenarioGenerationResult {
-  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
-  const lockedIds = new Set(lockedRows);
-  const targetPersonnel = personnelList.filter(person =>
-    person.active &&
-    !lockedIds.has(person.id) &&
-    (!targetJobGroup || person.jobGroup === targetJobGroup)
-  );
-  const context: ScenarioContext = {
+  const startedAt = Date.now();
+  const context = buildScenarioContext({
     year,
     month,
     personnelList,
@@ -1007,10 +1140,7 @@ export function generateAndScoreScenarios(
     targetJobGroup,
     currentAssignments,
     lockedRows,
-    totalDays: calendar.length,
-    targetPersonnel,
-    targetPersonnelIds: targetPersonnel.map(person => person.id),
-  };
+  });
 
   const generationLog: string[] = [];
   const explored: ScoredSchedule[] = [];
@@ -1021,39 +1151,101 @@ export function generateAndScoreScenarios(
     const { candidate, attempts } = chooseScenarioCandidate(scenarioType, scenarioId++, accepted, context);
     explored.push(candidate);
 
-    const hardWarningCount = countHardConstraintWarnings(candidate.schedule.warnings);
-    if (!isHardWarningCountAcceptable(hardWarningCount)) {
-      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} پس از ${attempts} تلاش، ${hardWarningCount} هشدار سخت داشت و چون از سقف مجاز ${MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO} مورد عبور کرد کنار گذاشته شد.`;
-      generationLog.push(reason);
-      console.warn('[scenario-generator]', reason);
-      continue;
-    }
-
-    const differenceCheck = differencesAreAcceptable(candidate, accepted, context);
-    if (!differenceCheck.ok) {
-      const differences = getCandidateDifferences(candidate, accepted, context);
-      const reason = `سناریوی ${SCENARIO_KEYS[scenarioType]} با وجود ${attempts} دور تلاش و اعمال swap / move / multi-swap / chain-swap، هنوز به بازه اختلاف ${MIN_DIFFERENCE_PERCENT} تا ${MAX_DIFFERENCE_PERCENT} درصد نرسید. اختلاف‌های فعلی: ${differences.map(diff => `${diff.toFixed(1)}٪`).join(' ، ')}.`;
-      generationLog.push(reason);
-      console.warn('[scenario-generator]', reason);
+    const verdict = evaluateScenarioAcceptance(candidate, scenarioType, attempts, accepted, context);
+    if (!verdict.accepted) {
+      if (verdict.reason) {
+        generationLog.push(verdict.reason);
+        console.warn('[scenario-generator]', verdict.reason);
+      }
       continue;
     }
 
     accepted.push(candidate);
   }
 
-  if (accepted.length < 3) {
-    const reason = `فقط ${accepted.length} سناریوی معتبر و به‌اندازه کافی متفاوت تولید شد؛ از ساخت نسخه‌های بسیار مشابه خودداری شد.`;
-    generationLog.push(reason);
-    console.warn('[scenario-generator]', reason);
+  return finalizeScenarioResult(explored, accepted, generationLog, context, startedAt);
+}
+
+/**
+ * نسخهٔ ناهم‌زمان با گزارش پیشرفت واقعی.
+ *
+ * بین مراحل سنگین به رشتهٔ اصلی مرورگر فرصت رندر داده می‌شود (yieldToUi) تا
+ * نوار «۰ تا ۱۰۰ درصد» یخ نزند و درصد نمایش‌داده‌شده دقیقاً همان چیزی باشد که
+ * موتور در حال انجام آن است. منطق تولید سناریو هیچ تفاوتی با نسخهٔ هم‌زمان ندارد.
+ */
+export async function generateAndScoreScenariosWithProgress(
+  options: ScenarioGenerationOptions
+): Promise<ScenarioGenerationResult> {
+  const startedAt = Date.now();
+  const { onProgress, yieldToUi } = options;
+  const scenarioCount = scenarioOrder.length;
+  const yieldNow = async () => {
+    if (yieldToUi) await yieldToUi();
+  };
+
+  onProgress?.({ stage: 'prepare', scenarioCount, fraction: 0.15 });
+  await yieldNow();
+
+  const context = buildScenarioContext(options);
+
+  onProgress?.({ stage: 'prepare', scenarioCount, fraction: 1 });
+  await yieldNow();
+
+  const generationLog: string[] = [];
+  const explored: ScoredSchedule[] = [];
+  const accepted: ScoredSchedule[] = [];
+
+  let scenarioId = 1;
+  for (const [index, scenarioType] of scenarioOrder.entries()) {
+    onProgress?.({
+      stage: 'scenario',
+      scenarioIndex: index + 1,
+      scenarioCount,
+      scenarioType,
+      fraction: 0,
+    });
+    await yieldNow();
+
+    const { candidate, attempts } = chooseScenarioCandidate(
+      scenarioType,
+      scenarioId++,
+      accepted,
+      context,
+      fraction => onProgress?.({
+        stage: 'scenario',
+        scenarioIndex: index + 1,
+        scenarioCount,
+        scenarioType,
+        fraction,
+      })
+    );
+    explored.push(candidate);
+
+    const verdict = evaluateScenarioAcceptance(candidate, scenarioType, attempts, accepted, context);
+    if (!verdict.accepted) {
+      if (verdict.reason) {
+        generationLog.push(verdict.reason);
+        console.warn('[scenario-generator]', verdict.reason);
+      }
+    } else {
+      accepted.push(candidate);
+    }
+
+    onProgress?.({
+      stage: 'scenario',
+      scenarioIndex: index + 1,
+      scenarioCount,
+      scenarioType,
+      fraction: 1,
+    });
+    await yieldNow();
   }
 
-  return {
-    all: explored.map(scenario => ({
-      ...scenario,
-      title: SCENARIO_TITLES[scenario.type].title,
-      shortTitle: SCENARIO_TITLES[scenario.type].shortTitle,
-    })),
-    top3: annotatePairwiseDifferences(accepted, context),
-    generationLog,
-  };
+  onProgress?.({ stage: 'scoring', scenarioCount, fraction: 0.4 });
+  await yieldNow();
+
+  const result = finalizeScenarioResult(explored, accepted, generationLog, context, startedAt);
+
+  onProgress?.({ stage: 'scoring', scenarioCount, fraction: 1 });
+  return result;
 }

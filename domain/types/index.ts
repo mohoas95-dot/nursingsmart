@@ -3,6 +3,10 @@
  * These types are Solver-Ready and can be used by future AI optimization engines
  */
 
+import type { SystemEventLog } from '../logging/system-events';
+
+export type { SystemEventLog } from '../logging/system-events';
+
 // ============================================================================
 // Calendar Types
 // ============================================================================
@@ -73,7 +77,10 @@ export interface MonthlySchedule {
   finalizedAssistants?: boolean;
   requestsLocked?: boolean;
   dismissedWarnings?: string[];
+  /** @deprecated جای خود را به eventLogs داده است؛ فقط برای خواندن داده‌های قدیمی می‌ماند. */
   changeLogs?: string[];
+  /** لاگ‌ها و اتفاقات سامانه؛ حداکثر ۳۰ رویداد آخر (MAX_SYSTEM_EVENT_LOGS). */
+  eventLogs?: SystemEventLog[];
   lockedRows?: string[];
   autoSubstitutions?: AutoSubstitutionRecord[];
 }
