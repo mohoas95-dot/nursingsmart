@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Cloud, ArrowUp } from 'lucide-react';
+import { ArrowUp } from 'lucide-react';
 
 /**
  * BusyOverlay — Presentational Component
@@ -50,6 +50,9 @@ export function BusyOverlay({
   const hasProgress = typeof percent === 'number' && Number.isFinite(percent);
   const safePercent = hasProgress ? Math.min(100, Math.max(0, percent as number)) : 0;
   const rounded = Math.round(safePercent);
+  // شناسهٔ یکتا برای گرادیان‌های SVG تا با چند نمونهٔ هم‌زمان تداخل نکند
+  const uid = React.useId().replace(/[^a-zA-Z0-9]/g, '');
+  const cloudPath = 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z';
 
   return (
     <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-950/45 backdrop-blur-md p-4 cursor-progress print:hidden">
@@ -63,45 +66,67 @@ export function BusyOverlay({
           aria-live="polite"
           aria-busy="true"
         >
-          {/* ابر آپلود سه‌بعدی + نقاط رنگی شناور */}
+          {/* ابر شیشه‌ای سه‌بعدی (فیروزه‌ای → بنفش) الهام‌گرفته از تصویر مرجع */}
           <div className="relative flex h-28 w-full items-center justify-center" aria-hidden="true">
-            {/* نقاط رنگی با ضربان‌های نامتقارن — حس جشن و زنده بودن */}
-            <span className="absolute left-[18%] top-1 h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse" style={{ animationDelay: '0.15s' }} />
-            <span className="absolute left-[10%] top-1/2 h-2 w-2 rounded-full bg-amber-400 animate-pulse" style={{ animationDelay: '0.9s' }} />
-            <span className="absolute left-[26%] bottom-3 h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" style={{ animationDelay: '1.4s' }} />
-            <span className="absolute right-[16%] top-0 h-1.5 w-1.5 rounded-full bg-sky-300 animate-pulse" style={{ animationDelay: '0.5s' }} />
-            <span className="absolute right-[10%] top-1/3 h-1.5 w-1.5 rounded-full bg-teal-300 animate-pulse" style={{ animationDelay: '1.1s' }} />
-            <span className="absolute right-[22%] bottom-4 h-2 w-2 rounded-full bg-rose-300 animate-pulse" style={{ animationDelay: '1.8s' }} />
+            {/* نقاط رنگی هم‌رنگ پالت ابر با ضربان‌های نامتقارن */}
+            <span className="absolute left-[16%] top-1 h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" style={{ animationDelay: '0.15s' }} />
+            <span className="absolute left-[9%] top-1/2 h-2 w-2 rounded-full bg-sky-300 animate-pulse" style={{ animationDelay: '0.9s' }} />
+            <span className="absolute left-[25%] bottom-3 h-1.5 w-1.5 rounded-full bg-violet-300 animate-pulse" style={{ animationDelay: '1.4s' }} />
+            <span className="absolute right-[16%] top-0 h-1.5 w-1.5 rounded-full bg-teal-300 animate-pulse" style={{ animationDelay: '0.5s' }} />
+            <span className="absolute right-[9%] top-1/3 h-1.5 w-1.5 rounded-full bg-fuchsia-300 animate-pulse" style={{ animationDelay: '1.1s' }} />
+            <span className="absolute right-[23%] bottom-4 h-2 w-2 rounded-full bg-indigo-300 animate-pulse" style={{ animationDelay: '1.8s' }} />
 
-            {/* سایهٔ نرم زیر ابر — عمق و حس سه‌بعدی */}
-            <div className="absolute bottom-1.5 h-3 w-24 rounded-full bg-sky-900/15 blur-md" />
+            {/* بازتاب نور روی سطح زیر ابر — مثل تصویر مرجع */}
+            <span className="absolute bottom-1 h-3 w-16 rounded-full bg-cyan-400/35 blur-md" style={{ left: 'calc(50% - 3.75rem)' }} />
+            <span className="absolute bottom-1 h-3 w-16 rounded-full bg-violet-400/35 blur-md" style={{ right: 'calc(50% - 3.75rem)' }} />
 
-            {/* گرادیان حجمی ابر (روشن بالا → آبی‌تر پایین) */}
+            {/* گرادیان‌های ابر شیشه‌ای */}
             <svg width="0" height="0" className="absolute" aria-hidden="true" focusable="false">
               <defs>
-                <linearGradient id="busy-cloud-gradient" x1="0" y1="0" x2="0.35" y2="1">
-                  <stop offset="0%" stopColor="#f0f9ff" />
-                  <stop offset="45%" stopColor="#bae6fd" />
-                  <stop offset="100%" stopColor="#7dd3fc" />
+                <linearGradient id={`${uid}-body`} x1="0" y1="0.15" x2="1" y2="0.85">
+                  <stop offset="0%" stopColor="#22d3ee" />
+                  <stop offset="42%" stopColor="#38bdf8" />
+                  <stop offset="100%" stopColor="#8b5cf6" />
                 </linearGradient>
+                <linearGradient id={`${uid}-rim`} x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#67e8f9" />
+                  <stop offset="100%" stopColor="#c4b5fd" />
+                </linearGradient>
+                <linearGradient id={`${uid}-sheen`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                  <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+                </linearGradient>
+                <clipPath id={`${uid}-clip`}>
+                  <path d={cloudPath} />
+                </clipPath>
               </defs>
             </svg>
 
             <div className="animate-cloud-float relative">
-              <Cloud
-                className="h-24 w-24 text-sky-400"
-                strokeWidth={1.2}
-                fill="url(#busy-cloud-gradient)"
-                style={{ filter: 'drop-shadow(0 10px 14px rgba(56, 189, 248, 0.35))' }}
-              />
-              {/* هایلایت سفید بالای ابر — برجستگی سه‌بعدی */}
-              <span className="pointer-events-none absolute left-4 top-2.5 h-3 w-8 rounded-full bg-white/75 blur-[3px]" />
-              {/* فلش آپلود کلفت با سایهٔ درخشان */}
+              <svg
+                viewBox="0 0 24 24"
+                className="h-24 w-24"
+                style={{ filter: 'drop-shadow(-5px 8px 14px rgba(34, 211, 238, 0.35)) drop-shadow(5px 8px 14px rgba(139, 92, 246, 0.35))' }}
+              >
+                {/* بدنهٔ ابر */}
+                <path d={cloudPath} fill={`url(#${uid}-body)`} />
+                {/* هایلایت‌های شیشه‌ای — فقط داخل قاب ابر */}
+                <g clipPath={`url(#${uid}-clip)`}>
+                  <ellipse cx="12" cy="6.1" rx="6" ry="2.4" fill={`url(#${uid}-sheen)`} />
+                  <ellipse cx="6.9" cy="11.5" rx="2.5" ry="1.5" fill="#ffffff" opacity="0.35" />
+                  <ellipse cx="17.3" cy="13.2" rx="2.3" ry="1.7" fill="#e9d5ff" opacity="0.4" />
+                  <ellipse cx="12" cy="20.4" rx="8.5" ry="2.6" fill="#1e1b4b" opacity="0.16" />
+                </g>
+                {/* حاشیهٔ نورانی دور ابر */}
+                <path d={cloudPath} fill="none" stroke={`url(#${uid}-rim)`} strokeWidth="0.55" opacity="0.9" />
+              </svg>
+
+              {/* فلش آپلود کلفت، هم‌رنگ جلوهٔ ابر و هم‌گام با شناوری آن */}
               <span className="absolute inset-0 flex items-center justify-center pt-2">
                 <ArrowUp
                   className="animate-cloud-arrow h-9 w-9 text-white"
                   strokeWidth={3.5}
-                  style={{ filter: 'drop-shadow(0 2px 5px rgba(2, 132, 199, 0.5))' }}
+                  style={{ filter: 'drop-shadow(0 0 6px rgba(34, 211, 238, 0.85)) drop-shadow(0 2px 5px rgba(124, 58, 237, 0.5))' }}
                 />
               </span>
             </div>

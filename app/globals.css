@@ -77,7 +77,7 @@
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* حرکت نرم بالا و پایین فلش داخل ابر در کارت لودینگ */
+/* حرکت نرم بالا و پایین فلش داخل ابر — هم‌گام با شناوری ابر (۲.۶ ثانیه) */
 @keyframes cloud-arrow {
   0%, 100% { transform: translateY(3px); }
   50% { transform: translateY(-4px); }
@@ -108,11 +108,11 @@
 }
 
 .animate-cloud-arrow {
-  animation: cloud-arrow 1.15s ease-in-out infinite;
+  animation: cloud-arrow 2.6s ease-in-out infinite;
 }
 
 .animate-cloud-float {
-  animation: cloud-float 2.8s ease-in-out infinite;
+  animation: cloud-float 2.6s ease-in-out infinite;
 }
 
 .animate-indeterminate-bar {

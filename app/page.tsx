@@ -2065,6 +2065,9 @@ export default function Home() {
     return personnel.find(person => person.id === quickPersonnelId) || null;
   }, [personnel, quickPersonnelId, role, selectedPersonnelUser]);
 
+  // حریم خصوصی چت: تاریخچه هر کاربر فقط در حافظهٔ همین نشست است و هیچ‌جا
+  // ذخیره نمی‌شود؛ با تعویض پرسنل، گفت‌وگوی قبلی کاملاً پاک می‌شود تا
+  // تاریخچهٔ چت کاربران برای یکدیگر قابل مشاهده نباشد.
   React.useEffect(() => {
     const firstName = requestChatPersonnel?.firstName || 'دوست خوبم';
     setRequestChatMessages([
@@ -2077,6 +2080,7 @@ export default function Home() {
     ]);
     setChatProposedRequests([]);
     setRequestChatInput('');
+    setChatFailedText(null);
   }, [requestChatPersonnel?.id, requestChatPersonnel?.firstName, currentYear, currentMonth]);
 
   const getRequestSummaryText = (r: ShiftRequest): string => {
