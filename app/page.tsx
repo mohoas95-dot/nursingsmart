@@ -160,6 +160,13 @@ interface ScenarioWorkflowGroup extends ScenarioWorkflowView {
 
 type QuickRequestTemplateId = 'en' | 'men' | 'long_off' | 'off' | 'leave';
 type QuickRequestScope = 'odd' | 'even' | 'weekly_odd' | 'weekly_even';
+type RequestChatMessage = {
+  id: string;
+  role: 'assistant' | 'user';
+  content: string;
+  timestamp?: string;
+};
+type ChatProposedShiftRequest = ShiftRequest & { description?: string };
 
 const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
   id: QuickRequestTemplateId;
@@ -1987,6 +1994,11 @@ export default function Home() {
   const [quickSelectedDays, setQuickSelectedDays] = useState<number[]>([]);
   const [quickPersonnelId, setQuickPersonnelId] = useState<string>('');
   const [isQuickRequestSubmitting, setIsQuickRequestSubmitting] = useState<boolean>(false);
+  const [requestChatMessages, setRequestChatMessages] = useState<RequestChatMessage[]>([]);
+  const [requestChatInput, setRequestChatInput] = useState<string>('');
+  const [isRequestChatProcessing, setIsRequestChatProcessing] = useState<boolean>(false);
+  const [chatProposedRequests, setChatProposedRequests] = useState<ChatProposedShiftRequest[]>([]);
+  const requestChatInputRef = React.useRef<HTMLTextAreaElement | null>(null);
 
   // عملیات حساس مدیریت بخش: حذف دائمی بخش (با احراز هویت مجدد) و انتقال امن مدیریت
   const [showDeleteDeptModal, setShowDeleteDeptModal] = useState<boolean>(false);
@@ -2009,6 +2021,25 @@ export default function Home() {
     if (quickPersonnelId && personnel.some(person => person.id === quickPersonnelId)) return;
     setQuickPersonnelId(personnel[0]?.id || '');
   }, [personnel, quickPersonnelId, role, selectedPersonnelUser]);
+
+  const requestChatPersonnel = React.useMemo(() => {
+    if (role === 'personnel') return selectedPersonnelUser;
+    return personnel.find(person => person.id === quickPersonnelId) || null;
+  }, [personnel, quickPersonnelId, role, selectedPersonnelUser]);
+
+  React.useEffect(() => {
+    const firstName = requestChatPersonnel?.firstName || 'دوست خوبم';
+    setRequestChatMessages([
+      {
+        id: `chat_hello_${requestChatPersonnel?.id || 'guest'}_${currentYear}_${currentMonth}`,
+        role: 'assistant',
+        content: `سلام ${firstName} جان 👋 من اینجام که درخواستت رو دقیق و بدون خطا تبدیل کنم به فرم شیفت. هرچی می‌خوای خودمونی بنویس؛ اگر چیزی مبهم باشه قبل از ثبت ازت می‌پرسم.`,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    setChatProposedRequests([]);
+    setRequestChatInput('');
+  }, [requestChatPersonnel?.id, requestChatPersonnel?.firstName, currentYear, currentMonth]);
 
   const getRequestSummaryText = (r: ShiftRequest): string => {
     const shiftLabel = r.preferredShift === 'M' ? 'صبح (M)' :
@@ -2037,6 +2068,8 @@ export default function Home() {
       return `${hardnessLabel} [${timeLabel}]`;
     } else if (r.requestType === 'leave') {
       return `🟢 مرخصی [${timeLabel}]`;
+    } else if (r.requestType === 'pattern') {
+      return `🧩 الگوی ${r.patternSteps?.join(' / ') || 'شیفت'} [${timeLabel}]`;
     } else {
       return `🔵 حضور در شیفت ${shiftLabel} [${timeLabel}]`;
     }
@@ -3318,6 +3351,184 @@ export default function Home() {
       alert('خطا در ثبت درخواست فوری: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsQuickRequestSubmitting(false);
+    }
+  };
+
+  const buildRequestChatScheduleHistory = (personnelId: string) => {
+    const deptId = selectedDepartmentId || 'sepehr';
+    const dept = optimisticDbRef.current?.deptData?.[deptId] || fullDbState?.deptData?.[deptId];
+    const schedules = (dept as any)?.schedules || {};
+    return Object.entries(schedules)
+      .filter(([key]) => key !== `${currentYear}_${currentMonth}`)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(-4)
+      .map(([key, value]) => ({
+        monthKey: key,
+        assignments: (value as MonthlySchedule)?.assignments?.[personnelId] || {},
+      }));
+  };
+
+  const handleRequestChatSubmit = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+
+    const targetPersonnel = requestChatPersonnel;
+    if (!targetPersonnel) {
+      alert('لطفاً ابتدا پرسنل متقاضی را انتخاب کنید.');
+      return;
+    }
+
+    const text = requestChatInput.trim();
+    if (!text) return;
+
+    const userMessage: RequestChatMessage = {
+      id: `chat_user_${Date.now()}`,
+      role: 'user',
+      content: text,
+      timestamp: new Date().toISOString(),
+    };
+    const nextMessages = [...requestChatMessages, userMessage];
+    setRequestChatMessages(nextMessages);
+    setRequestChatInput('');
+    setChatProposedRequests([]);
+    setIsRequestChatProcessing(true);
+
+    try {
+      const response = await fetch('/api/gemini/chat-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: nextMessages.map(message => ({ role: message.role, content: message.content })),
+          year: currentYear,
+          month: currentMonth,
+          personnel: {
+            firstName: targetPersonnel.firstName,
+            lastName: targetPersonnel.lastName,
+            jobGroup: targetPersonnel.jobGroup,
+            workRoutine: targetPersonnel.workRoutine,
+          },
+          calendarDays: calendarDays.map(day => ({
+            day: day.day,
+            dayOfWeek: day.dayOfWeek,
+            weekdayName: WEEKDAYS[day.dayOfWeek],
+            isHoliday: day.isHoliday,
+            holidayTitle: day.holidayTitle || calendarOccasions[day.day]?.join('، '),
+          })),
+          existingRequests: requests
+            .filter(request => request.personnelId === targetPersonnel.id)
+            .map(request => ({
+              requestType: request.requestType,
+              preferredShift: request.preferredShift,
+              patternSteps: request.patternSteps,
+              scope: request.scope,
+              selectedDays: request.selectedDays,
+              startDate: request.startDate,
+              endDate: request.endDate,
+              isEssential: request.isEssential,
+              offHardness: request.offHardness,
+            })),
+          scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'پردازش گفت‌وگو انجام نشد.');
+
+      const assistantMessage: RequestChatMessage = {
+        id: `chat_assistant_${Date.now()}`,
+        role: 'assistant',
+        content: data.reply || 'پیامت را گرفتم. اگر منظورت همین است، تأیید کن؛ اگر نه اصلاحش کن.',
+        timestamp: new Date().toISOString(),
+      };
+      setRequestChatMessages(current => [...current, assistantMessage]);
+
+      const extracted = Array.isArray(data.requests) ? data.requests : [];
+      if (data.status === 'ready' && extracted.length > 0) {
+        const now = new Date().toISOString();
+        const mapped: ChatProposedShiftRequest[] = extracted.map((item: any, index: number) => ({
+          id: `chat_draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+          personnelId: targetPersonnel.id,
+          requestType: item.requestType,
+          preferredShift: item.requestType === 'leave'
+            ? 'L'
+            : item.requestType === 'OFF'
+              ? 'OFF'
+              : item.preferredShift,
+          patternSteps: item.patternSteps,
+          isEssential: !!item.isEssential,
+          offHardness: item.requestType === 'OFF' ? (item.offHardness || 'hard') : undefined,
+          scope: item.scope || 'custom_days',
+          startDate: item.startDate,
+          endDate: item.endDate,
+          selectedDays: item.selectedDays,
+          description: item.description,
+          createdAt: now,
+          updatedAt: now,
+        }));
+        setChatProposedRequests(mapped);
+      }
+    } catch (error) {
+      console.error('Error processing request chat:', error);
+      setRequestChatMessages(current => [
+        ...current,
+        {
+          id: `chat_error_${Date.now()}`,
+          role: 'assistant',
+          content: `ارتباط با دستیار هوشمند به مشکل خورد: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setIsRequestChatProcessing(false);
+    }
+  };
+
+  const handleConfirmChatRequests = async () => {
+    if (chatProposedRequests.length === 0) return;
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+
+    const targetPersonnel = requestChatPersonnel;
+    if (!targetPersonnel) {
+      alert('لطفاً ابتدا پرسنل متقاضی را انتخاب کنید.');
+      return;
+    }
+
+    try {
+      const finalized = chatProposedRequests.map((request, index) => ({
+        ...request,
+        id: `req_chat_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+        personnelId: targetPersonnel.id,
+        updatedAt: new Date().toISOString(),
+      }));
+      const updatedRequests = [...requests, ...finalized];
+      await saveState(personnel, updatedRequests, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [targetPersonnel.id],
+      });
+      logEvent({
+        category: 'ai',
+        severity: 'success',
+        title: `${finalized.length} درخواست از CHAT BOX ثبت شد`,
+        detail: `پرسنل: ${targetPersonnel.firstName} ${targetPersonnel.lastName} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+      });
+      setChatProposedRequests([]);
+      setRequestChatMessages(current => [
+        ...current,
+        {
+          id: `chat_saved_${Date.now()}`,
+          role: 'assistant',
+          content: 'ثبت شد ✅ درخواست‌ها رو وارد کردم؛ فقط یادت باشه اجرای نهایی به پوشش بخش و تصمیم برنامه‌ریزی بستگی داره.',
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (error) {
+      console.error('Error saving chat requests:', error);
+      alert('خطا در ثبت درخواست‌های چت: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -6051,6 +6262,133 @@ export default function Home() {
                 </div>
               </div>
 
+              <div className="bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden" id="request-chat-box">
+                <div className="bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 text-white p-5 sm:p-6">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini 2.5 Flash</span>
+                        <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
+                      </div>
+                      <h4 className="text-lg sm:text-xl font-black">درخواست شما در لیست بالا نبود؟ بیا تو چت! 😉</h4>
+                      <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
+                        فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
+                      </p>
+                    </div>
+                    <div className="bg-white/10 border border-white/20 rounded-2xl px-4 py-3 text-xs font-black text-white/95">
+                      گفتگو برای: {requestChatPersonnel ? `${requestChatPersonnel.firstName} ${requestChatPersonnel.lastName}` : 'پرسنل انتخاب‌نشده'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px] gap-0 bg-slate-50/60">
+                  <div className="p-4 sm:p-5 space-y-4">
+                    <div className="h-[360px] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-inner space-y-3 scrollbar-thin">
+                      {requestChatMessages.map(message => {
+                        const isUser = message.role === 'user';
+                        return (
+                          <div key={message.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[86%] rounded-3xl px-4 py-3 text-xs sm:text-sm font-bold leading-7 shadow-xs ${
+                              isUser
+                                ? 'bg-indigo-600 text-white rounded-br-md'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-md'
+                            }`}>
+                              {message.content}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {isRequestChatProcessing && (
+                        <div className="flex justify-start">
+                          <div className="bg-slate-100 border border-slate-200 text-slate-500 rounded-3xl rounded-bl-md px-4 py-3 text-xs font-black flex items-center gap-2">
+                            <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /> دارم دقیق بررسی می‌کنم...
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <form onSubmit={handleRequestChatSubmit} className="flex flex-col sm:flex-row gap-3">
+                      <textarea
+                        ref={requestChatInputRef}
+                        value={requestChatInput}
+                        onChange={(event) => setRequestChatInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            void handleRequestChatSubmit();
+                          }
+                        }}
+                        placeholder="مثلاً: دهم و دوازدهم آف باشم، بیستم شب بیام، پنجشنبه‌ها بیمارستان دیگه EN دارم پس اینجا اون شیفت نباشم..."
+                        className="min-h-[58px] flex-1 resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
+                        className="sm:w-32 rounded-2xl bg-indigo-600 px-5 py-3 text-xs font-black text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer"
+                      >
+                        ارسال
+                      </button>
+                    </form>
+                  </div>
+
+                  <div className="border-t xl:border-t-0 xl:border-r border-slate-200 bg-white p-4 sm:p-5 space-y-4">
+                    <div>
+                      <h5 className="text-sm font-black text-slate-900">نتیجه تحلیل</h5>
+                      <p className="text-[10px] font-bold text-slate-400 mt-1 leading-5">ثبت نهایی فقط بعد از تأیید شما انجام می‌شود.</p>
+                    </div>
+
+                    {chatProposedRequests.length > 0 ? (
+                      <div className="space-y-3 animate-fadeIn">
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                          <div className="text-sm font-black text-emerald-800">منظور شما این است؟</div>
+                          <div className="text-[10px] font-bold text-emerald-700 mt-1">اگر درست است تأیید کن؛ اگر نه، اصلاحش را همین پایین در چت بنویس.</div>
+                        </div>
+
+                        <div className="space-y-2 max-h-[255px] overflow-y-auto pr-1 scrollbar-thin">
+                          {chatProposedRequests.map((request, index) => (
+                            <div key={request.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 text-xs space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="font-black text-slate-800 leading-6">{getRequestSummaryText(request)}</span>
+                                <span className="shrink-0 rounded-full bg-white border border-slate-200 px-2 py-0.5 text-[10px] font-mono text-slate-500">#{index + 1}</span>
+                              </div>
+                              {request.description && <p className="text-[10px] font-bold text-slate-500 leading-5">{request.description}</p>}
+                              <div className="flex flex-wrap gap-1.5">
+                                {request.isEssential && <span className="rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[9px] font-black text-red-700">ضروری</span>}
+                                {request.offHardness === 'hard' && <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[9px] font-black text-rose-700">Hard OFF</span>}
+                                {request.offHardness === 'soft' && <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-700">Soft OFF</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              requestChatInputRef.current?.focus();
+                            }}
+                            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-black text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+                          >
+                            اصلاح در چت
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleConfirmChatRequests}
+                            className="rounded-2xl bg-emerald-600 px-3 py-3 text-xs font-black text-white shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all cursor-pointer"
+                          >
+                            تأیید و ثبت نهایی
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-3xl border border-dashed border-slate-250 bg-slate-50 p-5 text-center text-xs font-bold text-slate-400 leading-6">
+                        هنوز درخواست آماده ثبت نداریم. پیام بده؛ اگر کامل و روشن باشد، خلاصه ساختاری اینجا می‌آید.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto w-full">
                   <table className="w-full text-right border-collapse min-w-[900px]">
@@ -6172,9 +6510,12 @@ export default function Home() {
                                   {r.requestType === 'OFF' && r.offHardness === 'soft' && <span className="bg-amber-50 text-amber-700 border border-amber-200 font-black px-2 py-0.5 rounded text-xs">🟡 آف نرم (Soft OFF)</span>}
                                   {r.requestType === 'OFF' && !r.offHardness && <span className="bg-red-50 text-red-700 border border-red-200 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>}
                                   {r.requestType === 'leave' && <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded text-xs">درخواست مرخصی</span>}
+                                  {r.requestType === 'pattern' && <span className="bg-violet-50 text-violet-700 border border-violet-100 font-bold px-2 py-0.5 rounded text-xs">الگوی شیفت</span>}
                                 </td>
                                 <td className="px-6 py-3.5 font-semibold text-slate-700">
-                                  {r.requestType === 'avoid_shift' ? (
+                                  {r.requestType === 'pattern' ? (
+                                    <span className="text-violet-700 font-bold">{r.patternSteps?.join(' / ') || 'الگوی سفارشی'}</span>
+                                  ) : r.requestType === 'avoid_shift' ? (
                                     <span className="text-rose-600 font-bold">شیفت {
                                       r.preferredShift === 'M' ? 'صبح' :
                                       r.preferredShift === 'E' ? 'عصر' :
