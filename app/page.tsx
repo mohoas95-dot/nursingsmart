@@ -144,6 +144,8 @@ import {
   Activity,
   Menu,
   Send,
+  Expand,
+  Shrink,
   X
 } from 'lucide-react';
 
@@ -2001,6 +2003,7 @@ export default function Home() {
   const [chatProposedRequests, setChatProposedRequests] = useState<ChatProposedShiftRequest[]>([]);
   const requestChatInputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const [isChatFullscreen, setIsChatFullscreen] = useState<boolean>(false);
+  const [chatFailedText, setChatFailedText] = useState<string | null>(null);
   const requestChatScrollRef = React.useRef<HTMLDivElement | null>(null);
 
   // اسکرول خودکار به جدیدترین پیام چت
@@ -3403,8 +3406,8 @@ export default function Home() {
       }));
   };
 
-  const handleRequestChatSubmit = async (event?: React.FormEvent) => {
-    event?.preventDefault();
+  // منطق اصلی ارسال پیام به دستیار هوشمند؛ دکمه تلاش مجدد آن را بدون افزودن حباب جدید کاربر صدا می‌زند
+  const sendChatMessage = async (text: string, appendUserMessage: boolean = true) => {
     if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
       alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
       return;
@@ -3416,18 +3419,21 @@ export default function Home() {
       return;
     }
 
-    const text = requestChatInput.trim();
-    if (!text) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-    const userMessage: RequestChatMessage = {
-      id: `chat_user_${Date.now()}`,
-      role: 'user',
-      content: text,
-      timestamp: new Date().toISOString(),
-    };
-    const nextMessages = [...requestChatMessages, userMessage];
-    setRequestChatMessages(nextMessages);
-    setRequestChatInput('');
+    let nextMessages = requestChatMessages;
+    if (appendUserMessage) {
+      const userMessage: RequestChatMessage = {
+        id: `chat_user_${Date.now()}`,
+        role: 'user',
+        content: trimmed,
+        timestamp: new Date().toISOString(),
+      };
+      nextMessages = [...requestChatMessages, userMessage];
+      setRequestChatMessages(nextMessages);
+    }
+    setChatFailedText(null);
     setChatProposedRequests([]);
     setIsRequestChatProcessing(true);
 
@@ -3506,6 +3512,7 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Error processing request chat:', error);
+      setChatFailedText(trimmed);
       setRequestChatMessages(current => [
         ...current,
         {
@@ -3518,6 +3525,20 @@ export default function Home() {
     } finally {
       setIsRequestChatProcessing(false);
     }
+  };
+
+  const handleRequestChatSubmit = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    const text = requestChatInput.trim();
+    if (!text) return;
+    setRequestChatInput('');
+    await sendChatMessage(text, true);
+  };
+
+  // تلاش مجدد برای آخرین پیامی که پاسخی دریافت نکرد (بدون ثبت دوباره حباب کاربر)
+  const handleRetryChatMessage = async () => {
+    if (!chatFailedText || isRequestChatProcessing) return;
+    await sendChatMessage(chatFailedText, false);
   };
 
   const handleConfirmChatRequests = async () => {
@@ -6300,17 +6321,41 @@ export default function Home() {
               <div
                 id="request-chat-box"
                 className={isChatFullscreen
-                  ? 'fixed inset-0 z-[60] bg-white flex flex-col overflow-hidden animate-fade-in'
+                  ? 'fixed inset-0 z-[210] h-[100dvh] w-full bg-white flex flex-col overflow-hidden'
                   : 'bg-white border border-slate-200 rounded-[2rem] shadow-sm overflow-hidden'}
               >
-                <div className={`bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 text-white p-5 sm:p-6 ${isChatFullscreen ? 'shrink-0' : ''}`}>
+                <div className={`bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 text-white ${isChatFullscreen ? 'shrink-0 px-3 py-2' : 'p-5 sm:p-6'}`}>
+                  {isChatFullscreen ? (
+                    /* هدر فشرده در حالت تمام صفحه: فقط عنوان و توضیح خیلی کوتاه */
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
+                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini 3.6 Flash</span>
+                        <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="bg-white/10 border border-white/20 rounded-full px-2.5 py-1 text-[9px] font-black text-white/95 max-w-32 truncate">
+                          {requestChatPersonnel ? `${requestChatPersonnel.firstName} ${requestChatPersonnel.lastName}` : 'پرسنل انتخاب‌نشده'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsChatFullscreen(false)}
+                          title="خروج از حالت تمام صفحه (Esc)"
+                          className="flex items-center gap-1 bg-white/15 hover:bg-white/25 active:scale-95 border border-white/25 text-white rounded-xl px-2.5 py-1.5 text-[10px] font-black transition-all cursor-pointer"
+                        >
+                          <Shrink className="w-3.5 h-3.5" />
+                          <span>خروج</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
                         <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini 3.6 Flash</span>
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
-                      <h4 className="text-lg sm:text-xl font-black">درخواست شما در لیست بالا نبود؟ بیا تو چت! 😉</h4>
+                      <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ 😉</h4>
                       <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
                       </p>
@@ -6321,35 +6366,39 @@ export default function Home() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => setIsChatFullscreen(prev => !prev)}
-                        aria-pressed={isChatFullscreen}
-                        title={isChatFullscreen ? 'خروج از حالت تمام صفحه (Esc)' : 'بزرگ کردن چت به تمام صفحه'}
-                        className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 active:scale-95 border border-white/25 text-white rounded-2xl px-3.5 py-3 text-xs font-black transition-all cursor-pointer"
+                        onClick={() => setIsChatFullscreen(true)}
+                        title="بزرگ کردن چت به تمام صفحه"
+                        className="flex items-center gap-1 bg-white/15 hover:bg-white/25 active:scale-95 border border-white/25 text-white rounded-xl px-2.5 py-1.5 text-[10px] font-black transition-all cursor-pointer"
                       >
-                        <span className="text-sm leading-none">{isChatFullscreen ? '✕' : '↕️'}</span>
-                        <span>{isChatFullscreen ? 'خروج' : 'تمام صفحه'}</span>
+                        <Expand className="w-3.5 h-3.5" />
+                        <span>تمام صفحه</span>
                       </button>
                     </div>
                   </div>
+                  )}
                 </div>
 
                 <div className={isChatFullscreen
                   ? 'flex-1 min-h-0 flex flex-col bg-slate-100'
                   : 'grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px] gap-0 bg-slate-50/60'}
                 >
-                  <div className={isChatFullscreen ? 'flex-1 min-h-0 flex flex-col gap-3 p-4 sm:p-6' : 'p-4 sm:p-5 space-y-4'}>
+                  <div className={isChatFullscreen ? 'flex-1 min-h-0 flex flex-col gap-2 p-3 sm:p-4' : 'p-4 sm:p-5 space-y-4'}>
                     <div
                       ref={requestChatScrollRef}
                       className={isChatFullscreen
-                        ? 'flex-1 min-h-0 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 sm:p-6 shadow-inner scrollbar-thin'
+                        ? 'flex-1 min-h-0 overflow-y-auto rounded-3xl border border-slate-200 bg-white p-3 sm:p-4 shadow-inner scrollbar-thin'
                         : 'h-[360px] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-inner scrollbar-thin'}
                     >
-                      <div className={isChatFullscreen ? 'mx-auto max-w-3xl space-y-3' : 'space-y-3'}>
+                      <div className={isChatFullscreen ? 'mx-auto max-w-3xl space-y-2' : 'space-y-3'}>
                       {requestChatMessages.map(message => {
                         const isUser = message.role === 'user';
                         return (
                           <div key={message.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[86%] rounded-3xl px-4 py-3 text-xs sm:text-sm font-bold leading-7 shadow-xs ${
+                            <div className={`shadow-xs font-bold ${
+                              isChatFullscreen
+                                ? 'max-w-[88%] rounded-2xl px-3 py-2 text-[11px] sm:text-xs leading-6'
+                                : 'max-w-[86%] rounded-3xl px-4 py-3 text-xs sm:text-sm leading-7'
+                            } ${
                               isUser
                                 ? 'bg-indigo-600 text-white rounded-br-md'
                                 : 'bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-md'
@@ -6361,7 +6410,7 @@ export default function Home() {
                       })}
                       {isRequestChatProcessing && (
                         <div className="flex justify-start">
-                          <div className="bg-slate-100 border border-slate-200 text-slate-500 rounded-3xl rounded-bl-md px-4 py-3 text-xs font-black flex items-center gap-2">
+                          <div className={`bg-slate-100 border border-slate-200 text-slate-500 rounded-3xl rounded-bl-md font-black flex items-center gap-2 ${isChatFullscreen ? 'px-3 py-2 text-[11px]' : 'px-4 py-3 text-xs'}`}>
                             <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /> دارم دقیق بررسی می‌کنم...
                           </div>
                         </div>
@@ -6370,16 +6419,26 @@ export default function Home() {
                     </div>
 
                     <form onSubmit={handleRequestChatSubmit} className={isChatFullscreen ? 'mx-auto w-full max-w-3xl flex items-end gap-2 shrink-0' : 'flex flex-col sm:flex-row gap-3'}>
+                      {isChatFullscreen && (
+                        <button
+                          type="submit"
+                          disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
+                          title="ارسال پیام"
+                          className="shrink-0 w-10 h-10 rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95 disabled:bg-slate-300 cursor-pointer flex items-center justify-center"
+                        >
+                          <Send className="w-4 h-4 -scale-x-100" />
+                        </button>
+                      )}
                       <textarea
                         ref={requestChatInputRef}
                         value={requestChatInput}
                         onChange={(event) => {
                           setRequestChatInput(event.target.value);
                           if (isChatFullscreen) {
-                            // رشد خودکار ارتفاع مثل پیام‌رسان‌ها (حداکثر ۱۴۴px)
+                            // رشد خودکار ارتفاع مثل پیام‌رسان‌ها (حداکثر ۱۲۸px)
                             const element = event.target;
                             element.style.height = 'auto';
-                            element.style.height = `${Math.min(element.scrollHeight, 144)}px`;
+                            element.style.height = `${Math.min(element.scrollHeight, 128)}px`;
                           }
                         }}
                         onKeyDown={(event) => {
@@ -6391,54 +6450,68 @@ export default function Home() {
                         rows={isChatFullscreen ? 1 : undefined}
                         placeholder="مثلاً: دهم و دوازدهم آف باشم، بیستم شب بیام، پنجشنبه‌ها بیمارستان دیگه EN دارم پس اینجا اون شیفت نباشم..."
                         className={isChatFullscreen
-                          ? 'min-h-[44px] max-h-36 flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs sm:text-sm font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'
+                          ? 'min-h-[40px] max-h-32 flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-300 bg-white px-3.5 py-2.5 text-[11px] sm:text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'
                           : 'min-h-[58px] flex-1 resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'}
                       />
-                      <button
-                        type="submit"
-                        disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
-                        title="ارسال پیام"
-                        className={isChatFullscreen
-                          ? 'shrink-0 w-11 h-11 rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95 disabled:bg-slate-300 cursor-pointer flex items-center justify-center'
-                          : 'sm:w-24 rounded-2xl bg-indigo-600 px-4 py-2.5 text-[11px] font-black text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer'}
-                      >
-                        {isChatFullscreen ? <Send className="w-4 h-4 -scale-x-100" /> : 'ارسال'}
-                      </button>
+                      {!isChatFullscreen && (
+                        <button
+                          type="submit"
+                          disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
+                          title="ارسال پیام"
+                          className="sm:w-24 rounded-2xl bg-indigo-600 px-4 py-2.5 text-[11px] font-black text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer"
+                        >
+                          ارسال
+                        </button>
+                      )}
+                      {chatFailedText && !isRequestChatProcessing && (
+                        <button
+                          type="button"
+                          onClick={handleRetryChatMessage}
+                          title={`ارسال مجدد آخرین پیام ناموفق: ${chatFailedText.slice(0, 40)}${chatFailedText.length > 40 ? '…' : ''}`}
+                          className="shrink-0 w-7 h-7 rounded-full bg-rose-50 border border-rose-300 text-rose-600 hover:bg-rose-100 active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+                        >
+                          <span className="text-[11px] leading-none">🔄</span>
+                        </button>
+                      )}
                     </form>
                   </div>
 
                   <div className={isChatFullscreen
-                    ? 'shrink-0 w-full max-h-[36vh] overflow-y-auto border-t border-slate-200 bg-white scrollbar-thin'
+                    ? 'shrink-0 w-full max-h-[30vh] overflow-y-auto border-t border-slate-200 bg-white scrollbar-thin'
                     : 'border-t xl:border-t-0 xl:border-r border-slate-200 bg-white p-4 sm:p-5 space-y-4'}
                   >
-                    <div className={isChatFullscreen ? 'mx-auto max-w-3xl p-3 sm:p-4 space-y-3' : 'contents'}>
+                    <div className={isChatFullscreen ? 'mx-auto max-w-3xl p-2 space-y-2' : 'contents'}>
                       <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <h5 className="text-sm font-black text-slate-900">نتیجه تحلیل</h5>
-                          <p className="text-[10px] font-bold text-slate-400 mt-1 leading-5">ثبت نهایی فقط بعد از تأیید شما انجام می‌شود.</p>
+                        <div className={isChatFullscreen ? 'flex items-center gap-2' : ''}>
+                          <h5 className={`font-black text-slate-900 ${isChatFullscreen ? 'text-[11px]' : 'text-sm'}`}>نتیجه تحلیل</h5>
+                          {isChatFullscreen ? (
+                            <span className="text-[9px] font-bold text-slate-400">ثبت فقط پس از تأیید شما</span>
+                          ) : (
+                            <p className="text-[10px] font-bold text-slate-400 mt-1 leading-5">ثبت نهایی فقط بعد از تأیید شما انجام می‌شود.</p>
+                          )}
                         </div>
                         {isChatFullscreen && chatProposedRequests.length > 0 && (
-                          <span className="shrink-0 rounded-full bg-indigo-50 border border-indigo-100 px-3 py-1 text-[10px] font-black text-indigo-600">
+                          <span className="shrink-0 rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-[9px] font-black text-indigo-600">
                             {chatProposedRequests.length} درخواست آماده ثبت
                           </span>
                         )}
                       </div>
 
                     {chatProposedRequests.length > 0 ? (
-                      <div className="space-y-3 animate-fadeIn">
-                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-                          <div className="text-sm font-black text-emerald-800">منظور شما این است؟</div>
-                          <div className="text-[10px] font-bold text-emerald-700 mt-1">اگر درست است تأیید کن؛ اگر نه، اصلاحش را همین پایین در چت بنویس.</div>
+                      <div className={isChatFullscreen ? 'space-y-2' : 'space-y-3 animate-fadeIn'}>
+                        <div className={`rounded-2xl border border-emerald-200 bg-emerald-50 ${isChatFullscreen ? 'p-2 flex items-center gap-2' : 'p-3'}`}>
+                          <div className={`font-black text-emerald-800 ${isChatFullscreen ? 'text-[11px]' : 'text-sm'}`}>منظور شما این است؟</div>
+                          <div className={`font-bold text-emerald-700 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px] mt-1'}`}>اگر درست است تأیید کن؛ اگر نه، اصلاحش را همین پایین در چت بنویس.</div>
                         </div>
 
-                        <div className="space-y-2 max-h-[255px] overflow-y-auto pr-1 scrollbar-thin">
+                        <div className={`space-y-1.5 overflow-y-auto pr-1 scrollbar-thin ${isChatFullscreen ? 'max-h-28' : 'max-h-[255px]'}`}>
                           {chatProposedRequests.map((request, index) => (
-                            <div key={request.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 text-xs space-y-2">
+                            <div key={request.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 ${isChatFullscreen ? 'p-2 text-[11px] space-y-1' : 'p-3 text-xs space-y-2'}`}>
                               <div className="flex items-start justify-between gap-2">
-                                <span className="font-black text-slate-800 leading-6">{getRequestSummaryText(request)}</span>
-                                <span className="shrink-0 rounded-full bg-white border border-slate-200 px-2 py-0.5 text-[10px] font-mono text-slate-500">#{index + 1}</span>
+                                <span className={`font-black text-slate-800 ${isChatFullscreen ? 'leading-5' : 'leading-6'}`}>{getRequestSummaryText(request)}</span>
+                                <span className={`shrink-0 rounded-full bg-white border border-slate-200 font-mono text-slate-500 ${isChatFullscreen ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]'}`}>#{index + 1}</span>
                               </div>
-                              {request.description && <p className="text-[10px] font-bold text-slate-500 leading-5">{request.description}</p>}
+                              {request.description && <p className={`font-bold text-slate-500 ${isChatFullscreen ? 'text-[9px] leading-4' : 'text-[10px] leading-5'}`}>{request.description}</p>}
                               <div className="flex flex-wrap gap-1.5">
                                 {request.isEssential && <span className="rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[9px] font-black text-red-700">ضروری</span>}
                                 {request.offHardness === 'hard' && <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[9px] font-black text-rose-700">Hard OFF</span>}
@@ -6448,27 +6521,27 @@ export default function Home() {
                           ))}
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2 pt-2">
+                        <div className={`grid grid-cols-2 ${isChatFullscreen ? 'gap-1.5' : 'gap-2 pt-2'}`}>
                           <button
                             type="button"
                             onClick={() => {
                               requestChatInputRef.current?.focus();
                             }}
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs font-black text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+                            className={`rounded-2xl border border-slate-200 bg-white font-black text-slate-600 hover:bg-slate-50 transition-all cursor-pointer ${isChatFullscreen ? 'px-3 py-2 text-[10px]' : 'px-3 py-3 text-xs'}`}
                           >
                             اصلاح در چت
                           </button>
                           <button
                             type="button"
                             onClick={handleConfirmChatRequests}
-                            className="rounded-2xl bg-emerald-600 px-3 py-3 text-xs font-black text-white shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all cursor-pointer"
+                            className={`rounded-2xl bg-emerald-600 font-black text-white shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all cursor-pointer ${isChatFullscreen ? 'px-3 py-2 text-[10px]' : 'px-3 py-3 text-xs'}`}
                           >
                             تأیید و ثبت نهایی
                           </button>
                         </div>
                       </div>
                     ) : (
-                      <div className="rounded-3xl border border-dashed border-slate-250 bg-slate-50 p-5 text-center text-xs font-bold text-slate-400 leading-6">
+                      <div className={`border border-dashed border-slate-250 bg-slate-50 text-center font-bold text-slate-400 ${isChatFullscreen ? 'rounded-2xl p-2.5 text-[10px] leading-5' : 'rounded-3xl p-5 text-xs leading-6'}`}>
                         هنوز درخواست آماده ثبت نداریم. پیام بده؛ اگر کامل و روشن باشد، خلاصه ساختاری اینجا می‌آید.
                       </div>
                     )}
