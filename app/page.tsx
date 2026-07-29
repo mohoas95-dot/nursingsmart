@@ -6418,17 +6418,15 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <form onSubmit={handleRequestChatSubmit} className={isChatFullscreen ? 'mx-auto w-full max-w-3xl flex items-end gap-2 shrink-0' : 'flex flex-col sm:flex-row gap-3'}>
-                      {isChatFullscreen && (
-                        <button
-                          type="submit"
-                          disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
-                          title="ارسال پیام"
-                          className="shrink-0 w-10 h-10 rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95 disabled:bg-slate-300 cursor-pointer flex items-center justify-center"
-                        >
-                          <Send className="w-4 h-4 -scale-x-100" />
-                        </button>
-                      )}
+                    <form onSubmit={handleRequestChatSubmit} className={isChatFullscreen ? 'mx-auto w-full max-w-3xl flex items-end gap-2 shrink-0' : 'flex items-end gap-2'}>
+                      <button
+                        type="submit"
+                        disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
+                        title="ارسال پیام"
+                        className="shrink-0 w-10 h-10 rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95 disabled:bg-slate-300 cursor-pointer flex items-center justify-center"
+                      >
+                        <Send className="w-4 h-4 -scale-x-100" />
+                      </button>
                       <textarea
                         ref={requestChatInputRef}
                         value={requestChatInput}
@@ -6453,16 +6451,6 @@ export default function Home() {
                           ? 'min-h-[40px] max-h-32 flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-300 bg-white px-3.5 py-2.5 text-[11px] sm:text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'
                           : 'min-h-[58px] flex-1 resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'}
                       />
-                      {!isChatFullscreen && (
-                        <button
-                          type="submit"
-                          disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
-                          title="ارسال پیام"
-                          className="sm:w-24 rounded-2xl bg-indigo-600 px-4 py-2.5 text-[11px] font-black text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 disabled:bg-slate-300 cursor-pointer"
-                        >
-                          ارسال
-                        </button>
-                      )}
                       {chatFailedText && !isRequestChatProcessing && (
                         <button
                           type="button"
