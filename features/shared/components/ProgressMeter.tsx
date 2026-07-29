@@ -1,21 +1,28 @@
 'use client';
 
 import React from 'react';
+import { Activity } from 'lucide-react';
 
 /**
  * ProgressMeter — Presentational Component
  *
  * RESPONSIBILITY:
- *   نمایش فشرده و مدرن درصد پیشرفت ۰ تا ۱۰۰ به‌صورت حلقهٔ گرادیانی + نوار خطی،
- *   هماهنگ با زبان بصری سامانه (گرادیان نیلی/آبی/زمردی و گوشه‌های نرم).
+ *   حلقهٔ پیشرفت ۰ تا ۱۰۰ درصد با گرادیان زندهٔ سامانه (نیلی → آبی → زمردی)،
+ *   نشان ضربان (هویت بصری سامانه) در مرکز و نوار خطی با درخشش متحرک.
+ *
+ * چرا نشان ضربان به‌جای فایل لوگو؟
+ *   نشان گرادیانی Activity همان عنصر هویتی نسخهٔ اصلی BusyOverlay است؛ سبک
+ *   (بدون بار شبکه)، همیشه قابل رندر و در هر اندازه‌ای برداری و تیز می‌ماند.
+ *   فایل public/logo.svg حدود ۵۷۰ کیلوبایت است و viewBox هم ندارد، پس برای
+ *   یک نشان ۳۲پیکسلی داخل حلقه انتخاب مناسبی نیست.
  *
  * چرا ارقام لاتین؟
- *   عدد درصد با فونت mono و ارقام لاتین (tabular-nums) نمایش داده می‌شود تا
- *   ظاهری مدرن داشته باشد و هنگام تغییر سریع اعداد، عرض آن نلرزد.
+ *   عدد درصد با فونت mono و `tabular-nums` نمایش داده می‌شود تا ظاهری مدرن
+ *   داشته باشد و هنگام تغییر سریع اعداد، عرض آن نلرزد.
  *
  * دسترس‌پذیری:
- *   ساختار role="progressbar" با aria-valuenow/min/max و متن جایگزین، تا
- *   صفحه‌خوان هم درصد را اعلام کند.
+ *   role="progressbar" با aria-valuenow/min/max و متن جایگزین فارسی؛
+ *   انیمیشن‌ها با prefers-reduced-motion خاموش می‌شوند (در globals.css).
  */
 
 export interface ProgressMeterProps {
@@ -33,10 +40,12 @@ export interface ProgressMeterProps {
   size?: number;
   /** نمایش نوار خطی زیر حلقه. */
   showBar?: boolean;
+  /** نمایش نشان ضربان سامانه در مرکز حلقه. */
+  showBadge?: boolean;
   className?: string;
 }
 
-const RING_STROKE = 6;
+const RING_STROKE = 7;
 
 export function ProgressMeter({
   percent,
@@ -44,8 +53,9 @@ export function ProgressMeter({
   phaseNumber,
   phaseCount,
   remainingLabel,
-  size = 104,
+  size = 116,
   showBar = true,
+  showBadge = true,
   className = '',
 }: ProgressMeterProps) {
   const safePercent = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0));
@@ -66,11 +76,18 @@ export function ProgressMeter({
         aria-valuemax={100}
         aria-valuetext={`${rounded} درصد${phaseLabel ? ` — ${phaseLabel}` : ''}`}
       >
+        {/* هالهٔ رنگی تنفس‌کننده پشت حلقه — عمق و پویایی */}
+        <div
+          className={`absolute inset-1 rounded-full bg-gradient-to-br from-indigo-500/25 via-sky-400/20 to-emerald-400/25 blur-xl ${
+            isComplete ? '' : 'animate-soft-glow'
+          }`}
+        />
+
         <svg width={size} height={size} className="relative -rotate-90" aria-hidden="true">
           <defs>
             <linearGradient id="progress-meter-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#4f46e5" />
-              <stop offset="55%" stopColor="#0ea5e9" />
+              <stop offset="50%" stopColor="#0ea5e9" />
               <stop offset="100%" stopColor="#10b981" />
             </linearGradient>
           </defs>
@@ -92,14 +109,22 @@ export function ProgressMeter({
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={dashOffset}
-            style={{ transition: 'stroke-dashoffset 220ms cubic-bezier(0.4, 0, 0.2, 1)' }}
+            style={{ transition: 'stroke-dashoffset 240ms cubic-bezier(0.4, 0, 0.2, 1)' }}
           />
         </svg>
 
-        {/* عدد درصد: ارقام لاتین، فونت mono و عرض ثابت برای ظاهر مدرن و بدون لرزش */}
-        <div className="absolute inset-0 flex items-center justify-center" dir="ltr">
-          <div className="flex items-baseline gap-px font-mono">
-            <span className="text-2xl font-black leading-none tracking-tight text-slate-900 tabular-nums">
+        {/* مرکز حلقه: نشان ضربان گرادیانی سامانه + عدد درصد لاتین */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
+          {showBadge && (
+            <span
+              aria-hidden="true"
+              className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-600 via-sky-500 to-emerald-500 text-white shadow-md shadow-sky-500/40"
+            >
+              <Activity className={`h-4 w-4 ${isComplete ? '' : 'animate-pulse'}`} />
+            </span>
+          )}
+          <div className="flex items-baseline gap-px font-mono" dir="ltr">
+            <span className="text-[1.6rem] font-black leading-none tracking-tight text-slate-900 tabular-nums">
               {rounded}
             </span>
             <span className="text-xs font-bold text-slate-400">%</span>
@@ -109,23 +134,28 @@ export function ProgressMeter({
 
       {showBar && (
         <div className="w-full space-y-1.5">
-          <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-200/80">
+          <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-200/90 shadow-inner">
             <div
-              className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-indigo-600 via-sky-500 to-emerald-500"
-              style={{ width: `${safePercent}%`, transition: 'width 220ms cubic-bezier(0.4, 0, 0.2, 1)' }}
+              className="relative h-full overflow-hidden rounded-full bg-gradient-to-l from-indigo-600 via-sky-500 to-emerald-500 shadow-sm shadow-sky-500/40"
+              style={{ width: `${safePercent}%`, transition: 'width 240ms cubic-bezier(0.4, 0, 0.2, 1)' }}
             >
-              {/* درخشش متحرک روی نوار تا حس «در حال انجام» منتقل شود */}
+              {/* درخشش عبوری روی نوار — پویایی واقعی به‌جای pulse ساده */}
               {!isComplete && (
-                <span className="absolute inset-0 animate-pulse rounded-full bg-white/25" />
+                <span className="absolute inset-y-0 -left-1/2 w-1/2 skew-x-12 bg-white/45 animate-progress-shimmer" />
               )}
             </div>
           </div>
 
           <div className="flex items-center justify-between gap-2 text-[10px] font-extrabold">
             <span className="truncate text-slate-600">{phaseLabel || 'در حال پردازش…'}</span>
-            <span className="shrink-0 text-slate-400" dir="ltr">
-              {phaseCount && phaseCount > 1 && phaseNumber ? `${phaseNumber}/${phaseCount}` : ''}
-            </span>
+            {phaseCount && phaseCount > 1 && phaseNumber ? (
+              <span
+                className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-slate-500 tabular-nums"
+                dir="ltr"
+              >
+                {phaseNumber}/{phaseCount}
+              </span>
+            ) : null}
           </div>
 
           {remainingLabel && !isComplete && (
