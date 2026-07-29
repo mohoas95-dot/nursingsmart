@@ -1,17 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-
-// Model is configurable via the GEMINI_MODEL env var so it can be swapped
-// from Vercel settings without a code change when Google deprecates a version.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
-
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not defined in environment variables.");
-  }
-  return new GoogleGenAI({ apiKey });
-}
+import { generateContentWithRetry, getGeminiClient, ModelBusyError } from "@/lib/gemini";
 
 type ChatRole = "assistant" | "user";
 
@@ -144,8 +133,7 @@ summary should be a compact Persian recap starting with or suitable after "من�
       })),
     };
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+    const response = await generateContentWithRetry(ai, {
       contents: `CONTEXT_JSON:\n${JSON.stringify(context)}\n\nAnalyze the conversation and respond with the requested JSON object.`,
       config: {
         systemInstruction: systemPrompt,
@@ -212,6 +200,9 @@ summary should be a compact Persian recap starting with or suitable after "من�
       requests: normalizedRequests,
     });
   } catch (error) {
+    if (error instanceof ModelBusyError) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
     console.error("Error in Gemini request chat:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در گفت‌وگوی هوشمند" },
