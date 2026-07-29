@@ -1,6 +1,11 @@
 import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError } from "@/lib/gemini";
+import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+
+// Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
+// keeps its own (shorter) budget, so we always answer before Vercel kills us.
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 type ChatRole = "assistant" | "user";
 
@@ -221,7 +226,10 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
     });
   } catch (error) {
     if (error instanceof ModelBusyError) {
-      return NextResponse.json({ error: error.message }, { status: 503 });
+      return NextResponse.json({ error: error.message, retryable: true }, { status: 503 });
+    }
+    if (error instanceof ModelTimeoutError) {
+      return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
     }
     console.error("Error in Gemini request chat:", error);
     return NextResponse.json(

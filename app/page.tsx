@@ -212,6 +212,51 @@ class ConcurrencyConflictError extends Error {
 
 
 
+
+// ---------------------------------------------------------------------------
+// ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت و تلاش مجدد خودکار
+// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، قطع موقت شبکه).
+// ---------------------------------------------------------------------------
+const CHAT_REQUEST_TIMEOUT_MS = 40000;
+const CHAT_REQUEST_MAX_ATTEMPTS = 2;
+
+async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= CHAT_REQUEST_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      await new Promise(resolve => setTimeout(resolve, 800 * 2 ** (attempt - 2) + Math.random() * 300));
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CHAT_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch('/api/gemini/chat-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if ((response.status === 503 || response.status === 504 || response.status === 429)
+        && attempt < CHAT_REQUEST_MAX_ATTEMPTS) {
+        lastError = new Error('مدل هوش مصنوعی موقتاً شلوغ است.');
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= CHAT_REQUEST_MAX_ATTEMPTS) break;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw new Error(
+    lastError instanceof Error && /abort/i.test(lastError.name + lastError.message)
+      ? 'پاسخ دستیار هوشمند بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید.'
+      : 'ارتباط با دستیار هوشمند برقرار نشد؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.'
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
@@ -3442,11 +3487,9 @@ export default function Home() {
     setIsRequestChatProcessing(true);
 
     try {
-      const response = await fetch('/api/gemini/chat-requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: nextMessages.map(message => ({ role: message.role, content: message.content })),
+      const response = await postChatRequestWithRetry({
+          // فقط چند پیام آخر ارسال می‌شود تا حجم درخواست و زمان پاسخ مدل کم بماند
+          messages: nextMessages.slice(-8).map(message => ({ role: message.role, content: message.content })),
           year: currentYear,
           month: currentMonth,
           personnel: {
@@ -3476,9 +3519,8 @@ export default function Home() {
               offHardness: request.offHardness,
             })),
           scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
-        }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'پردازش گفت‌وگو انجام نشد.');
 
       const assistantMessage: RequestChatMessage = {
