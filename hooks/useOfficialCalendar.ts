@@ -31,18 +31,23 @@ export function useOfficialCalendar() {
   }, []);
 
   useEffect(() => {
-    const savedYear = Number(localStorage.getItem('hospital_current_year'));
-    const savedMonth = Number(localStorage.getItem('hospital_current_month'));
-    if (savedYear >= 1300 && savedYear <= 1500) setYearState(savedYear);
-    if (savedMonth >= 1 && savedMonth <= 12) setMonthState(savedMonth);
+    const timer = window.setTimeout(() => {
+      const savedYear = Number(localStorage.getItem('hospital_current_year'));
+      const savedMonth = Number(localStorage.getItem('hospital_current_month'));
+      if (savedYear >= 1300 && savedYear <= 1500) setYearState(savedYear);
+      if (savedMonth >= 1 && savedMonth <= 12) setMonthState(savedMonth);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
-    setStatus('loading');
-    setCalendar(null); // جلوگیری از نمایش ماه قبلی زیر عنوان ماه جدید
     let timer: ReturnType<typeof setTimeout>;
     const load = async (attempt = 0) => {
+      if (attempt === 0) {
+        setStatus('loading');
+        setCalendar(null); // جلوگیری از نمایش ماه قبلی زیر عنوان ماه جدید
+      }
       try {
         const result = await fetchOfficialMonth(year, month, controller.signal);
         setCalendar(result);
@@ -53,8 +58,8 @@ export function useOfficialCalendar() {
         else if (!controller.signal.aborted) setStatus('error');
       }
     };
-    load();
-    return () => { controller.abort(); clearTimeout(timer); };
+    const kickoff = window.setTimeout(() => { void load(); }, 0);
+    return () => { controller.abort(); window.clearTimeout(kickoff); clearTimeout(timer); };
   }, [year, month]);
 
   const goToNextMonth = useCallback(() => {

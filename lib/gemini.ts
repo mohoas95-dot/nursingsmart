@@ -3,48 +3,71 @@ import { GoogleGenAI, GenerateContentParameters, GenerateContentResponse } from 
 /**
  * Model selection strategy
  * -----------------------------------------------------------------------
- * The newest "flash" previews are the ones Google throttles first: they are
- * the models that most often answer 503 "model is overloaded / high demand".
- * That is exactly what the Vercel logs were showing:
+ * The public Gemini app and the Gemini API are not the same product surface:
+ * the app can silently route a request to private/fallback models, while our
+ * app must name concrete API models and is limited by the API key quota.  For
+ * that reason this module keeps a conservative, stable model chain and retries
+ * transient capacity errors before the user ever sees a failure.
  *
- *   Gemini model "gemini-3.6-flash" attempt 1/2 is busy; retrying.
- *   Gemini model "gemini-3.5-flash" attempt 1/2 is busy; retrying.
- *
- * So the default chain now starts with a *stable, generally-available* model
- * and falls back to the even cheaper / higher-quota lite models, which are
- * almost never saturated. Everything stays overridable from Vercel env vars.
+ * Important: the previous defaults referenced preview/future model names. When
+ * an API key cannot access those names, the request burns time before reaching a
+ * usable model and users see “busy / try later”.  Default to generally available
+ * Flash models instead; deployment can still override every name with env vars.
  */
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+export const GEMINI_VISION_MODEL = process.env.GEMINI_VISION_MODEL || GEMINI_MODEL;
 
-// Ordered fallback chain, used automatically when the primary model is
-// temporarily unavailable (503 "high demand") or rate-limited (429).
-// Override with a comma-separated GEMINI_FALLBACK_MODELS env var.
-const DEFAULT_FALLBACK_MODELS = [
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash-lite",
-  "gemini-2.5-flash",
+// Ordered fallback chain for text/chat requests. Override with a comma-separated
+// GEMINI_FALLBACK_MODELS env var.
+const DEFAULT_TEXT_FALLBACK_MODELS = [
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
 ];
 
-export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "")
-  .split(",")
-  .map(model => model.trim())
-  .filter(Boolean);
+// OCR/vision quality is noticeably worse on some lite models, so image parsing
+// uses a separate chain. Override with GEMINI_VISION_FALLBACK_MODELS when your
+// Google project has access to a stronger model (for example gemini-2.5-pro).
+const DEFAULT_VISION_FALLBACK_MODELS = [
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
+];
 
-const MODEL_CHAIN = Array.from(new Set([
-  GEMINI_MODEL,
-  ...(GEMINI_FALLBACK_MODELS.length > 0 ? GEMINI_FALLBACK_MODELS : DEFAULT_FALLBACK_MODELS),
-]));
-
-export function getModelChain(): string[] {
-  return [...MODEL_CHAIN];
+function parseModelList(value: string | undefined): string[] {
+  return (value || "")
+    .split(",")
+    .map(model => model.trim())
+    .filter(Boolean);
 }
 
-// Persian message shown to the user when every model in the chain is busy.
+export const GEMINI_FALLBACK_MODELS = parseModelList(process.env.GEMINI_FALLBACK_MODELS);
+export const GEMINI_VISION_FALLBACK_MODELS = parseModelList(process.env.GEMINI_VISION_FALLBACK_MODELS);
+
+const TEXT_MODEL_CHAIN = Array.from(new Set([
+  GEMINI_MODEL,
+  ...(GEMINI_FALLBACK_MODELS.length > 0 ? GEMINI_FALLBACK_MODELS : DEFAULT_TEXT_FALLBACK_MODELS),
+]));
+
+const VISION_MODEL_CHAIN = Array.from(new Set([
+  GEMINI_VISION_MODEL,
+  ...(GEMINI_VISION_FALLBACK_MODELS.length > 0 ? GEMINI_VISION_FALLBACK_MODELS : DEFAULT_VISION_FALLBACK_MODELS),
+]));
+
+export type GeminiTaskKind = "text" | "vision";
+
+export function getModelChain(task: GeminiTaskKind = "text"): string[] {
+  return [...(task === "vision" ? VISION_MODEL_CHAIN : TEXT_MODEL_CHAIN)];
+}
+
+// Persian messages shown to the user when all automatic recovery attempts fail.
 export const MODEL_BUSY_MESSAGE =
-  "سرور هوش مصنوعی فعلاً شلوغ است؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.";
+  "ظرفیت/سهمیهٔ Gemini API موقتاً در دسترس نیست؛ چند لحظه دیگر دوباره تلاش کنید.";
 
 export const MODEL_TIMEOUT_MESSAGE =
-  "پاسخ هوش مصنوعی بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید (در صورت امکان پیام را کوتاه‌تر بنویسید).";
+  "پاسخ Gemini بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید (در صورت امکان پیام یا تصویر را کوتاه‌تر/واضح‌تر ارسال کنید).";
+
+export const MODEL_CONFIGURATION_MESSAGE =
+  "مدل‌های Gemini تنظیم‌شده برای این پروژه در API در دسترس نیستند. لطفاً مقدار GEMINI_MODEL یا GEMINI_VISION_MODEL را بررسی کنید.";
 
 export class ModelBusyError extends Error {
   constructor(message: string = MODEL_BUSY_MESSAGE) {
@@ -57,6 +80,13 @@ export class ModelTimeoutError extends Error {
   constructor(message: string = MODEL_TIMEOUT_MESSAGE) {
     super(message);
     this.name = "ModelTimeoutError";
+  }
+}
+
+export class ModelConfigurationError extends Error {
+  constructor(message: string = MODEL_CONFIGURATION_MESSAGE) {
+    super(message);
+    this.name = "ModelConfigurationError";
   }
 }
 
@@ -85,7 +115,7 @@ function isModelUnavailableError(error: unknown): boolean {
   const status = Number(candidate?.status ?? candidate?.code);
   const message = String(candidate?.message ?? error ?? "");
   if (status === 404) return true;
-  return /not found|is not supported|does not exist|unsupported model|permission denied/i.test(message);
+  return /not found|is not supported|does not exist|unsupported model|model .*permission denied|permission denied.*model/i.test(message);
 }
 
 // Some models reject the thinkingConfig knob; in that case retry without it.
@@ -99,18 +129,30 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const ATTEMPTS_PER_MODEL = Math.max(1, Number(process.env.GEMINI_ATTEMPTS_PER_MODEL) || 2);
 
-// Hard ceiling for one logical request (all models + retries). Kept well
-// under the serverless function's maxDuration so we can always return a
-// friendly JSON error instead of letting Vercel kill the function.
-const TOTAL_BUDGET_MS = Math.max(5000, Number(process.env.GEMINI_TOTAL_BUDGET_MS) || 26000);
+// Hard ceiling for one logical text request (all models + retries). Kept under
+// the route maxDuration so we can return JSON instead of letting Vercel kill us.
+const TOTAL_BUDGET_MS = Math.max(5000, Number(process.env.GEMINI_TOTAL_BUDGET_MS) || 34_000);
+
+// OCR/vision needs more time than text. The handwritten route passes this value
+// explicitly and has a 60s function cap.
+export const GEMINI_VISION_TOTAL_BUDGET_MS = Math.max(
+  10_000,
+  Number(process.env.GEMINI_VISION_TOTAL_BUDGET_MS) || 52_000,
+);
 
 // Per single API call timeout — prevents one hanging call from eating the
-// whole budget (this was the main cause of "very long wait, then failure").
-const PER_CALL_TIMEOUT_MS = Math.max(4000, Number(process.env.GEMINI_CALL_TIMEOUT_MS) || 14000);
+// whole budget.
+const PER_CALL_TIMEOUT_MS = Math.max(4000, Number(process.env.GEMINI_CALL_TIMEOUT_MS) || 16_000);
+export const GEMINI_VISION_CALL_TIMEOUT_MS = Math.max(
+  8000,
+  Number(process.env.GEMINI_VISION_CALL_TIMEOUT_MS) || 24_000,
+);
 
-// "low" keeps latency low for this extraction task; set GEMINI_THINKING_LEVEL
-// to "high"/"medium" or "off" (to remove the field entirely) from Vercel.
-const THINKING_LEVEL = (process.env.GEMINI_THINKING_LEVEL || "low").toLowerCase();
+// Most currently stable API models either do not need a thinking config for
+// this extraction task or use model-specific fields. Defaulting to OFF avoids an
+// avoidable invalid-config retry. Set GEMINI_THINKING_LEVEL=low|medium|high if
+// your selected model supports this exact field.
+const THINKING_LEVEL = (process.env.GEMINI_THINKING_LEVEL || "off").toLowerCase();
 
 function withThinkingConfig(params: Omit<GenerateContentParameters, "model">) {
   if (THINKING_LEVEL === "off" || THINKING_LEVEL === "none") return params;
@@ -135,22 +177,41 @@ async function callWithTimeout(
   timeoutMs: number,
 ): Promise<GenerateContentResponse> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      const timeoutError = new Error(`Gemini call timed out after ${timeoutMs}ms`);
+      timeoutError.name = "AbortError";
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
   try {
     const config = {
       ...((params as { config?: Record<string, unknown> }).config || {}),
       abortSignal: controller.signal,
     };
-    return await ai.models.generateContent({ ...params, config, model } as GenerateContentParameters);
+    const generationPromise = ai.models.generateContent({ ...params, config, model } as GenerateContentParameters);
+    return await Promise.race([generationPromise, timeoutPromise]);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 
 function isAbortError(error: unknown): boolean {
   const candidate = error as { name?: string; message?: string } | null;
-  return candidate?.name === "AbortError" || /abort/i.test(String(candidate?.message || ""));
+  return candidate?.name === "AbortError" || /abort|timed out|timeout/i.test(String(candidate?.message || ""));
 }
+
+export type GenerateContentRetryOptions = {
+  /** Use getModelChain("vision") for image/OCR routes. */
+  modelChain?: string[];
+  attemptsPerModel?: number;
+  totalBudgetMs?: number;
+  perCallTimeoutMs?: number;
+  taskName?: string;
+};
 
 /**
  * Calls generateContent with per-call timeout, jittered exponential backoff
@@ -158,26 +219,37 @@ function isAbortError(error: unknown): boolean {
  *
  * - Only transient errors (429/503/500/504/timeout) trigger retry/fallback.
  * - A model the key cannot access is skipped immediately.
- * - The whole operation is bounded by TOTAL_BUDGET_MS, so the HTTP route
- *   always answers before the serverless function times out.
+ * - The whole operation is bounded, so the HTTP route answers before the
+ *   serverless function times out.
  */
 export async function generateContentWithRetry(
   ai: GoogleGenAI,
   params: Omit<GenerateContentParameters, "model">,
+  options: GenerateContentRetryOptions = {},
 ): Promise<GenerateContentResponse> {
   const startedAt = Date.now();
-  const remaining = () => TOTAL_BUDGET_MS - (Date.now() - startedAt);
-  let lastBusyError: unknown;
+  const totalBudgetMs = Math.max(5000, options.totalBudgetMs ?? TOTAL_BUDGET_MS);
+  const perCallTimeoutMs = Math.max(4000, options.perCallTimeoutMs ?? PER_CALL_TIMEOUT_MS);
+  const attemptsPerModel = Math.max(1, options.attemptsPerModel ?? ATTEMPTS_PER_MODEL);
+  const modelChain = options.modelChain && options.modelChain.length > 0 ? options.modelChain : TEXT_MODEL_CHAIN;
+  const remaining = () => totalBudgetMs - (Date.now() - startedAt);
+  let lastError: unknown;
+  let sawBusy = false;
+  let sawTimeout = false;
+  let sawUnavailable = false;
   let requestParams = withThinkingConfig(params);
 
-  for (const model of MODEL_CHAIN) {
-    for (let attempt = 0; attempt < ATTEMPTS_PER_MODEL; attempt++) {
+  for (const model of modelChain) {
+    for (let attempt = 0; attempt < attemptsPerModel; attempt++) {
       if (remaining() <= 1500) {
-        console.error("Gemini retry budget exhausted before finishing the model chain.");
-        throw lastBusyError ? new ModelBusyError() : new ModelTimeoutError();
+        console.error(`Gemini retry budget exhausted before finishing the ${options.taskName || "request"} model chain.`);
+        if (sawBusy) throw new ModelBusyError();
+        if (sawTimeout) throw new ModelTimeoutError();
+        if (sawUnavailable) throw new ModelConfigurationError();
+        throw lastError instanceof Error ? lastError : new ModelTimeoutError();
       }
       if (attempt > 0) {
-        // exponential backoff with jitter: ~0.6s, ~1.4s, ~3s ...
+        // Exponential backoff with jitter: ~0.6s, ~1.4s, ~3s ...
         const backoff = Math.min(4000, 500 * 2 ** (attempt - 1)) + Math.random() * 400;
         await sleep(Math.min(backoff, Math.max(0, remaining() - 1500)));
       }
@@ -186,9 +258,10 @@ export async function generateContentWithRetry(
           ai,
           requestParams,
           model,
-          Math.min(PER_CALL_TIMEOUT_MS, Math.max(4000, remaining() - 500)),
+          Math.min(perCallTimeoutMs, Math.max(4000, remaining() - 500)),
         );
       } catch (error) {
+        lastError = error;
         if (isThinkingConfigError(error)) {
           // Retry the same model once without the thinking knob.
           requestParams = withoutThinkingConfig(requestParams);
@@ -197,24 +270,27 @@ export async function generateContentWithRetry(
           continue;
         }
         if (isModelUnavailableError(error)) {
+          sawUnavailable = true;
           console.warn(`Gemini model "${model}" is not available for this API key; skipping to next model.`);
-          lastBusyError = lastBusyError ?? error;
           break;
         }
         if (isAbortError(error)) {
-          lastBusyError = error;
-          console.warn(`Gemini model "${model}" attempt ${attempt + 1}/${ATTEMPTS_PER_MODEL} timed out after ${PER_CALL_TIMEOUT_MS}ms; moving on.`);
+          sawTimeout = true;
+          console.warn(`Gemini model "${model}" attempt ${attempt + 1}/${attemptsPerModel} timed out after ${perCallTimeoutMs}ms; moving on.`);
           continue;
         }
         if (!isModelBusyError(error)) {
           throw error;
         }
-        lastBusyError = error;
-        console.warn(`Gemini model "${model}" attempt ${attempt + 1}/${ATTEMPTS_PER_MODEL} is busy; ${attempt + 1 < ATTEMPTS_PER_MODEL ? "retrying" : "trying next model"}.`);
+        sawBusy = true;
+        console.warn(`Gemini model "${model}" attempt ${attempt + 1}/${attemptsPerModel} is busy; ${attempt + 1 < attemptsPerModel ? "retrying" : "trying next model"}.`);
       }
     }
   }
 
-  console.error("All Gemini models in the chain are busy:", lastBusyError);
-  throw new ModelBusyError();
+  console.error(`All Gemini models in the ${options.taskName || "request"} chain failed:`, lastError);
+  if (sawBusy) throw new ModelBusyError();
+  if (sawTimeout) throw new ModelTimeoutError();
+  if (sawUnavailable) throw new ModelConfigurationError();
+  throw lastError instanceof Error ? lastError : new ModelBusyError();
 }

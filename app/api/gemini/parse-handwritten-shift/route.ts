@@ -1,6 +1,15 @@
 import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+import {
+  GEMINI_VISION_CALL_TIMEOUT_MS,
+  GEMINI_VISION_TOTAL_BUDGET_MS,
+  generateContentWithRetry,
+  getGeminiClient,
+  getModelChain,
+  ModelBusyError,
+  ModelConfigurationError,
+  ModelTimeoutError,
+} from "@/lib/gemini";
 
 // Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
 // keeps its own (shorter) budget, so we always answer before Vercel kills us.
@@ -148,11 +157,13 @@ SCOPE MAPPING:
   - "range"           — startDate and endDate as Persian "YYYY/MM/DD" strings
 
 READING GUIDELINES:
-  - Be DECISIVE. If a request is understandable with reasonable interpretation, produce it now.
+  - First, silently transcribe the note; then convert the transcription to structured requests.
+  - Be DECISIVE. If at least one date/day + request/shift is readable with reasonable interpretation, produce that item now and put any uncertainty in warnings.
+  - Do NOT mark the whole image as illegible just because one line, one digit, or one request is unclear. Return the confident items and warnings for the unclear parts.
   - Only ask for clarification if a critical piece (days or shift) is genuinely missing for ALL items.
   - When the handwriting is ambiguous, pick the most common interpretation in Iranian hospital practice and proceed.
   - Persian numerals (۰-۹) MUST be converted to Latin (0-9) in selectedDays / dates.
-  - Always return a JSON object with a "requests" array. If the note is illegible, return { "requests": [], "warnings": ["..."] }.
+  - Always return a JSON object with a "requests" array. Use status="illegible" ONLY when no usable word/date/request can be read from the image at all.
   - "isEssential" is true ONLY if the user clearly writes «ضروری / اجباری / قطعی / حتماً / خیلی مهم».
   - "offHardness" is "hard" for «قطعی / اجباری», "soft" for «ترجیحاً / اگه شد».
   - "description" must be a short Persian recap, 5–15 words, suitable for showing back to the user.
@@ -212,6 +223,9 @@ Respond ONLY with a JSON object matching the response schema below. Do not write
       ],
       config: {
         systemInstruction: systemPrompt,
+        temperature: 0,
+        topP: 0.2,
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -259,6 +273,14 @@ Respond ONLY with a JSON object matching the response schema below. Do not write
           required: ["status", "requests"],
         },
       },
+    }, {
+      modelChain: getModelChain("vision"),
+      totalBudgetMs: GEMINI_VISION_TOTAL_BUDGET_MS,
+      perCallTimeoutMs: GEMINI_VISION_CALL_TIMEOUT_MS,
+      // One attempt per model gives image parsing enough time on each strong
+      // model without spending most of the 60s route budget on repeated calls.
+      attemptsPerModel: 1,
+      taskName: "handwritten-ocr",
     });
 
     const parsed = JSON.parse(response.text || "{}");
@@ -281,7 +303,7 @@ Respond ONLY with a JSON object matching the response schema below. Do not write
     }
 
     return NextResponse.json({
-      status,
+      status: normalizedRequests.length > 0 ? "ready" : status,
       warnings: [...warnings, ...droppedWarnings],
       requests: normalizedRequests,
     });
@@ -291,6 +313,9 @@ Respond ONLY with a JSON object matching the response schema below. Do not write
     }
     if (error instanceof ModelTimeoutError) {
       return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
+    }
+    if (error instanceof ModelConfigurationError) {
+      return NextResponse.json({ error: error.message, retryable: false }, { status: 500 });
     }
     console.error("Error parsing handwritten shift request:", error);
     return NextResponse.json(

@@ -34,18 +34,20 @@ PostgreSQL/Prisma setup, national-ID login, session security, first-login passwo
 
 ## پایداری دستیار هوشمند Gemini (تنظیمات محیطی)
 
-مدل‌های تازه‌منتشرشده «flash» بیشترین خطای ۵۰۳ (شلوغی/high demand) را می‌دهند.
-به همین دلیل زنجیرهٔ پیش‌فرض مدل‌ها با یک مدل پایدار شروع می‌شود و به مدل‌های
-سبک‌تر با سهمیهٔ بالاتر برمی‌گردد. همهٔ موارد از Vercel قابل تغییر است:
+چت عمومی Gemini و Gemini API دقیقاً یک سطح سرویس نیستند: اپلیکیشن Gemini می‌تواند پشت‌صحنه بین مدل‌ها و ظرفیت‌های داخلی Google جابه‌جا شود، اما این پروژه با API key شما یک مدل مشخص را صدا می‌زند و به سهمیه/محدودیت همان پروژه وابسته است. برای کاهش خطاهای «شلوغی»، «تایم‌اوت» و افت کیفیت OCR، زنجیرهٔ مدل‌های پیش‌فرض به مدل‌های پایدار API تغییر کرده و مسیر تصویر از مسیر متن جدا شده است.
 
 | متغیر | پیش‌فرض | توضیح |
 |---|---|---|
-| `GEMINI_MODEL` | `gemini-3.5-flash` | مدل اصلی |
-| `GEMINI_FALLBACK_MODELS` | `gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-2.5-flash` | زنجیرهٔ جایگزین (با کاما) |
-| `GEMINI_ATTEMPTS_PER_MODEL` | `2` | تعداد تلاش برای هر مدل |
-| `GEMINI_CALL_TIMEOUT_MS` | `14000` | تایم‌اوت هر فراخوانی مدل |
-| `GEMINI_TOTAL_BUDGET_MS` | `26000` | سقف کل زمان (کمتر از `maxDuration=60`) |
-| `GEMINI_THINKING_LEVEL` | `low` | `low`/`medium`/`high` یا `off` برای حذف کامل |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | مدل اصلی چت متنی |
+| `GEMINI_FALLBACK_MODELS` | `gemini-2.0-flash,gemini-2.5-flash-lite,gemini-2.0-flash-lite` | زنجیرهٔ جایگزین متن (با کاما) |
+| `GEMINI_VISION_MODEL` | `gemini-2.5-flash` | مدل اصلی OCR/تصویر دست‌نوشته |
+| `GEMINI_VISION_FALLBACK_MODELS` | `gemini-2.0-flash,gemini-2.5-flash-lite` | زنجیرهٔ جایگزین تصویر |
+| `GEMINI_ATTEMPTS_PER_MODEL` | `2` | تعداد تلاش برای هر مدل متنی |
+| `GEMINI_CALL_TIMEOUT_MS` | `16000` | تایم‌اوت هر فراخوانی مدل متنی |
+| `GEMINI_TOTAL_BUDGET_MS` | `34000` | سقف کل زمان چت متنی |
+| `GEMINI_VISION_CALL_TIMEOUT_MS` | `24000` | تایم‌اوت هر فراخوانی OCR |
+| `GEMINI_VISION_TOTAL_BUDGET_MS` | `52000` | سقف کل زمان OCR، کمتر از `maxDuration=60` |
+| `GEMINI_THINKING_LEVEL` | `off` | فقط اگر مدل انتخابی دقیقاً پشتیبانی می‌کند، `low`/`medium`/`high` بگذارید |
 
-اگر باز هم شلوغی دیدید، سریع‌ترین راه‌حل بدون تغییر کد:
-`GEMINI_MODEL=gemini-3.1-flash-lite` (پایدارترین و کم‌تأخیرترین گزینه).
+برای نزدیک‌ترین تجربه به Gemini، در Google AI Studio/Cloud از یک API key با Billing و quota کافی استفاده کنید و در صورت دسترسی می‌توانید مدل قوی‌تر را در Vercel تنظیم کنید، مثلاً:
+`GEMINI_MODEL=gemini-2.5-pro` و `GEMINI_VISION_MODEL=gemini-2.5-pro`.

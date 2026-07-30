@@ -3885,21 +3885,24 @@ export default function Home() {
       // آزادسازی فوری حافظهٔ data URL (بزرگ‌ترین مصرف‌کنندهٔ RAM در این مسیر)
       parsedDataUrl = '';
 
-      // پاک کردن تصویر از UI چون دیگر استفاده شد
-      clearHandwrittenImage();
-
       if (status === 'illegible' || extracted.length === 0) {
+        const warningText = serverWarnings.length > 0
+          ? `\n\nنکتهٔ سامانه: ${serverWarnings.join(' / ')}`
+          : '';
         setRequestChatMessages(current => [
           ...current,
           {
             id: `chat_img_illegible_${Date.now()}`,
             role: 'assistant',
-            content: 'متأسفانه متن دست‌نوشته خوانا نبود یا چیزی قابل تشخیص نبود. لطفاً عکس واضح‌تری بفرست یا درخواستت را در چت بنویس.',
+            content: `این بار نتوانستم با اطمینان درخواست قابل ثبت از تصویر استخراج کنم؛ این الزاماً به معنی ناخوانا بودن کامل عکس نیست. لطفاً یک‌بار دیگر با همین تصویر امتحان کن، یا متن درخواست را در چت بنویس.${warningText}`,
             timestamp: new Date().toISOString(),
           },
         ]);
         return;
       }
+
+      // پاک کردن تصویر از UI فقط پس از استخراج موفق؛ در حالت ناموفق تصویر برای تلاش مجدد باقی می‌ماند.
+      clearHandwrittenImage();
 
       // نگاشت به فرم داخلی chatProposedShiftRequest
       const now = new Date().toISOString();

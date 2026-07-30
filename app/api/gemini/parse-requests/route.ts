@@ -1,6 +1,6 @@
 import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelConfigurationError, ModelTimeoutError } from "@/lib/gemini";
 
 // Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
 // keeps its own (shorter) budget, so we always answer before Vercel kills us.
@@ -98,6 +98,9 @@ Respond ONLY with the filled JSON array as defined in the response schema. Keep 
       contents: text,
       config: {
         systemInstruction: systemPrompt,
+        temperature: 0,
+        topP: 0.2,
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -173,6 +176,9 @@ Respond ONLY with the filled JSON array as defined in the response schema. Keep 
     }
     if (error instanceof ModelTimeoutError) {
       return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
+    }
+    if (error instanceof ModelConfigurationError) {
+      return NextResponse.json({ error: error.message, retryable: false }, { status: 500 });
     }
     console.error("Error parsing smart requests via Gemini API:", error);
     return NextResponse.json(

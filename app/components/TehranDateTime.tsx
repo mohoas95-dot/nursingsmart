@@ -11,9 +11,8 @@ const timeFormatter = new Intl.DateTimeFormat('fa-IR', {
 });
 
 export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: string | null }) {
-  const [now, setNow] = useState<Date | null>(null);
+  const [now, setNow] = useState<Date>(() => new Date());
   useEffect(() => {
-    setNow(new Date());
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);

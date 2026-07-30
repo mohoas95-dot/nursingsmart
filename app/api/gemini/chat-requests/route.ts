@@ -1,6 +1,7 @@
 import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelConfigurationError, ModelTimeoutError } from "@/lib/gemini";
+import { buildFallbackChatReply, parseShiftRequestsFallback, type FallbackCalendarDay } from "@/lib/requestChatFallback";
 
 // Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
 // keeps its own (shorter) budget, so we always answer before Vercel kills us.
@@ -42,6 +43,10 @@ function normalizeRequest(raw: any, totalDays: number) {
         .filter((step: string) => VALID_SHIFTS.has(step))
     : undefined;
 
+  if (scope === "custom_days" && (!selectedDays || selectedDays.length === 0)) return null;
+  if ((requestType === "shift" || requestType === "avoid_shift") && !preferredShift) return null;
+  if (requestType === "pattern" && (!patternSteps || patternSteps.length === 0)) return null;
+
   return {
     requestType,
     preferredShift: requestType === "OFF"
@@ -62,7 +67,42 @@ function normalizeRequest(raw: any, totalDays: number) {
   };
 }
 
+type FallbackResponseContext = {
+  text: string;
+  totalDays: number;
+  calendarDays: FallbackCalendarDay[];
+  firstName?: string;
+};
+
+function buildLocalFallbackResponse(context: FallbackResponseContext, reason: string) {
+  const fallbackRequests = parseShiftRequestsFallback(context.text, {
+    totalDays: context.totalDays,
+    calendarDays: context.calendarDays,
+  })
+    .map(item => normalizeRequest(item, context.totalDays))
+    .filter(Boolean);
+
+  if (fallbackRequests.length === 0) return null;
+
+  const { reply, summary } = buildFallbackChatReply(
+    fallbackRequests as any,
+    context.firstName,
+  );
+
+  return {
+    status: "ready",
+    reply,
+    summary,
+    warnings: [reason],
+    questions: [],
+    requests: fallbackRequests,
+    source: "local_fallback",
+  };
+}
+
 export async function POST(req: NextRequest) {
+  let fallbackContext: FallbackResponseContext | null = null;
+
   try {
     const body = await req.json();
     const messages = Array.isArray(body.messages) ? body.messages as IncomingChatMessage[] : [];
@@ -82,6 +122,17 @@ export async function POST(req: NextRequest) {
     }
 
     const totalDays = calendarDays.length || 31;
+    fallbackContext = {
+      text: lastUserMessage,
+      totalDays,
+      calendarDays: calendarDays.map((day: any) => ({
+        day: Number(day?.day),
+        dayOfWeek: Number(day?.dayOfWeek),
+        weekdayName: typeof day?.weekdayName === "string" ? day.weekdayName : undefined,
+        isHoliday: !!day?.isHoliday,
+      })),
+      firstName: typeof personnel.firstName === "string" ? personnel.firstName : undefined,
+    };
     const ai = getGeminiClient();
 
     const systemPrompt = `
@@ -162,6 +213,9 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
       contents: `CONTEXT_JSON:\n${JSON.stringify(context)}\n\nAnalyze the conversation and respond with the requested JSON object.`,
       config: {
         systemInstruction: systemPrompt,
+        temperature: 0.2,
+        topP: 0.8,
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -216,6 +270,16 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
           .filter(Boolean)
       : [];
 
+    // If Gemini speaks but fails to return a structured item for an obvious
+    // request, rescue common cases locally instead of showing a broken chat.
+    if (normalizedRequests.length === 0 && fallbackContext) {
+      const fallback = buildLocalFallbackResponse(
+        fallbackContext,
+        "Gemini پاسخ ساختاریافتهٔ قابل ثبت نداد؛ تحلیل داخلی سامانه برای درخواست‌های رایج استفاده شد.",
+      );
+      if (fallback) return NextResponse.json(fallback);
+    }
+
     return NextResponse.json({
       status,
       reply: typeof parsedData.reply === "string" ? parsedData.reply : "پیامت را گرفتم؛ برای ثبت تمیز درخواست، کمی دقیق‌تر بگو لطفاً.",
@@ -225,11 +289,24 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
       requests: normalizedRequests,
     });
   } catch (error) {
-    if (error instanceof ModelBusyError) {
-      return NextResponse.json({ error: error.message, retryable: true }, { status: 503 });
-    }
-    if (error instanceof ModelTimeoutError) {
-      return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
+    if (error instanceof ModelBusyError || error instanceof ModelTimeoutError || error instanceof ModelConfigurationError) {
+      if (fallbackContext) {
+        const fallback = buildLocalFallbackResponse(
+          fallbackContext,
+          error instanceof ModelConfigurationError
+            ? "اتصال Gemini API درست تنظیم نشده بود؛ تحلیل داخلی سامانه برای درخواست‌های رایج استفاده شد."
+            : "Gemini API در این لحظه پاسخ پایدار نداد؛ تحلیل داخلی سامانه برای درخواست‌های رایج استفاده شد.",
+        );
+        if (fallback) return NextResponse.json(fallback);
+      }
+
+      if (error instanceof ModelBusyError) {
+        return NextResponse.json({ error: error.message, retryable: true }, { status: 503 });
+      }
+      if (error instanceof ModelTimeoutError) {
+        return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
+      }
+      return NextResponse.json({ error: error.message, retryable: false }, { status: 500 });
     }
     console.error("Error in Gemini request chat:", error);
     return NextResponse.json(
