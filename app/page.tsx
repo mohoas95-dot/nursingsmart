@@ -6,6 +6,14 @@ import TehranDateTime from './components/TehranDateTime';
 import { ResetRequestList } from './components/auth/ResetRequestList';
 import { useResetRequestCount } from './components/auth/useResetRequestCount';
 import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
+import { AiEngineBadge } from '../features/shared/components/AiEngineBadge';
+import { readImageFileAsDataUrl, IMAGE_UNREADABLE_MESSAGE } from '../lib/image-file';
+import {
+  formatDayList,
+  getShiftLabel,
+  SCOPE_LABELS,
+  SCOPE_LABELS_SHORT,
+} from '../lib/ai/persian-vocabulary';
 import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
 import { isValidIranianNationalId, toEnglishDigits } from '../lib/auth/validation';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
@@ -189,7 +197,7 @@ const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
   accentClass: string;
 }> = [
   { id: 'en', title: 'EN', subtitle: 'عصر و شب', accentClass: 'from-indigo-500 to-violet-600' },
-  { id: 'men', title: 'MEN', subtitle: 'شیفت 24', accentClass: 'from-sky-500 to-cyan-600' },
+  { id: 'men', title: 'MEN', subtitle: 'شیفت ۲۴', accentClass: 'from-sky-500 to-cyan-600' },
   { id: 'long_off', title: 'لانگ آف', subtitle: 'ME یک‌روزدرمیان', accentClass: 'from-teal-500 to-emerald-600' },
   { id: 'off', title: 'OFF 😴', subtitle: 'آف با انتخاب روز', accentClass: 'from-slate-600 to-slate-800' },
   { id: 'leave', title: 'مرخصی 🏖', subtitle: 'انتخاب روزهای مرخصی', accentClass: 'from-amber-500 to-orange-600' },
@@ -200,9 +208,9 @@ const QUICK_REQUEST_SCOPE_OPTIONS: ReadonlyArray<{
   title: string;
   subtitle: string;
 }> = [
-  { id: 'odd', title: 'تاریخ فرد', subtitle: '۱، ۳، ۵...' },
-  { id: 'even', title: 'تاریخ زوج', subtitle: '۲، ۴، ۶...' },
-  { id: 'weekly_odd', title: 'روز فرد', subtitle: 'یکشنبه، سه‌شنبه، پنجشنبه' },
+  { id: 'odd', title: 'تاریخ فرد', subtitle: '۱اُم، ۳اُم، ۵اُم…' },
+  { id: 'even', title: 'تاریخ زوج', subtitle: '۲اُم، ۴اُم، ۶اُم…' },
+  { id: 'weekly_odd', title: 'روز فرد', subtitle: 'یکشنبه، سه‌شنبه، پنج‌شنبه' },
   { id: 'weekly_even', title: 'روز زوج', subtitle: 'شنبه، دوشنبه، چهارشنبه' },
 ];
 
@@ -226,36 +234,65 @@ class ConcurrencyConflictError extends Error {
 
 // ---------------------------------------------------------------------------
 // ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت و تلاش مجدد خودکار
-// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، قطع موقت شبکه).
+// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
+//
+// معماری دو موتوره:
+//   • متن  → /api/ai/chat-requests        (Groq / GPT-OSS 120B)
+//   • تصویر → /api/ai/parse-image-request  (Gemini 2.5 Flash)
+// چرخش بین ۳ کلید هر سرویس در سمت سرور انجام می‌شود؛ اینجا فقط تلاش مجدد
+// سبک برای خطاهای گذرای شبکه‌ای/سروری داریم تا چت‌باکس هرگز قفل نشود.
 // ---------------------------------------------------------------------------
-const CHAT_REQUEST_TIMEOUT_MS = 40000;
-const CHAT_REQUEST_MAX_ATTEMPTS = 2;
+const AI_TEXT_ENDPOINT = '/api/ai/chat-requests';
+const AI_IMAGE_ENDPOINT = '/api/ai/parse-image-request';
 
-async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
+const CHAT_REQUEST_TIMEOUT_MS = 55000;
+const IMAGE_REQUEST_TIMEOUT_MS = 60000;
+
+// ⚠️ فقط یک تلاش. تلاش مجدد سمت کلاینت **عمداً** حذف شده است.
+//
+// چرا؟ سرور خودش قبلاً هر کلید و هر مدل را امتحان کرده (تا ۹ فراخوانی).
+// اگر کلاینت هم ۳ بار همان را تکرار کند، یک پیام کاربر تا ۲۷ فراخوانی API
+// می‌سازد و در چند ثانیه سقف «توکن در دقیقه» و «درخواست در دقیقه» را منفجر
+// می‌کند — دقیقاً همان چیزی که باعث پیام «سهمیهٔ هر سه کلید تمام شد» می‌شد،
+// در حالی که سهمیهٔ واقعی اصلاً تمام نشده بود.
+// وقتی سرور ۴۲۹ برمی‌گرداند یعنی «الان ظرفیت نیست»؛ کوبیدن دوباره فقط
+// وضعیت را بدتر می‌کند. کاربر دکمهٔ «تلاش مجدد» دارد و خودش تصمیم می‌گیرد.
+const CHAT_REQUEST_MAX_ATTEMPTS = 1;
+const IMAGE_REQUEST_MAX_ATTEMPTS = 1;
+
+// فقط خطاهای واقعاً گذرای زیرساختی ارزش یک تلاش دوباره را دارند.
+// ۴۲۹ (سهمیه) عمداً در این فهرست نیست — تکرارش ضدتولید است.
+const RETRYABLE_AI_STATUSES = new Set([502, 503, 504]);
+
+async function postAiWithRetry(
+  endpoint: string,
+  payload: unknown,
+  options: { timeoutMs: number; maxAttempts: number },
+): Promise<Response> {
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= CHAT_REQUEST_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= options.maxAttempts; attempt++) {
     if (attempt > 1) {
-      await new Promise(resolve => setTimeout(resolve, 800 * 2 ** (attempt - 2) + Math.random() * 300));
+      // backoff نمایی با jitter: ~0.9s، ~1.8s
+      await new Promise(resolve => setTimeout(resolve, 900 * 2 ** (attempt - 2) + Math.random() * 400));
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CHAT_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs);
     try {
-      const response = await fetch('/api/gemini/chat-requests', {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
-      if ((response.status === 503 || response.status === 504 || response.status === 429)
-        && attempt < CHAT_REQUEST_MAX_ATTEMPTS) {
-        lastError = new Error('مدل هوش مصنوعی موقتاً شلوغ است.');
+      if (RETRYABLE_AI_STATUSES.has(response.status) && attempt < options.maxAttempts) {
+        lastError = new Error('سرویس هوش مصنوعی موقتاً در دسترس نیست.');
         continue;
       }
       return response;
     } catch (error) {
       lastError = error;
-      if (attempt >= CHAT_REQUEST_MAX_ATTEMPTS) break;
+      if (attempt >= options.maxAttempts) break;
     } finally {
       clearTimeout(timer);
     }
@@ -266,6 +303,22 @@ async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
       ? 'پاسخ دستیار هوشمند بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید.'
       : 'ارتباط با دستیار هوشمند برقرار نشد؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.'
   );
+}
+
+/** پیام متنی → Groq */
+async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
+  return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
+    timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    maxAttempts: CHAT_REQUEST_MAX_ATTEMPTS,
+  });
+}
+
+/** تصویر → Gemini */
+async function postImageRequestWithRetry(payload: unknown): Promise<Response> {
+  return postAiWithRetry(AI_IMAGE_ENDPOINT, payload, {
+    timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
+    maxAttempts: IMAGE_REQUEST_MAX_ATTEMPTS,
+  });
 }
 
 export default function Home() {
@@ -2088,6 +2141,11 @@ export default function Home() {
   const [handwrittenImageFile, setHandwrittenImageFile] = useState<File | null>(null);
   const [handwrittenImagePreview, setHandwrittenImagePreview] = useState<string | null>(null);
   const [isHandwrittenParsing, setIsHandwrittenParsing] = useState<boolean>(false);
+  // در حال «زودخوانی» فایل بلافاصله پس از انتخاب (پیش از ارسال)
+  const [isHandwrittenReading, setIsHandwrittenReading] = useState<boolean>(false);
+  // محتوای خوانده‌شدهٔ عکس (Data URL) که هنگام انتخاب فایل ذخیره می‌شود تا موقع
+  // ارسال دیگر به ارجاع فایل — که ممکن است بیات شده باشد — نیازی نباشد.
+  const handwrittenDataUrlRef = React.useRef<string | null>(null);
   const [handwrittenParseError, setHandwrittenParseError] = useState<string | null>(null);
   const handwrittenFileInputRef = React.useRef<HTMLInputElement | null>(null);
   // نگهداری آخرین ObjectURL در ref تا در زمان unmount قطعی آزاد شود
@@ -2255,25 +2313,20 @@ export default function Home() {
     }
   };
 
+  // خلاصهٔ فارسی یک درخواست. واژگان از lib/ai/persian-vocabulary می‌آید تا
+  // دقیقاً همان چیزی باشد که هوش مصنوعی هم در چت می‌گوید:
+  //   • MEN همیشه «شیفت ۲۴» است، نه «تمام روز»
+  //   • روزها به شکل «۵اُم، ۷اُم» نوشته می‌شوند، نه «روزهای 5، 7»
+  //   • «تاریخ زوج/فرد» (شمارهٔ روز ماه) از «روز زوج/فرد» (روز هفته) جدا است
   const getRequestSummaryText = (r: ShiftRequest): string => {
-    const shiftLabel = r.preferredShift === 'M' ? 'صبح (M)' :
-                       r.preferredShift === 'E' ? 'عصر (E)' :
-                       r.preferredShift === 'N' ? 'شب (N)' :
-                       r.preferredShift === 'ME' ? 'عصر-صبح (ME)' :
-                       r.preferredShift === 'EN' ? 'شب-عصر (EN)' :
-                       r.preferredShift === 'MN' ? 'شب-صبح (MN)' :
-                       r.preferredShift === 'MEN' ? 'تمام روز (MEN)' :
-                       r.preferredShift === 'OFF' ? 'آف قطعی' :
-                       r.preferredShift === 'L' ? 'مرخصی' : r.preferredShift;
+    const shiftLabel = r.preferredShift === 'OFF'
+      ? 'آف قطعی'
+      : getShiftLabel(r.preferredShift);
 
     let timeLabel = '';
-    if (r.scope === 'all') timeLabel = 'کل روزهای ماه';
-    else if (r.scope === 'even') timeLabel = 'روزهای زوج ماه';
-    else if (r.scope === 'odd') timeLabel = 'روزهای فرد ماه';
-    else if (r.scope === 'weekly_even') timeLabel = 'روزهای زوج هفته';
-    else if (r.scope === 'weekly_odd') timeLabel = 'روزهای فرد هفته';
-    else if (r.scope === 'range') timeLabel = `بازه ${r.startDate} تا ${r.endDate}`;
-    else if (r.scope === 'custom_days') timeLabel = `روزهای ${r.selectedDays?.join('، ')}`;
+    if (r.scope === 'range') timeLabel = `بازه ${r.startDate} تا ${r.endDate}`;
+    else if (r.scope === 'custom_days') timeLabel = `تاریخ‌های ${formatDayList(r.selectedDays)}`;
+    else timeLabel = SCOPE_LABELS_SHORT[r.scope as string] || '';
 
     if (r.requestType === 'avoid_shift') {
       return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
@@ -3655,10 +3708,19 @@ export default function Home() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'پردازش گفت‌وگو انجام نشد.');
 
+      // هشدارهای سمت سرور (مثلاً «۱ مورد ناقص حذف شد») به انتهای پاسخ اضافه
+      // می‌شوند تا کاربر بفهمد چرا تعداد آیتم‌های پنل با انتظارش فرق دارد.
+      const serverWarnings: string[] = Array.isArray(data.warnings)
+        ? data.warnings.filter((item: unknown): item is string => typeof item === 'string')
+        : [];
+      const warningSuffix = serverWarnings.length > 0
+        ? `\n\n⚠️ ${serverWarnings.join(' / ')}`
+        : '';
+
       const assistantMessage: RequestChatMessage = {
         id: `chat_assistant_${Date.now()}`,
         role: 'assistant',
-        content: data.reply || 'پیامت را گرفتم. اگر منظورت همین است، تأیید کن؛ اگر نه اصلاحش کن.',
+        content: `${data.reply || 'پیامت را گرفتم. اگر منظورت همین است، تأیید کن؛ اگر نه اصلاحش کن.'}${warningSuffix}`,
         timestamp: new Date().toISOString(),
       };
       setRequestChatMessages(current => [...current, assistantMessage]);
@@ -3733,19 +3795,32 @@ export default function Home() {
     setHandwrittenImageFile(null);
     setHandwrittenImagePreview(null);
     setHandwrittenParseError(null);
+    // محتوای زودخوانده‌شده هم آزاد می‌شود تا حافظه اشغال نماند
+    handwrittenDataUrlRef.current = null;
     if (handwrittenFileInputRef.current) {
       handwrittenFileInputRef.current.value = '';
     }
   }, []);
 
-  const handleHandwrittenFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // انتخاب فایل + «زودخوانی» فوری محتوا.
+  //
+  // چرا همین‌جا می‌خوانیم و نه موقع ارسال؟
+  //   خطای NotReadableError («The requested file could not be read…») وقتی رخ
+  //   می‌دهد که ارجاع فایل بین انتخاب و ارسال بیات شود — روی موبایل خیلی رایج
+  //   است (عکس تازهٔ دوربین، فایل روی Google Photos/iCloud، یا کدگذاری مجدد
+  //   HEIC در iOS). با خواندن محتوا در همان لحظهٔ انتخاب، آن پنجرهٔ زمانی عملاً
+  //   حذف می‌شود و اگر هم مشکلی باشد، کاربر فوراً و با پیام فارسی می‌فهمد،
+  //   نه بعد از نوشتن پیام و زدن دکمهٔ ارسال.
+  const handleHandwrittenFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       clearHandwrittenImage();
       return;
     }
     const mimeType = (file.type || '').toLowerCase();
-    if (!ACCEPTED_IMAGE_TYPES.includes(mimeType)) {
+    // برخی دستگاه‌ها برای HEIC مقدار type را خالی می‌فرستند؛ در آن حالت به پسوند نگاه می‌کنیم.
+    const hasAcceptedExtension = /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || '');
+    if (!ACCEPTED_IMAGE_TYPES.includes(mimeType) && !(mimeType === '' && hasAcceptedExtension)) {
       setHandwrittenParseError('فرمت تصویر پشتیبانی نمی‌شود. فقط JPG، PNG، WebP و HEIC مجاز هستند.');
       if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
       return;
@@ -3755,22 +3830,26 @@ export default function Home() {
       if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
       return;
     }
+
     setHandwrittenParseError(null);
     if (handwrittenImagePreview) {
       URL.revokeObjectURL(handwrittenImagePreview);
     }
     setHandwrittenImageFile(file);
     setHandwrittenImagePreview(URL.createObjectURL(file));
-  };
 
-  // تبدیل فایل به data URL (base64) فقط در حافظهٔ RAM — هیچ فایلی روی دیسک نوشته نمی‌شود.
-  const readFileAsDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-      reader.onerror = () => reject(reader.error || new Error('خواندن فایل ناموفق بود.'));
-      reader.readAsDataURL(file);
-    });
+    // زودخوانی: محتوا را همین حالا در حافظه می‌گیریم تا موقع ارسال به فایل نیاز نباشد.
+    setIsHandwrittenReading(true);
+    try {
+      const dataUrl = await readImageFileAsDataUrl(file);
+      handwrittenDataUrlRef.current = dataUrl;
+    } catch (error) {
+      handwrittenDataUrlRef.current = null;
+      setHandwrittenParseError(error instanceof Error ? error.message : IMAGE_UNREADABLE_MESSAGE);
+    } finally {
+      setIsHandwrittenReading(false);
+    }
+  };
 
   // ارسال تصویر دست‌نوشته به API: متن + تصویر هر دو اختیاری‌اند، اما حداقل یکی باید باشد.
   // پاسخ API همان آرایهٔ requests ساختاریافته است که در chatProposedRequests می‌نشیند
@@ -3788,6 +3867,10 @@ export default function Home() {
     }
     if (!handwrittenImageFile) {
       setHandwrittenParseError('ابتدا یک تصویر انتخاب کنید.');
+      return;
+    }
+    if (isHandwrittenReading) {
+      setHandwrittenParseError('عکس هنوز در حال آماده‌سازی است؛ یک لحظه صبر کن.');
       return;
     }
     setIsHandwrittenParsing(true);
@@ -3821,12 +3904,17 @@ export default function Home() {
 
     let parsedDataUrl = '';
     try {
-      parsedDataUrl = await readFileAsDataUrl(handwrittenImageFile);
+      // اول از محتوای «زودخوانده‌شده» استفاده می‌کنیم (در لحظهٔ انتخاب فایل گرفته شد).
+      // فقط اگر به هر دلیلی موجود نبود، دوباره از روی خودِ فایل می‌خوانیم — این
+      // مسیر دوم همان جایی است که قبلاً NotReadableError می‌داد، و حالا خودش هم
+      // چندلایه و مقاوم است.
+      parsedDataUrl = handwrittenDataUrlRef.current || (await readImageFileAsDataUrl(handwrittenImageFile));
 
       // آماده‌سازی context (مشابه sendChatMessage ولی فقط context ضروری)
       const contextBody = {
         image: parsedDataUrl,
         mimeType: handwrittenImageFile.type || 'image/jpeg',
+        note: optionalText,
         year: currentYear,
         month: currentMonth,
         personnel: {
@@ -3858,20 +3946,9 @@ export default function Home() {
         scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
       };
 
-      // ارسال به API جدید. تایم‌اوت ۶۰ ثانیه چون OCR + تحلیل هم‌زمان زمان‌بر است.
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60_000);
-      let response: Response;
-      try {
-        response = await fetch('/api/gemini/parse-handwritten-shift', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(contextBody),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
+      // ارسال به موتور بینایی (Gemini 2.5 Flash). چرخش بین ۳ کلید Gemini در
+      // سمت سرور انجام می‌شود؛ اینجا فقط یک تلاش مجدد برای خطای گذرا داریم.
+      const response = await postImageRequestWithRetry(contextBody);
 
       const data = await response.json().catch(() => ({} as any));
       if (!response.ok) {
@@ -3889,12 +3966,13 @@ export default function Home() {
       clearHandwrittenImage();
 
       if (status === 'illegible' || extracted.length === 0) {
+        const illegibleHint = serverWarnings.length > 0 ? `\n⚠️ ${serverWarnings.join(' / ')}` : '';
         setRequestChatMessages(current => [
           ...current,
           {
             id: `chat_img_illegible_${Date.now()}`,
             role: 'assistant',
-            content: 'متأسفانه متن دست‌نوشته خوانا نبود یا چیزی قابل تشخیص نبود. لطفاً عکس واضح‌تری بفرست یا درخواستت را در چت بنویس.',
+            content: `متأسفانه متن داخل تصویر خوانا نبود یا چیزی قابل تشخیص نبود. لطفاً عکس واضح‌تری بفرست یا درخواستت را در چت بنویس.${illegibleHint}`,
             timestamp: new Date().toISOString(),
           },
         ]);
@@ -6541,7 +6619,7 @@ export default function Home() {
                                         <option value="ME">عصر-صبح (ME)</option>
                                         <option value="EN">شب-عصر (EN)</option>
                                         <option value="MN">شب-صبح (MN)</option>
-                                        <option value="MEN">ترکیبی (MEN)</option>
+                                        <option value="MEN">شیفت ۲۴ (MEN)</option>
                                         <option value="L">مرخصی</option>
                                       </select>
                                     ) : (
@@ -6573,7 +6651,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">شب</span> شب (N)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> کل روز (MEN)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> شیفت ۲۴ (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
                 </div>
@@ -7047,7 +7125,7 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
-                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini Flash</span>
+                        <AiEngineBadge size="compact" className="hidden sm:inline-flex shrink-0" />
                         <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -7068,13 +7146,14 @@ export default function Home() {
                   ) : (
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini Flash</span>
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <AiEngineBadge size="full" />
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
                       <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
+                        متن‌ها با <span className="font-black text-white">Groq</span> و تصویرها با <span className="font-black text-white">Gemini</span> تحلیل می‌شوند.
                       </p>
                     </div>
                     <div className="flex items-center gap-2 self-start">
@@ -7158,7 +7237,7 @@ export default function Home() {
                       {isRequestChatProcessing && (
                         <div className="flex justify-start">
                           <div className={`bg-slate-100 border border-slate-200 text-slate-500 rounded-3xl rounded-bl-md font-black flex items-center gap-2 ${isChatFullscreen ? 'px-3 py-2 text-[11px]' : 'px-4 py-3 text-xs'}`}>
-                            <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /> دارم دقیق بررسی می‌کنم...
+                            <span className="w-3.5 h-3.5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" /> دارم با Groq دقیق بررسی می‌کنم...
                           </div>
                         </div>
                       )}
@@ -7206,19 +7285,24 @@ export default function Home() {
                             <div className={`text-rose-600 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
                               ⚠️ {handwrittenParseError}
                             </div>
+                          ) : isHandwrittenReading ? (
+                            <div className={`text-slate-600 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              در حال آماده‌سازی عکس...
+                            </div>
                           ) : isHandwrittenParsing ? (
                             <div className={`text-indigo-700 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
                               <Loader2 className="w-3 h-3 animate-spin" />
-                              در حال خواندن دست‌نوشته با هوش مصنوعی...
+                              در حال خواندن متن داخل تصویر با Gemini 2.5 Flash...
                             </div>
                           ) : handwrittenImagePreview ? (
                             <div className={`text-slate-500 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
-                              برای ارسال، روی دکمهٔ «ارسال تصویر» بزن. فایلی روی سرور ذخیره نمی‌شود.
+                              عکس آماده است ✅ برای ارسال، روی دکمهٔ «ارسال تصویر» بزن. فایلی روی سرور ذخیره نمی‌شود.
                             </div>
                           ) : null}
                         </div>
 
-                        {handwrittenImagePreview && !isHandwrittenParsing && (
+                        {handwrittenImagePreview && !isHandwrittenParsing && !isHandwrittenReading && (
                           <button
                             type="button"
                             onClick={handleSendHandwrittenImage}
@@ -7240,7 +7324,7 @@ export default function Home() {
                         type="button"
                         onClick={() => handwrittenFileInputRef.current?.click()}
                         disabled={isRequestChatProcessing || isHandwrittenParsing || !requestChatPersonnel}
-                        title="پیوست تصویر دست‌نوشته (OCR با Gemini)"
+                        title="پیوست تصویر (تحلیل متن فارسی داخل عکس با Gemini 2.5 Flash)"
                         className="shrink-0 w-10 h-10 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shadow-sm transition-all hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center"
                         id="btn-attach-handwritten"
                       >
@@ -7528,33 +7612,17 @@ export default function Home() {
                                   {r.requestType === 'pattern' ? (
                                     <span className="text-violet-700 font-bold">{r.patternSteps?.join(' / ') || 'الگوی سفارشی'}</span>
                                   ) : r.requestType === 'avoid_shift' ? (
-                                    <span className="text-rose-600 font-bold">شیفت {
-                                      r.preferredShift === 'M' ? 'صبح' :
-                                      r.preferredShift === 'E' ? 'عصر' :
-                                      r.preferredShift === 'N' ? 'شب' :
-                                      r.preferredShift === 'ME' ? 'عصر-صبح' :
-                                      r.preferredShift === 'EN' ? 'شب-عصر' : r.preferredShift
-                                    } نباشم</span>
+                                    <span className="text-rose-600 font-bold">شیفت {getShiftLabel(r.preferredShift)} نباشم</span>
                                   ) : (
-                                    r.preferredShift === 'M' ? 'صبح' :
-                                    r.preferredShift === 'E' ? 'عصر' :
-                                    r.preferredShift === 'N' ? 'شب' :
-                                    r.preferredShift === 'ME' ? 'عصر-صبح (ME)' :
-                                    r.preferredShift === 'EN' ? 'شب-عصر (EN)' :
-                                    r.preferredShift === 'MN' ? 'شب-صبح (MN)' :
-                                    r.preferredShift === 'MEN' ? 'ترکیبی کل روز (MEN)' :
-                                    r.preferredShift === 'OFF' ? 'آف' :
-                                    r.preferredShift === 'L' ? 'مرخصی روزانه' : r.preferredShift
+                                    getShiftLabel(r.preferredShift)
                                   )}
                                 </td>
                                 <td className="px-6 py-3.5 text-slate-600 text-xs font-bold text-slate-500">
-                                  {r.scope === 'all' && 'تمام روزهای ماه'}
-                                  {r.scope === 'even' && 'تاریخ زوج ماه'}
-                                  {r.scope === 'odd' && 'تاریخ فرد ماه'}
-                                  {r.scope === 'weekly_even' && 'روزهای زوج هفته (شنبه، دوشنبه، چهارشنبه)'}
-                                  {r.scope === 'weekly_odd' && 'روزهای فرد هفته (یک‌شنبه، سه‌شنبه، پنج‌شنبه)'}
-                                  {r.scope === 'range' && `از ${r.startDate} تا ${r.endDate}`}
-                                  {r.scope === 'custom_days' && `روزهای انتخابی: ${r.selectedDays?.join('، ')}`}
+                                  {r.scope === 'range'
+                                    ? `از ${r.startDate} تا ${r.endDate}`
+                                    : r.scope === 'custom_days'
+                                      ? `تاریخ‌های ${formatDayList(r.selectedDays)}`
+                                      : SCOPE_LABELS[r.scope as string] || ''}
                                 </td>
                                 <td className="px-6 py-3.5 text-center">
                                   {(role === 'admin' || role === 'headnurse') ? (
@@ -8925,7 +8993,7 @@ export default function Home() {
                         <option value="ME">عصر-صبح (ME)</option>
                         <option value="EN">شب-عصر (EN)</option>
                         <option value="MN">شب-صبح (MN)</option>
-                        <option value="MEN">ترکیبی کل روز (MEN)</option>
+                        <option value="MEN">شیفت ۲۴ (MEN)</option>
                       </select>
                     </div>
                   )}
@@ -8958,11 +9026,11 @@ export default function Home() {
                   className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
                   id="select-req-scope"
                 >
-                  <option value="all">تمام روزهای ماه</option>
-                  <option value="even">تاریخ زوج ماه</option>
-                  <option value="odd">تاریخ فرد ماه</option>
+                  <option value="all">همهٔ روزهای ماه</option>
+                  <option value="even">تاریخ‌های زوج ماه (۲اُم، ۴اُم، ۶اُم…)</option>
+                  <option value="odd">تاریخ‌های فرد ماه (۱اُم، ۳اُم، ۵اُم…)</option>
                   <option value="weekly_even">روزهای زوج هفته (شنبه، دوشنبه، چهارشنبه)</option>
-                  <option value="weekly_odd">روزهای فرد هفته (یک‌شنبه، سه‌شنبه، پنج‌شنبه)</option>
+                  <option value="weekly_odd">روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه)</option>
                   <option value="custom_days">روزهای انتخابی از تقویم (کلیک و تیک روی روزهای خاص)</option>
                 </select>
               </div>
