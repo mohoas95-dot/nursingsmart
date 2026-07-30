@@ -79,6 +79,18 @@ EXAMPLES:
     { "requestType": "shift", "preferredShift": "MEN", "scope": "custom_days", "selectedDays": [25], "description": "شیفت ۲۴ ساعته (MEN) در روز ۲۵" }
   ]
 
+CRITICAL — NEVER USE PLACEHOLDERS:
+  - NEVER set "preferredShift" to "undefined", "null", "?", or any placeholder value.
+  - NEVER set "scope" to "undefined" or any placeholder value.
+  - NEVER set "selectedDays" to an empty array when scope is "custom_days".
+  - For EVERY request, you MUST be able to fill ALL of: requestType, scope, and (if shift/avoid_shift) preferredShift.
+  - If a request is genuinely unclear (shift or days cannot be inferred even with reasonable interpretation),
+    OMIT it from the array entirely. It is FAR better to return fewer but complete requests
+    than to return one with "preferredShift": "undefined".
+  - When in doubt about a single ambiguous word, pick the most common interpretation in Iranian
+    hospital practice (M for morning صبح, E for عصر, N for شب, ME for لانگ, EN for عصر و شب,
+    MEN for ۲۴/24 ساعته, OFF for آف, L for مرخصی).
+
 Respond ONLY with the filled JSON array as defined in the response schema. Keep descriptions neat and in Persian.
 `;
 
@@ -125,7 +137,36 @@ Respond ONLY with the filled JSON array as defined in the response schema. Keep 
     });
 
     const parsedData = JSON.parse(response.text || "{}");
-    return NextResponse.json({ requests: parsedData.requests || [] });
+    const rawRequests = Array.isArray(parsedData.requests) ? parsedData.requests : [];
+
+    // حذف آیتم‌های ناقص: اگر requestType یا scope نامعتبر باشد، یا preferredShift placeholder باشد، حذف شود.
+    const PLACEHOLDER_VALUES = new Set([
+      "", "undefined", "null", "none", "n/a", "?", "؟", "-", "—", "unknown",
+      "نامشخص", "تعریف‌نشده", "نامعلوم", "ندارد",
+    ]);
+    const isPlaceholder = (v: unknown) => {
+      if (v === null || v === undefined) return true;
+      if (typeof v !== "string") return false;
+      return PLACEHOLDER_VALUES.has(v.trim().toLowerCase());
+    };
+    const VALID_REQUEST_TYPES = new Set(["shift", "OFF", "leave", "pattern", "avoid_shift"]);
+    const VALID_SHIFTS = new Set(["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"]);
+    const VALID_SCOPES = new Set(["all", "even", "odd", "weekly_even", "weekly_odd", "custom_days", "range"]);
+
+    const filteredRequests = rawRequests.filter((item: any) => {
+      if (!item || typeof item !== "object") return false;
+      if (!VALID_REQUEST_TYPES.has(item.requestType)) return false;
+      if (!VALID_SCOPES.has(item.scope)) return false;
+      if ((item.requestType === "shift" || item.requestType === "avoid_shift")) {
+        if (isPlaceholder(item.preferredShift) || !VALID_SHIFTS.has(item.preferredShift)) return false;
+      }
+      if (item.scope === "custom_days" && (!Array.isArray(item.selectedDays) || item.selectedDays.length === 0)) {
+        return false;
+      }
+      return true;
+    });
+
+    return NextResponse.json({ requests: filteredRequests });
   } catch (error) {
     if (error instanceof ModelBusyError) {
       return NextResponse.json({ error: error.message, retryable: true }, { status: 503 });

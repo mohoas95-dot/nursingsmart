@@ -146,7 +146,10 @@ import {
   Send,
   Expand,
   Shrink,
-  X
+  X,
+  Paperclip,
+  Image as ImageIcon,
+  Loader2
 } from 'lucide-react';
 
 // Department interface for multi-department management
@@ -168,6 +171,14 @@ type RequestChatMessage = {
   role: 'assistant' | 'user';
   content: string;
   timestamp?: string;
+  /**
+   * اگر پیام شامل تصویر پیوست‌شده باشد، ObjectURL مرورگر (RAM-only) در این فیلد
+   * نگه داشته می‌شود. thumbnail در حباب پیام نمایش داده می‌شود و با کلیک
+   * بزرگ‌نمایی می‌شود. URL در زمان unmount یا حذف پیام آزاد می‌شود.
+   */
+  imageUrl?: string;
+  /** عنوان کوتاه برای تصویر (نام فایل یا متن اختیاری کاربر) */
+  imageCaption?: string;
 };
 type ChatProposedShiftRequest = ShiftRequest & { description?: string };
 
@@ -2060,6 +2071,56 @@ export default function Home() {
   const [chatFailedText, setChatFailedText] = useState<string | null>(null);
   const requestChatScrollRef = React.useRef<HTMLDivElement | null>(null);
 
+  // ====== ویرایش آیتم‌های کادر نتیجهٔ تحلیل (پیش از ثبت نهایی) ======
+  // برای هر آیتم chatProposedRequests، می‌توان روی روزهایش کلیک کرد و شیفت هر روز را
+  // به‌صورت مستقیم عوض کرد. این state جدا از ویرایشگر درخواست‌های ثبت‌شده است.
+  const [chatEditingIndex, setChatEditingIndex] = useState<number | null>(null);
+  // snapshot روز→شیفت برای آیتم در حال ویرایش (مثل state ویرایشگر اصلی)
+  const [chatEditingDays, setChatEditingDays] = useState<Record<number, NonNullable<ShiftRequest['preferredShift']>>>({});
+  const [chatEditingActiveDay, setChatEditingActiveDay] = useState<number | null>(null);
+
+  // ====== بزرگ‌نمایی تصویر پیوست‌شده در چت ======
+  const [chatImageModal, setChatImageModal] = useState<{ url: string; caption?: string } | null>(null);
+
+  // ====== قابلیت جدید: ارسال تصویر دست‌نوشته (Handwritten OCR) ======
+  // تصویر فقط در حافظهٔ RAM (به‌صورت ObjectURL + data URL) نگه داشته می‌شود
+  // و پس از ارسال به API، فوراً آزاد می‌شود. هیچ فایلی روی سرور ذخیره نمی‌شود.
+  const [handwrittenImageFile, setHandwrittenImageFile] = useState<File | null>(null);
+  const [handwrittenImagePreview, setHandwrittenImagePreview] = useState<string | null>(null);
+  const [isHandwrittenParsing, setIsHandwrittenParsing] = useState<boolean>(false);
+  const [handwrittenParseError, setHandwrittenParseError] = useState<string | null>(null);
+  const handwrittenFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  // نگهداری آخرین ObjectURL در ref تا در زمان unmount قطعی آزاد شود
+  // (اگر فقط روی state گوش می‌دادیم، موقع unmount به آن دسترسی نداشتیم)
+  const handwrittenImagePreviewRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    handwrittenImagePreviewRef.current = handwrittenImagePreview;
+  }, [handwrittenImagePreview]);
+  // پاک‌سازی قطعی: هنگام unmount کامپوننت، ObjectURL مرورگر آزاد می‌شود تا حافظهٔ RAM آزاد شود
+  useEffect(() => {
+    return () => {
+      if (handwrittenImagePreviewRef.current) {
+        URL.revokeObjectURL(handwrittenImagePreviewRef.current);
+        handwrittenImagePreviewRef.current = null;
+      }
+    };
+  }, []);
+
+  // همهٔ URLهای تصویر که در حباب‌های پیام چت نگه داشته شده‌اند؛ در unmount و
+  // تعویض پرسنل یکجا آزاد می‌شوند تا هیچ blob url روی RAM باقی نماند.
+  const chatImageUrlsRef = React.useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // کپی مقدار در زمان mount تا در cleanup به مقدار زمان mount دسترسی داشته باشیم
+    const urlsAtMount = chatImageUrlsRef.current;
+    return () => {
+      urlsAtMount.forEach(url => {
+        try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+      });
+      urlsAtMount.clear();
+    };
+  }, []);
+
+
   // اسکرول خودکار به جدیدترین پیام چت
   useEffect(() => {
     const container = requestChatScrollRef.current;
@@ -2135,6 +2196,22 @@ export default function Home() {
     setChatProposedRequests([]);
     setRequestChatInput('');
     setChatFailedText(null);
+    // تصویر دست‌نوشتهٔ انتخاب‌شده (اگر هست) هم پاک می‌شود تا برای پرسنل بعدی
+    // لو نرود؛ هیچ فایلی روی سرور ذخیره نشده و فقط URL مرورگر آزاد می‌شود.
+    setHandwrittenImageFile(null);
+    setHandwrittenParseError(null);
+    if (handwrittenImagePreview) {
+      URL.revokeObjectURL(handwrittenImagePreview);
+      setHandwrittenImagePreview(null);
+    }
+    if (handwrittenFileInputRef.current) {
+      handwrittenFileInputRef.current.value = '';
+    }
+    // همهٔ URLهای تصاویر حباب‌های چت قبلی هم آزاد می‌شود تا حافظهٔ RAM پاک شود
+    chatImageUrlsRef.current.forEach(url => {
+      try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+    });
+    chatImageUrlsRef.current.clear();
   }, [requestChatPersonnel?.id, requestChatPersonnel?.firstName, currentYear, currentMonth]);
 
   // ====== ویرایش روزبه‌روز درخواست‌های ثبت‌شده ======
@@ -3642,6 +3719,249 @@ export default function Home() {
     await sendChatMessage(chatFailedText, false);
   };
 
+  // ====== Handwritten image: انتخاب فایل، پیش‌نمایش، پاک‌سازی حافظه ======
+  // هیچ فایلی روی سرور ذخیره نمی‌شود؛ تصویر فقط در حافظهٔ RAM مرورگر (Blob → ObjectURL)
+  // و به‌صورت DataURL در payload درخواست HTTP نگه داشته می‌شود. پس از ارسال موفق
+  // یا هنگام تعویض پرسنل، همه ارجاع‌ها آزاد می‌شوند تا حافظه آزاد شود.
+  const MAX_HANDWRITTEN_IMAGE_BYTES = 8 * 1024 * 1024; // ۸ مگابایت
+  const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+
+  // فقط stateهای مربوط به پیش‌نمایش کنار input را پاک می‌کند.
+  // URL ذخیره‌شده در پیام چت (imageUrl) عمداً آزاد نمی‌شود تا thumbnail در
+  // حباب چت همچنان نمایش داده شود؛ آزادسازی نهایی در unmount یا تعویض پرسنل است.
+  const clearHandwrittenImage = React.useCallback(() => {
+    setHandwrittenImageFile(null);
+    setHandwrittenImagePreview(null);
+    setHandwrittenParseError(null);
+    if (handwrittenFileInputRef.current) {
+      handwrittenFileInputRef.current.value = '';
+    }
+  }, []);
+
+  const handleHandwrittenFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      clearHandwrittenImage();
+      return;
+    }
+    const mimeType = (file.type || '').toLowerCase();
+    if (!ACCEPTED_IMAGE_TYPES.includes(mimeType)) {
+      setHandwrittenParseError('فرمت تصویر پشتیبانی نمی‌شود. فقط JPG، PNG، WebP و HEIC مجاز هستند.');
+      if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
+      return;
+    }
+    if (file.size > MAX_HANDWRITTEN_IMAGE_BYTES) {
+      setHandwrittenParseError('حجم تصویر بیش از ۸ مگابایت است؛ لطفاً تصویر کوچک‌تری انتخاب کنید.');
+      if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
+      return;
+    }
+    setHandwrittenParseError(null);
+    if (handwrittenImagePreview) {
+      URL.revokeObjectURL(handwrittenImagePreview);
+    }
+    setHandwrittenImageFile(file);
+    setHandwrittenImagePreview(URL.createObjectURL(file));
+  };
+
+  // تبدیل فایل به data URL (base64) فقط در حافظهٔ RAM — هیچ فایلی روی دیسک نوشته نمی‌شود.
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.onerror = () => reject(reader.error || new Error('خواندن فایل ناموفق بود.'));
+      reader.readAsDataURL(file);
+    });
+
+  // ارسال تصویر دست‌نوشته به API: متن + تصویر هر دو اختیاری‌اند، اما حداقل یکی باید باشد.
+  // پاسخ API همان آرایهٔ requests ساختاریافته است که در chatProposedRequests می‌نشیند
+  // و کاربر باید با دکمهٔ «تأیید و ثبت نهایی» آن را ثبت کند. هوش مصنوعی هرگز مستقیماً
+  // در پایگاه‌داده چیزی نمی‌نویسد.
+  const handleSendHandwrittenImage = async () => {
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      setHandwrittenParseError('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+    const targetPersonnel = requestChatPersonnel;
+    if (!targetPersonnel) {
+      setHandwrittenParseError('لطفاً ابتدا پرسنل متقاضی را انتخاب کنید.');
+      return;
+    }
+    if (!handwrittenImageFile) {
+      setHandwrittenParseError('ابتدا یک تصویر انتخاب کنید.');
+      return;
+    }
+    setIsHandwrittenParsing(true);
+    setHandwrittenParseError(null);
+
+    // متن اختیاری کاربر (مثلاً «این عکس دست‌نوشتهٔ درخواست‌های این ماهمه») به‌عنوان
+    // پیام متنی کاربر به حباب چت اضافه می‌شود تا context کافی برای AI فراهم شود.
+    const optionalText = requestChatInput.trim();
+    if (optionalText) {
+      setRequestChatInput('');
+    }
+
+    // پیام موقت کاربر در چت برای شفافیت. thumbnail تصویر در حباب پیام
+    // نمایش داده می‌شود تا کاربر چیزی که فرستاده را ببیند.
+    const previewUrl = handwrittenImagePreview || undefined;
+    if (previewUrl) {
+      // ثبت URL در ref برای آزادسازی قطعی در unmount
+      chatImageUrlsRef.current.add(previewUrl);
+    }
+    const userCaption: RequestChatMessage = {
+      id: `chat_user_img_${Date.now()}`,
+      role: 'user',
+      content: optionalText
+        ? `📷 تصویر دست‌نوشته پیوست شد — ${optionalText}`
+        : '📷 تصویر دست‌نوشته پیوست شد',
+      timestamp: new Date().toISOString(),
+      imageUrl: previewUrl,
+      imageCaption: handwrittenImageFile?.name,
+    };
+    setRequestChatMessages(current => [...current, userCaption]);
+
+    let parsedDataUrl = '';
+    try {
+      parsedDataUrl = await readFileAsDataUrl(handwrittenImageFile);
+
+      // آماده‌سازی context (مشابه sendChatMessage ولی فقط context ضروری)
+      const contextBody = {
+        image: parsedDataUrl,
+        mimeType: handwrittenImageFile.type || 'image/jpeg',
+        year: currentYear,
+        month: currentMonth,
+        personnel: {
+          firstName: targetPersonnel.firstName,
+          lastName: targetPersonnel.lastName,
+          jobGroup: targetPersonnel.jobGroup,
+          workRoutine: targetPersonnel.workRoutine,
+        },
+        calendarDays: calendarDays.map(day => ({
+          day: day.day,
+          dayOfWeek: day.dayOfWeek,
+          weekdayName: WEEKDAYS[day.dayOfWeek],
+          isHoliday: day.isHoliday,
+          holidayTitle: day.holidayTitle || calendarOccasions[day.day]?.join('، '),
+        })),
+        existingRequests: requests
+          .filter(request => request.personnelId === targetPersonnel.id)
+          .map(request => ({
+            requestType: request.requestType,
+            preferredShift: request.preferredShift,
+            patternSteps: request.patternSteps,
+            scope: request.scope,
+            selectedDays: request.selectedDays,
+            startDate: request.startDate,
+            endDate: request.endDate,
+            isEssential: request.isEssential,
+            offHardness: request.offHardness,
+          })),
+        scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
+      };
+
+      // ارسال به API جدید. تایم‌اوت ۶۰ ثانیه چون OCR + تحلیل هم‌زمان زمان‌بر است.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60_000);
+      let response: Response;
+      try {
+        response = await fetch('/api/gemini/parse-handwritten-shift', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(contextBody),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+
+      const data = await response.json().catch(() => ({} as any));
+      if (!response.ok) {
+        throw new Error(data.error || 'پردازش تصویر دست‌نوشته ناموفق بود.');
+      }
+
+      const extracted: any[] = Array.isArray(data.requests) ? data.requests : [];
+      const status: string = typeof data.status === 'string' ? data.status : 'ready';
+      const serverWarnings: string[] = Array.isArray(data.warnings) ? data.warnings : [];
+
+      // آزادسازی فوری حافظهٔ data URL (بزرگ‌ترین مصرف‌کنندهٔ RAM در این مسیر)
+      parsedDataUrl = '';
+
+      // پاک کردن تصویر از UI چون دیگر استفاده شد
+      clearHandwrittenImage();
+
+      if (status === 'illegible' || extracted.length === 0) {
+        setRequestChatMessages(current => [
+          ...current,
+          {
+            id: `chat_img_illegible_${Date.now()}`,
+            role: 'assistant',
+            content: 'متأسفانه متن دست‌نوشته خوانا نبود یا چیزی قابل تشخیص نبود. لطفاً عکس واضح‌تری بفرست یا درخواستت را در چت بنویس.',
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+        return;
+      }
+
+      // نگاشت به فرم داخلی chatProposedShiftRequest
+      const now = new Date().toISOString();
+      const mapped: ChatProposedShiftRequest[] = extracted.map((item: any, index: number) => ({
+        id: `chat_img_draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+        personnelId: targetPersonnel.id,
+        requestType: item.requestType,
+        preferredShift:
+          item.requestType === 'leave'
+            ? 'L'
+            : item.requestType === 'OFF'
+              ? 'OFF'
+              : item.preferredShift,
+        patternSteps: item.patternSteps,
+        isEssential: !!item.isEssential,
+        offHardness: item.requestType === 'OFF' ? (role === 'personnel' ? undefined : (item.offHardness || 'hard')) : undefined,
+        scope: item.scope || 'custom_days',
+        startDate: item.startDate,
+        endDate: item.endDate,
+        selectedDays: item.selectedDays,
+        description: item.description,
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      setChatProposedRequests(mapped);
+
+      const summary = mapped
+        .map((r, i) => `${i + 1}. ${getRequestSummaryText(r)}`)
+        .join(' | ');
+      const warningSuffix = serverWarnings.length > 0
+        ? `\n\n⚠️ نکتهٔ هوش مصنوعی: ${serverWarnings.join(' / ')}`
+        : '';
+      setRequestChatMessages(current => [
+        ...current,
+        {
+          id: `chat_img_extracted_${Date.now()}`,
+          role: 'assistant',
+          content: `دست‌نوشته خوانده شد ✍️ ${mapped.length} درخواست تشخیص داده شد:\n${summary}\n\nاگر درست است، دکمهٔ «تأیید و ثبت نهایی» را بزن؛ اگر نه، در همین چت اصلاحش کن.${warningSuffix}`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (error) {
+      console.error('Handwritten OCR error:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      setHandwrittenParseError(message);
+      setRequestChatMessages(current => [
+        ...current,
+        {
+          id: `chat_img_err_${Date.now()}`,
+          role: 'assistant',
+          content: `خطا در پردازش تصویر: ${message}`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      // پاک‌سازی قطعی هر ارجاعی به data URL در RAM
+      parsedDataUrl = '';
+      setIsHandwrittenParsing(false);
+    }
+  };
+
   const handleConfirmChatRequests = async () => {
     if (chatProposedRequests.length === 0) return;
     if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
@@ -3687,6 +4007,126 @@ export default function Home() {
       console.error('Error saving chat requests:', error);
       alert('خطا در ثبت درخواست‌های چت: ' + (error instanceof Error ? error.message : String(error)));
     }
+  };
+
+  // ====== ویرایش آیتم‌های کادر نتیجهٔ تحلیل (Calendar editor) ======
+  // همان روش requestEditTarget استفاده می‌شود: snapshot روز→شیفت می‌سازیم
+  // و سپس با بازسازی آیتم، آن را به chatProposedRequests برمی‌گردانیم.
+  const openChatItemEditor = (index: number) => {
+    const item = chatProposedRequests[index];
+    if (!item) return;
+    const days = resolveRequestDays(item);
+    const daysMap: Record<number, NonNullable<ShiftRequest['preferredShift']>> = {};
+    days.forEach(day => {
+      if (item.preferredShift) {
+        daysMap[day] = item.preferredShift as NonNullable<ShiftRequest['preferredShift']>;
+      }
+    });
+    setChatEditingIndex(index);
+    setChatEditingDays(daysMap);
+    setChatEditingActiveDay(null);
+  };
+
+  const closeChatItemEditor = () => {
+    setChatEditingIndex(null);
+    setChatEditingDays({});
+    setChatEditingActiveDay(null);
+  };
+
+  const saveChatItemEdit = () => {
+    if (chatEditingIndex === null) return;
+    const original = chatProposedRequests[chatEditingIndex];
+    if (!original) return;
+
+    // روزهای باقی‌مانده بعد از ویرایش
+    const newDays = Object.keys(chatEditingDays)
+      .map(d => Number(d))
+      .filter(d => Number.isInteger(d) && d >= 1)
+      .sort((a, b) => a - b);
+
+    if (newDays.length === 0) {
+      // اگر همهٔ روزها حذف شدند، کل آیتم حذف می‌شود
+      setChatProposedRequests(current => current.filter((_, i) => i !== chatEditingIndex));
+      setRequestChatMessages(current => [
+        ...current,
+        {
+          id: `chat_edit_removed_${Date.now()}`,
+          role: 'assistant',
+          content: 'این مورد به‌دلیل حذف همهٔ روزها از کادر نتیجه حذف شد.',
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+      closeChatItemEditor();
+      return;
+    }
+
+    // اگر همهٔ روزها شیفت یکسانی دارند، preferredShift همان است؛ در غیر این صورت
+    // آیتم به چند آیتم تک‌شیفتی (یکی برای هر شیفت متفاوت) شکسته می‌شود.
+    const distinctShifts = Array.from(new Set(newDays.map(d => chatEditingDays[d])));
+    const updatedList = [...chatProposedRequests];
+
+    if (distinctShifts.length === 1) {
+      // همهٔ روزها یک شیفت: آیتم فعلی به‌روزرسانی می‌شود
+      const newShift = distinctShifts[0];
+      updatedList[chatEditingIndex] = {
+        ...original,
+        preferredShift: newShift,
+        scope: 'custom_days',
+        selectedDays: newDays,
+        startDate: undefined,
+        endDate: undefined,
+        patternSteps: undefined,
+        description: original.description
+          ? `${original.description} (ویرایش‌شده)`
+          : 'ویرایش‌شده توسط کاربر',
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      // شیفت‌های متفاوت: آیتم فعلی به چند آیتم تقسیم می‌شود
+      const groupedByShift: Record<string, number[]> = {};
+      newDays.forEach(day => {
+        const shift = chatEditingDays[day];
+        if (!groupedByShift[shift]) groupedByShift[shift] = [];
+        groupedByShift[shift].push(day);
+      });
+
+      const newItems: ChatProposedShiftRequest[] = Object.entries(groupedByShift).map(([shift, daysList]) => ({
+        ...original,
+        id: `chat_draft_edited_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        preferredShift: shift as NonNullable<ShiftRequest['preferredShift']>,
+        scope: 'custom_days',
+        selectedDays: daysList,
+        startDate: undefined,
+        endDate: undefined,
+        patternSteps: undefined,
+        description: original.description
+          ? `${original.description} (ویرایش‌شده، شیفت ${shift})`
+          : `ویرایش‌شده، شیفت ${shift}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }));
+
+      // جایگزینی آیتم فعلی با آیتم‌های جدید
+      updatedList.splice(chatEditingIndex, 1, ...newItems);
+    }
+
+    setChatProposedRequests(updatedList);
+    setRequestChatMessages(current => [
+      ...current,
+      {
+        id: `chat_edit_done_${Date.now()}`,
+        role: 'assistant',
+        content: distinctShifts.length === 1
+          ? 'ویرایش آیتم اعمال شد ✏️'
+          : 'به دلیل تفاوت شیفت روزها، آیتم به چند مورد جداگانه تقسیم شد ✏️',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    closeChatItemEditor();
+  };
+
+  const removeChatProposedItem = (index: number) => {
+    setChatProposedRequests(current => current.filter((_, i) => i !== index));
   };
 
   const handleAddDraftRequest = () => {
@@ -6669,6 +7109,7 @@ export default function Home() {
                       <div className={isChatFullscreen ? 'mx-auto max-w-3xl space-y-2' : 'space-y-3'}>
                       {requestChatMessages.map(message => {
                         const isUser = message.role === 'user';
+                        const hasImage = !!message.imageUrl;
                         return (
                           <div key={message.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                             <div className={`shadow-xs font-bold ${
@@ -6677,10 +7118,39 @@ export default function Home() {
                                 : 'max-w-[86%] rounded-3xl px-4 py-3 text-xs sm:text-sm leading-7'
                             } ${
                               isUser
-                                ? 'bg-indigo-600 text-white rounded-br-md'
+                                ? hasImage
+                                  ? 'bg-indigo-600/95 text-white rounded-br-md p-2'
+                                  : 'bg-indigo-600 text-white rounded-br-md'
                                 : 'bg-slate-100 text-slate-700 border border-slate-200 rounded-bl-md'
                             }`}>
-                              {message.content}
+                              {hasImage && (
+                                <button
+                                  type="button"
+                                  onClick={() => setChatImageModal({
+                                    url: message.imageUrl as string,
+                                    caption: message.imageCaption,
+                                  })}
+                                  className={`block w-full mb-1.5 rounded-xl overflow-hidden border-2 border-white/40 hover:border-white transition-colors cursor-zoom-in ${
+                                    isChatFullscreen ? 'h-24' : 'h-32'
+                                  }`}
+                                  title="کلیک برای بزرگ‌نمایی"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={message.imageUrl}
+                                    alt={message.imageCaption || 'تصویر ضمیمه‌شده'}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </button>
+                              )}
+                              {message.content && (
+                                <div className={hasImage ? 'px-1.5 pb-1' : ''}>{message.content}</div>
+                              )}
+                              {hasImage && message.imageCaption && (
+                                <div className={`mt-1 px-1.5 pt-1 border-t border-white/20 text-white/80 font-bold truncate ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
+                                  📎 {message.imageCaption}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -6695,7 +7165,96 @@ export default function Home() {
                       </div>
                     </div>
 
+                    {/* ====== پیش‌نمایش تصویر دست‌نوشتهٔ انتخاب‌شده (فقط در حافظهٔ RAM) ====== */}
+                    {(handwrittenImagePreview || isHandwrittenParsing || handwrittenParseError) && (
+                      <div
+                        dir="rtl"
+                        className={isChatFullscreen
+                          ? 'mx-auto w-full max-w-3xl flex items-center gap-2 px-1 py-1.5 rounded-2xl border border-slate-200 bg-slate-50/80 mb-1.5 shrink-0'
+                          : 'flex items-center gap-2 px-2 py-1.5 rounded-2xl border border-slate-200 bg-slate-50/80 mb-1.5'}
+                      >
+                        {handwrittenImagePreview && (
+                          <div className="relative shrink-0">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={handwrittenImagePreview}
+                              alt="پیش‌نمایش دست‌نوشته"
+                              className={isChatFullscreen
+                                ? 'w-12 h-12 object-cover rounded-xl border border-slate-200 shadow-sm'
+                                : 'w-14 h-14 object-cover rounded-xl border border-slate-200 shadow-sm'}
+                            />
+                            <button
+                              type="button"
+                              onClick={clearHandwrittenImage}
+                              disabled={isHandwrittenParsing}
+                              className="absolute -top-1.5 -left-1.5 w-5 h-5 bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-white rounded-full flex items-center justify-center shadow-md cursor-pointer"
+                              title="حذف تصویر"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="flex-1 min-w-0">
+                          {handwrittenImagePreview && (
+                            <div className={`font-black text-slate-700 truncate ${isChatFullscreen ? 'text-[10px]' : 'text-[11px]'}`}>
+                              <ImageIcon className="w-3 h-3 inline-block ml-1 -mt-0.5" />
+                              {handwrittenImageFile?.name || 'تصویر دست‌نوشته'}
+                            </div>
+                          )}
+                          {handwrittenParseError ? (
+                            <div className={`text-rose-600 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
+                              ⚠️ {handwrittenParseError}
+                            </div>
+                          ) : isHandwrittenParsing ? (
+                            <div className={`text-indigo-700 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              در حال خواندن دست‌نوشته با هوش مصنوعی...
+                            </div>
+                          ) : handwrittenImagePreview ? (
+                            <div className={`text-slate-500 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
+                              برای ارسال، روی دکمهٔ «ارسال تصویر» بزن. فایلی روی سرور ذخیره نمی‌شود.
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {handwrittenImagePreview && !isHandwrittenParsing && (
+                          <button
+                            type="button"
+                            onClick={handleSendHandwrittenImage}
+                            disabled={!requestChatPersonnel}
+                            className={`shrink-0 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black transition-all cursor-pointer flex items-center gap-1 ${isChatFullscreen ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-[11px]'}`}
+                            title="ارسال تصویر برای استخراج درخواست‌ها"
+                            id="btn-send-handwritten"
+                          >
+                            <Send className={`-scale-x-100 ${isChatFullscreen ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
+                            ارسال تصویر
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     <form onSubmit={handleRequestChatSubmit} className={isChatFullscreen ? 'mx-auto w-full max-w-3xl flex items-end gap-2 shrink-0' : 'flex items-end gap-2'}>
+                      {/* دکمهٔ Attachment: انتخاب تصویر دست‌نوشته از دستگاه */}
+                      <button
+                        type="button"
+                        onClick={() => handwrittenFileInputRef.current?.click()}
+                        disabled={isRequestChatProcessing || isHandwrittenParsing || !requestChatPersonnel}
+                        title="پیوست تصویر دست‌نوشته (OCR با Gemini)"
+                        className="shrink-0 w-10 h-10 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shadow-sm transition-all hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center"
+                        id="btn-attach-handwritten"
+                      >
+                        <Paperclip className="w-4 h-4" />
+                      </button>
+                      <input
+                        ref={handwrittenFileInputRef}
+                        type="file"
+                        accept="image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif"
+                        onChange={handleHandwrittenFileChange}
+                        className="hidden"
+                        id="input-handwritten-file"
+                      />
+
                       <button
                         type="submit"
                         disabled={isRequestChatProcessing || !requestChatInput.trim() || !requestChatPersonnel}
@@ -6723,7 +7282,7 @@ export default function Home() {
                           }
                         }}
                         rows={isChatFullscreen ? 1 : undefined}
-                        placeholder="مثلاً: دهم و دوازدهم آف باشم، بیستم شب بیام، پنجشنبه‌ها بیمارستان دیگه EN دارم پس اینجا اون شیفت نباشم..."
+                        placeholder="مثلاً: دهم و دوازدهم آف باشم، بیستم شب بیام، پنجشنبه‌ها بیمارستان دیگه EN دارم پس اینجا اون شیفت نباشم... یا عکس دست‌نوشته‌ات رو با 📎 بفرست"
                         className={isChatFullscreen
                           ? 'min-h-[40px] max-h-32 flex-1 resize-none overflow-y-auto rounded-2xl border border-slate-300 bg-white px-3.5 py-2.5 text-[11px] sm:text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'
                           : 'min-h-[58px] flex-1 resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100'}
@@ -6777,10 +7336,29 @@ export default function Home() {
                                 <span className={`shrink-0 rounded-full bg-white border border-slate-200 font-mono text-slate-500 ${isChatFullscreen ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]'}`}>#{index + 1}</span>
                               </div>
                               {request.description && <p className={`font-bold text-slate-500 ${isChatFullscreen ? 'text-[9px] leading-4' : 'text-[10px] leading-5'}`}>{request.description}</p>}
-                              <div className="flex flex-wrap gap-1.5">
+                              <div className="flex flex-wrap gap-1.5 items-center">
                                 {request.isEssential && <span className="rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[9px] font-black text-red-700">ضروری</span>}
                                 {(role === 'admin' || role === 'headnurse') && request.offHardness === 'hard' && <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[9px] font-black text-rose-700">Hard OFF</span>}
                                 {(role === 'admin' || role === 'headnurse') && request.offHardness === 'soft' && <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-700">Soft OFF</span>}
+                                {/* دکمه‌های ویرایش و حذف: به کاربر اجازه می‌دهند بدون کنسل کل چت، آیتم را اصلاح کنند */}
+                                <button
+                                  type="button"
+                                  onClick={() => openChatItemEditor(index)}
+                                  title="ویرایش این آیتم روی تقویم"
+                                  className={`shrink-0 rounded-full bg-white border border-slate-200 text-sky-600 hover:bg-sky-50 hover:border-sky-300 transition-colors cursor-pointer flex items-center gap-1 ${isChatFullscreen ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]'}`}
+                                >
+                                  <Edit className={isChatFullscreen ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
+                                  ویرایش
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeChatProposedItem(index)}
+                                  title="حذف این آیتم"
+                                  className={`shrink-0 rounded-full bg-white border border-slate-200 text-rose-500 hover:bg-rose-50 hover:border-rose-300 transition-colors cursor-pointer flex items-center gap-1 ${isChatFullscreen ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]'}`}
+                                >
+                                  <Trash2 className={isChatFullscreen ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
+                                  حذف
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -8701,6 +9279,174 @@ export default function Home() {
           </div>
         );
       })()}
+
+      {/* ====== ویرایشگر تقویمی آیتم‌های کادر نتیجهٔ تحلیل (پیش از ثبت نهایی) ====== */}
+      {chatEditingIndex !== null && chatProposedRequests[chatEditingIndex] && (() => {
+        const editingItem = chatProposedRequests[chatEditingIndex];
+        const dayList = Object.keys(chatEditingDays).map(d => Number(d)).sort((a, b) => a - b);
+        return (
+          <div className="fixed inset-0 z-[220] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 print:hidden">
+            <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-[2rem] bg-white shadow-2xl scrollbar-thin">
+              <div className="sticky top-0 z-10 bg-gradient-to-l from-violet-600 via-purple-600 to-fuchsia-600 text-white px-5 py-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="text-base font-black">ویرایش آیتم قبل از ثبت</h4>
+                  <p className="text-[11px] font-bold text-purple-100 mt-1 truncate">
+                    {editingItem.personnelId && (() => {
+                      const p = personnel.find(x => x.id === editingItem.personnelId);
+                      return p ? `${p.firstName} ${p.lastName} — ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}` : '';
+                    })()}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeChatItemEditor}
+                  className="shrink-0 rounded-xl bg-white/15 hover:bg-white/25 border border-white/25 px-3 py-1.5 text-[11px] font-black transition-all cursor-pointer"
+                >
+                  بستن
+                </button>
+              </div>
+
+              <div className="p-4 sm:p-5 space-y-4">
+                <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-[11px] font-bold text-violet-800 leading-6">
+                  روی هر روز کلیک کن تا زیرشاخهٔ انواع شیفت (M / E / N / ME / EN / MN / MEN و همچنین آف و مرخصی) همان‌جا باز شود.
+                  اگر روزها شیفت‌های متفاوتی داشته باشند، آیتم به‌طور خودکار به چند درخواست جداگانه تقسیم می‌شود.
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-inner">
+                  {WEEKDAYS.map((weekday, index) => (
+                    <div key={`chat-edit-weekday-${weekday}`} className={`rounded-lg py-1 text-center text-[8px] font-black ${index === 6 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{weekday[0]}</div>
+                  ))}
+                  {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, index) => <span key={`chat-edit-empty-${index}`} />)}
+                  {calendarDays.map(dayInfo => {
+                    const assigned = chatEditingDays[dayInfo.day];
+                    const isActive = chatEditingActiveDay === dayInfo.day;
+                    const meta = EDITABLE_SHIFT_CODES.find(item => item.code === assigned);
+                    return (
+                      <React.Fragment key={`chat-edit-day-${dayInfo.day}`}>
+                        <button
+                          type="button"
+                          onClick={() => setChatEditingActiveDay(prev => (prev === dayInfo.day ? null : dayInfo.day))}
+                          aria-expanded={isActive}
+                          className={`relative min-h-14 rounded-xl border px-1 py-1.5 text-[11px] font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
+                            isActive
+                              ? 'bg-violet-600 text-white border-violet-700 shadow-md scale-105'
+                              : assigned
+                                ? `${meta?.className || 'bg-violet-100 text-violet-800 border-violet-300'} shadow-xs`
+                                : dayInfo.isHoliday
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-violet-300 hover:bg-violet-50'
+                          }`}
+                          title={dayInfo.holidayTitle || (calendarOccasions[dayInfo.day] || []).join('، ')}
+                        >
+                          <span className="font-mono text-xs font-extrabold">{dayInfo.day}</span>
+                          <span className="text-[8px] opacity-80">{assigned || WEEKDAYS[dayInfo.dayOfWeek][0]}</span>
+                        </button>
+
+                        {isActive && (
+                          <div className="col-span-7 rounded-2xl border border-violet-200 bg-violet-50/60 p-3 space-y-2 animate-fadeIn">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-black text-slate-700">
+                                نوع شیفت روز {dayInfo.day} ({WEEKDAYS[dayInfo.dayOfWeek]})
+                              </span>
+                              {assigned && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setChatEditingDays(prev => {
+                                      const next = { ...prev };
+                                      delete next[dayInfo.day];
+                                      return next;
+                                    });
+                                    setChatEditingActiveDay(null);
+                                  }}
+                                  className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                >
+                                  حذف این روز
+                                </button>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                              {EDITABLE_SHIFT_CODES.map(option => (
+                                <button
+                                  type="button"
+                                  key={`chat-edit-${dayInfo.day}-${option.code}`}
+                                  onClick={() => {
+                                    setChatEditingDays(prev => ({ ...prev, [dayInfo.day]: option.code }));
+                                    setChatEditingActiveDay(null);
+                                  }}
+                                  className={`rounded-xl border px-2 py-2 text-[10px] font-black transition-all cursor-pointer ${
+                                    assigned === option.code
+                                      ? 'bg-violet-600 text-white border-violet-600 shadow-md'
+                                      : `${option.className} hover:brightness-95`
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600">
+                  <span>روزهای تنظیم‌شده: <b className="text-violet-700 font-mono">{dayList.length}</b></span>
+                  <span className="text-slate-400">اگر صفر شود، این آیتم از کادر حذف می‌شود.</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={closeChatItemEditor}
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-black text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+                  >
+                    انصراف
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveChatItemEdit}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 px-4 py-3 text-xs font-black text-white shadow-lg shadow-emerald-100 transition-all cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" /> اعمال ویرایش
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ====== Modal بزرگ‌نمایی تصویر پیوست‌شده در چت ====== */}
+      {chatImageModal && (
+        <div
+          className="fixed inset-0 z-[260] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 print:hidden"
+          onClick={() => setChatImageModal(null)}
+        >
+          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onClick={e => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setChatImageModal(null)}
+              className="absolute -top-2 -left-2 z-10 w-9 h-9 bg-white hover:bg-slate-100 text-slate-700 rounded-full flex items-center justify-center shadow-lg cursor-pointer"
+              title="بستن"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={chatImageModal.url}
+              alt={chatImageModal.caption || 'تصویر ضمیمه‌شده'}
+              className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl border-4 border-white object-contain bg-white"
+            />
+            {chatImageModal.caption && (
+              <div className="mt-3 text-white/90 text-xs font-bold bg-slate-900/60 backdrop-blur px-3 py-1.5 rounded-full">
+                {chatImageModal.caption}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   );
