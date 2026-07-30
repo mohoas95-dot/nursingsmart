@@ -6801,20 +6801,17 @@ export default function Home() {
                   <span className="pointer-events-none absolute -left-10 -top-10 h-28 w-28 rounded-full bg-white/20 blur-2xl" />
                   <span className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-gradient-to-l from-violet-400 via-indigo-400 to-sky-500" />
                   <span className="relative flex items-center gap-3 min-w-0">
-                    <span className={`shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl text-[10px] font-black shadow-sm transition-colors ${
-                      openRequestPanel === 'chat' ? 'bg-amber-300 text-slate-900' : 'bg-violet-100 text-violet-700'
+                    <span className={`shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl shadow-sm overflow-hidden transition-colors ${
+                      openRequestPanel === 'chat' ? 'bg-white' : 'bg-violet-100'
                     }`}>
-                      AI
+                      <img
+                        src="/ai-icon-square.png"
+                        alt="Gemini + DeepSeek"
+                        className="h-full w-full object-contain p-1"
+                      />
                     </span>
                     <span className="min-w-0">
-                      <span className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-sm sm:text-base font-black">CHAT BOX 🤩</span>
-                        <img
-                          src="/ai-chatbox-badge-mini.png"
-                          alt="Gemini + DeepSeek"
-                          className="h-5 w-auto rounded-full"
-                        />
-                      </span>
+                      <span className="block text-sm sm:text-base font-black">CHAT BOX 🤩</span>
                       <span className={`block text-[10px] sm:text-[11px] font-bold mt-1 leading-5 ${openRequestPanel === 'chat' ? 'text-indigo-50' : 'text-slate-500'}`}>
                         اگر نتونستی درخواستتو بالا ثبت کنی بیا اینجا بنویس یا عکس بفرست!
                       </span>
@@ -7055,9 +7052,9 @@ export default function Home() {
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
                         <img
-                          src="/ai-chatbox-badge-mini.png"
+                          src="/ai-badge-mono-white.png"
                           alt="Gemini + DeepSeek"
-                          className="hidden sm:inline-block shrink-0 h-5 w-auto rounded-full"
+                          className="hidden sm:inline-block shrink-0 h-4 w-auto"
                         />
                         <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
                       </div>
@@ -7077,16 +7074,14 @@ export default function Home() {
                       </div>
                     </div>
                   ) : (
+                  <div className="flex flex-col gap-3">
+                    <img
+                      src="/ai-chatbox-banner-header.png"
+                      alt="CHAT BOX — Powered by Gemini + DeepSeek"
+                      className="w-full h-auto max-h-14 sm:max-h-16 object-contain object-right"
+                    />
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
-                      <div className="flex items-center gap-2 mb-2">
-                        <img
-                          src="/ai-chatbox-badge.png"
-                          alt="Powered by Gemini + DeepSeek"
-                          className="h-7 sm:h-8 w-auto rounded-full shadow-sm"
-                        />
-                        <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
-                      </div>
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
                       <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
@@ -7106,6 +7101,7 @@ export default function Home() {
                         <span>تمام صفحه</span>
                       </button>
                     </div>
+                  </div>
                   </div>
                   )}
                 </div>
