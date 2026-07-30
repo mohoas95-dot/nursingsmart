@@ -6807,7 +6807,14 @@ export default function Home() {
                       AI
                     </span>
                     <span className="min-w-0">
-                      <span className="block text-sm sm:text-base font-black">CHAT BOX 🤩</span>
+                      <span className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm sm:text-base font-black">CHAT BOX 🤩</span>
+                        <img
+                          src="/ai-chatbox-badge-mini.png"
+                          alt="Gemini + DeepSeek"
+                          className="h-5 w-auto rounded-full"
+                        />
+                      </span>
                       <span className={`block text-[10px] sm:text-[11px] font-bold mt-1 leading-5 ${openRequestPanel === 'chat' ? 'text-indigo-50' : 'text-slate-500'}`}>
                         اگر نتونستی درخواستتو بالا ثبت کنی بیا اینجا بنویس یا عکس بفرست!
                       </span>
@@ -7047,7 +7054,11 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
-                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">DeepSeek Chat</span>
+                        <img
+                          src="/ai-chatbox-badge-mini.png"
+                          alt="Gemini + DeepSeek"
+                          className="hidden sm:inline-block shrink-0 h-5 w-auto rounded-full"
+                        />
                         <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -7069,7 +7080,11 @@ export default function Home() {
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">DeepSeek Chat</span>
+                        <img
+                          src="/ai-chatbox-badge.png"
+                          alt="Powered by Gemini + DeepSeek"
+                          className="h-7 sm:h-8 w-auto rounded-full shadow-sm"
+                        />
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
