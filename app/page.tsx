@@ -6,6 +6,7 @@ import TehranDateTime from './components/TehranDateTime';
 import { ResetRequestList } from './components/auth/ResetRequestList';
 import { useResetRequestCount } from './components/auth/useResetRequestCount';
 import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
+import { AiEngineBadge } from '../features/shared/components/AiEngineBadge';
 import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
 import { isValidIranianNationalId, toEnglishDigits } from '../lib/auth/validation';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
@@ -226,36 +227,54 @@ class ConcurrencyConflictError extends Error {
 
 // ---------------------------------------------------------------------------
 // ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت و تلاش مجدد خودکار
-// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، قطع موقت شبکه).
+// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
+//
+// معماری دو موتوره:
+//   • متن  → /api/ai/chat-requests        (Groq / Llama 3.3 70B)
+//   • تصویر → /api/ai/parse-image-request  (Gemini 2.5 Flash)
+// چرخش بین ۳ کلید هر سرویس در سمت سرور انجام می‌شود؛ اینجا فقط تلاش مجدد
+// سبک برای خطاهای گذرای شبکه‌ای/سروری داریم تا چت‌باکس هرگز قفل نشود.
 // ---------------------------------------------------------------------------
-const CHAT_REQUEST_TIMEOUT_MS = 40000;
-const CHAT_REQUEST_MAX_ATTEMPTS = 2;
+const AI_TEXT_ENDPOINT = '/api/ai/chat-requests';
+const AI_IMAGE_ENDPOINT = '/api/ai/parse-image-request';
 
-async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
+const CHAT_REQUEST_TIMEOUT_MS = 55000;
+const CHAT_REQUEST_MAX_ATTEMPTS = 3;
+const IMAGE_REQUEST_TIMEOUT_MS = 60000;
+const IMAGE_REQUEST_MAX_ATTEMPTS = 2;
+
+/** وضعیت‌هایی که یعنی «دوباره تلاش کن» (سرور خودش هم چرخش کلید را انجام داده). */
+const RETRYABLE_AI_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+async function postAiWithRetry(
+  endpoint: string,
+  payload: unknown,
+  options: { timeoutMs: number; maxAttempts: number },
+): Promise<Response> {
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= CHAT_REQUEST_MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= options.maxAttempts; attempt++) {
     if (attempt > 1) {
-      await new Promise(resolve => setTimeout(resolve, 800 * 2 ** (attempt - 2) + Math.random() * 300));
+      // backoff نمایی با jitter: ~0.9s، ~1.8s
+      await new Promise(resolve => setTimeout(resolve, 900 * 2 ** (attempt - 2) + Math.random() * 400));
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CHAT_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs);
     try {
-      const response = await fetch('/api/gemini/chat-requests', {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
-      if ((response.status === 503 || response.status === 504 || response.status === 429)
-        && attempt < CHAT_REQUEST_MAX_ATTEMPTS) {
-        lastError = new Error('مدل هوش مصنوعی موقتاً شلوغ است.');
+      if (RETRYABLE_AI_STATUSES.has(response.status) && attempt < options.maxAttempts) {
+        lastError = new Error('سرویس هوش مصنوعی موقتاً در دسترس نیست.');
         continue;
       }
       return response;
     } catch (error) {
       lastError = error;
-      if (attempt >= CHAT_REQUEST_MAX_ATTEMPTS) break;
+      if (attempt >= options.maxAttempts) break;
     } finally {
       clearTimeout(timer);
     }
@@ -266,6 +285,22 @@ async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
       ? 'پاسخ دستیار هوشمند بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید.'
       : 'ارتباط با دستیار هوشمند برقرار نشد؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.'
   );
+}
+
+/** پیام متنی → Groq */
+async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
+  return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
+    timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    maxAttempts: CHAT_REQUEST_MAX_ATTEMPTS,
+  });
+}
+
+/** تصویر → Gemini */
+async function postImageRequestWithRetry(payload: unknown): Promise<Response> {
+  return postAiWithRetry(AI_IMAGE_ENDPOINT, payload, {
+    timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
+    maxAttempts: IMAGE_REQUEST_MAX_ATTEMPTS,
+  });
 }
 
 export default function Home() {
@@ -3655,10 +3690,19 @@ export default function Home() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'پردازش گفت‌وگو انجام نشد.');
 
+      // هشدارهای سمت سرور (مثلاً «۱ مورد ناقص حذف شد») به انتهای پاسخ اضافه
+      // می‌شوند تا کاربر بفهمد چرا تعداد آیتم‌های پنل با انتظارش فرق دارد.
+      const serverWarnings: string[] = Array.isArray(data.warnings)
+        ? data.warnings.filter((item: unknown): item is string => typeof item === 'string')
+        : [];
+      const warningSuffix = serverWarnings.length > 0
+        ? `\n\n⚠️ ${serverWarnings.join(' / ')}`
+        : '';
+
       const assistantMessage: RequestChatMessage = {
         id: `chat_assistant_${Date.now()}`,
         role: 'assistant',
-        content: data.reply || 'پیامت را گرفتم. اگر منظورت همین است، تأیید کن؛ اگر نه اصلاحش کن.',
+        content: `${data.reply || 'پیامت را گرفتم. اگر منظورت همین است، تأیید کن؛ اگر نه اصلاحش کن.'}${warningSuffix}`,
         timestamp: new Date().toISOString(),
       };
       setRequestChatMessages(current => [...current, assistantMessage]);
@@ -3827,6 +3871,7 @@ export default function Home() {
       const contextBody = {
         image: parsedDataUrl,
         mimeType: handwrittenImageFile.type || 'image/jpeg',
+        note: optionalText,
         year: currentYear,
         month: currentMonth,
         personnel: {
@@ -3858,20 +3903,9 @@ export default function Home() {
         scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
       };
 
-      // ارسال به API جدید. تایم‌اوت ۶۰ ثانیه چون OCR + تحلیل هم‌زمان زمان‌بر است.
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60_000);
-      let response: Response;
-      try {
-        response = await fetch('/api/gemini/parse-handwritten-shift', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(contextBody),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
+      // ارسال به موتور بینایی (Gemini 2.5 Flash). چرخش بین ۳ کلید Gemini در
+      // سمت سرور انجام می‌شود؛ اینجا فقط یک تلاش مجدد برای خطای گذرا داریم.
+      const response = await postImageRequestWithRetry(contextBody);
 
       const data = await response.json().catch(() => ({} as any));
       if (!response.ok) {
@@ -3889,12 +3923,13 @@ export default function Home() {
       clearHandwrittenImage();
 
       if (status === 'illegible' || extracted.length === 0) {
+        const illegibleHint = serverWarnings.length > 0 ? `\n⚠️ ${serverWarnings.join(' / ')}` : '';
         setRequestChatMessages(current => [
           ...current,
           {
             id: `chat_img_illegible_${Date.now()}`,
             role: 'assistant',
-            content: 'متأسفانه متن دست‌نوشته خوانا نبود یا چیزی قابل تشخیص نبود. لطفاً عکس واضح‌تری بفرست یا درخواستت را در چت بنویس.',
+            content: `متأسفانه متن داخل تصویر خوانا نبود یا چیزی قابل تشخیص نبود. لطفاً عکس واضح‌تری بفرست یا درخواستت را در چت بنویس.${illegibleHint}`,
             timestamp: new Date().toISOString(),
           },
         ]);
@@ -7047,7 +7082,7 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
-                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini Flash</span>
+                        <AiEngineBadge size="compact" className="hidden sm:inline-flex shrink-0" />
                         <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -7068,13 +7103,14 @@ export default function Home() {
                   ) : (
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini Flash</span>
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <AiEngineBadge size="full" />
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
                       <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
+                        متن‌ها با <span className="font-black text-white">Groq</span> و تصویرها با <span className="font-black text-white">Gemini</span> تحلیل می‌شوند.
                       </p>
                     </div>
                     <div className="flex items-center gap-2 self-start">
@@ -7158,7 +7194,7 @@ export default function Home() {
                       {isRequestChatProcessing && (
                         <div className="flex justify-start">
                           <div className={`bg-slate-100 border border-slate-200 text-slate-500 rounded-3xl rounded-bl-md font-black flex items-center gap-2 ${isChatFullscreen ? 'px-3 py-2 text-[11px]' : 'px-4 py-3 text-xs'}`}>
-                            <span className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /> دارم دقیق بررسی می‌کنم...
+                            <span className="w-3.5 h-3.5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" /> دارم با Groq دقیق بررسی می‌کنم...
                           </div>
                         </div>
                       )}
@@ -7209,7 +7245,7 @@ export default function Home() {
                           ) : isHandwrittenParsing ? (
                             <div className={`text-indigo-700 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
                               <Loader2 className="w-3 h-3 animate-spin" />
-                              در حال خواندن دست‌نوشته با هوش مصنوعی...
+                              در حال خواندن متن داخل تصویر با Gemini 2.5 Flash...
                             </div>
                           ) : handwrittenImagePreview ? (
                             <div className={`text-slate-500 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
@@ -7240,7 +7276,7 @@ export default function Home() {
                         type="button"
                         onClick={() => handwrittenFileInputRef.current?.click()}
                         disabled={isRequestChatProcessing || isHandwrittenParsing || !requestChatPersonnel}
-                        title="پیوست تصویر دست‌نوشته (OCR با Gemini)"
+                        title="پیوست تصویر (تحلیل متن فارسی داخل عکس با Gemini 2.5 Flash)"
                         className="shrink-0 w-10 h-10 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shadow-sm transition-all hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center"
                         id="btn-attach-handwritten"
                       >
