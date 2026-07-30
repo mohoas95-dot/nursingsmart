@@ -48,6 +48,7 @@ PostgreSQL/Prisma setup, national-ID login, session security, first-login passwo
 | `GEMINI_VISION_CALL_TIMEOUT_MS` | `24000` | تایم‌اوت هر فراخوانی OCR |
 | `GEMINI_VISION_TOTAL_BUDGET_MS` | `52000` | سقف کل زمان OCR، کمتر از `maxDuration=60` |
 | `GEMINI_THINKING_LEVEL` | `off` | فقط اگر مدل انتخابی دقیقاً پشتیبانی می‌کند، `low`/`medium`/`high` بگذارید |
+| `GEMINI_LOCAL_FIRST` | `true` | درخواست‌های واضح و رایج فارسی قبل از Gemini با parser داخلی استخراج می‌شوند تا خطای quota/capacity چت کمتر شود |
 
 برای نزدیک‌ترین تجربه به Gemini، در Google AI Studio/Cloud از یک API key با Billing و quota کافی استفاده کنید و در صورت دسترسی می‌توانید مدل قوی‌تر را در Vercel تنظیم کنید، مثلاً:
 `GEMINI_MODEL=gemini-2.5-pro` و `GEMINI_VISION_MODEL=gemini-2.5-pro`.

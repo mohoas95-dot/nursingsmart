@@ -133,6 +133,19 @@ export async function POST(req: NextRequest) {
       })),
       firstName: typeof personnel.firstName === "string" ? personnel.firstName : undefined,
     };
+
+    // Root mitigation for quota/capacity problems: obvious, complete Persian
+    // scheduling requests do not need to spend Gemini API quota at all. Gemini
+    // remains available for ambiguous or conversational messages, but routine
+    // requests stay functional even if the API is overloaded.
+    if (process.env.GEMINI_LOCAL_FIRST !== "false") {
+      const localFastPath = buildLocalFallbackResponse(
+        fallbackContext,
+        "درخواست رایج با تحلیل داخلی سامانه استخراج شد؛ برای پیام‌های مبهم همچنان از Gemini استفاده می‌شود.",
+      );
+      if (localFastPath) return NextResponse.json({ ...localFastPath, source: "local_fast_path" });
+    }
+
     const ai = getGeminiClient();
 
     const systemPrompt = `
@@ -300,13 +313,28 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
         if (fallback) return NextResponse.json(fallback);
       }
 
-      if (error instanceof ModelBusyError) {
-        return NextResponse.json({ error: error.message, retryable: true }, { status: 503 });
+      if (error instanceof ModelBusyError || error instanceof ModelTimeoutError) {
+        return NextResponse.json({
+          status: "chat",
+          reply: "اتصال Gemini API الان ظرفیت/سهمیهٔ کافی ندارد. اگر قصد ثبت درخواست شیفت داری، لطفاً با تاریخ و نوع شیفت واضح بنویس؛ درخواست‌های رایج را خود سامانه بدون مصرف Gemini هم استخراج می‌کند.",
+          summary: "",
+          warnings: [error.message],
+          questions: [],
+          requests: [],
+          retryable: true,
+          source: "api_unavailable",
+        });
       }
-      if (error instanceof ModelTimeoutError) {
-        return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
-      }
-      return NextResponse.json({ error: error.message, retryable: false }, { status: 500 });
+      return NextResponse.json({
+        status: "chat",
+        reply: "تنظیمات مدل Gemini برای این پروژه درست در دسترس نیست. لطفاً متغیرهای Vercel مثل GEMINI_MODEL و GEMINI_VISION_MODEL را بررسی کنید.",
+        summary: "",
+        warnings: [error.message],
+        questions: [],
+        requests: [],
+        retryable: false,
+        source: "api_misconfigured",
+      });
     }
     console.error("Error in Gemini request chat:", error);
     return NextResponse.json(

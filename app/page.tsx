@@ -2087,6 +2087,11 @@ export default function Home() {
   // و پس از ارسال به API، فوراً آزاد می‌شود. هیچ فایلی روی سرور ذخیره نمی‌شود.
   const [handwrittenImageFile, setHandwrittenImageFile] = useState<File | null>(null);
   const [handwrittenImagePreview, setHandwrittenImagePreview] = useState<string | null>(null);
+  // فایل انتخاب‌شده همان لحظهٔ انتخاب به DataURL تبدیل و در RAM نگه داشته می‌شود.
+  // در موبایل/مرورگرهای ابری، خواندن File با تأخیر ممکن است با NotReadableError
+  // («The requested file could not be read...») شکست بخورد؛ cache فوری ریشهٔ این خطا را کم می‌کند.
+  const [handwrittenImageDataUrl, setHandwrittenImageDataUrl] = useState<string | null>(null);
+  const [handwrittenImageMimeType, setHandwrittenImageMimeType] = useState<string>('image/jpeg');
   const [isHandwrittenParsing, setIsHandwrittenParsing] = useState<boolean>(false);
   const [handwrittenParseError, setHandwrittenParseError] = useState<string | null>(null);
   const handwrittenFileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -2199,6 +2204,8 @@ export default function Home() {
     // تصویر دست‌نوشتهٔ انتخاب‌شده (اگر هست) هم پاک می‌شود تا برای پرسنل بعدی
     // لو نرود؛ هیچ فایلی روی سرور ذخیره نشده و فقط URL مرورگر آزاد می‌شود.
     setHandwrittenImageFile(null);
+    setHandwrittenImageDataUrl(null);
+    setHandwrittenImageMimeType('image/jpeg');
     setHandwrittenParseError(null);
     if (handwrittenImagePreview) {
       URL.revokeObjectURL(handwrittenImagePreview);
@@ -3725,6 +3732,16 @@ export default function Home() {
   // یا هنگام تعویض پرسنل، همه ارجاع‌ها آزاد می‌شوند تا حافظه آزاد شود.
   const MAX_HANDWRITTEN_IMAGE_BYTES = 8 * 1024 * 1024; // ۸ مگابایت
   const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+  const inferHandwrittenMimeType = (file: File) => {
+    const explicit = (file.type || '').toLowerCase();
+    if (explicit) return explicit;
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.webp')) return 'image/webp';
+    if (name.endsWith('.heic')) return 'image/heic';
+    if (name.endsWith('.heif')) return 'image/heif';
+    return 'image/jpeg';
+  };
 
   // فقط stateهای مربوط به پیش‌نمایش کنار input را پاک می‌کند.
   // URL ذخیره‌شده در پیام چت (imageUrl) عمداً آزاد نمی‌شود تا thumbnail در
@@ -3732,19 +3749,21 @@ export default function Home() {
   const clearHandwrittenImage = React.useCallback(() => {
     setHandwrittenImageFile(null);
     setHandwrittenImagePreview(null);
+    setHandwrittenImageDataUrl(null);
+    setHandwrittenImageMimeType('image/jpeg');
     setHandwrittenParseError(null);
     if (handwrittenFileInputRef.current) {
       handwrittenFileInputRef.current.value = '';
     }
   }, []);
 
-  const handleHandwrittenFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleHandwrittenFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       clearHandwrittenImage();
       return;
     }
-    const mimeType = (file.type || '').toLowerCase();
+    const mimeType = inferHandwrittenMimeType(file);
     if (!ACCEPTED_IMAGE_TYPES.includes(mimeType)) {
       setHandwrittenParseError('فرمت تصویر پشتیبانی نمی‌شود. فقط JPG، PNG، WebP و HEIC مجاز هستند.');
       if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
@@ -3755,12 +3774,38 @@ export default function Home() {
       if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
       return;
     }
-    setHandwrittenParseError(null);
-    if (handwrittenImagePreview) {
-      URL.revokeObjectURL(handwrittenImagePreview);
+
+    setHandwrittenParseError('در حال آماده‌سازی تصویر در مرورگر…');
+    setHandwrittenImageDataUrl(null);
+    setHandwrittenImageMimeType(mimeType);
+
+    let nextPreviewUrl: string | null = null;
+    try {
+      // فایل را بلافاصله پس از انتخاب می‌خوانیم تا اگر فایل از iCloud/Google Photos/گالری
+      // با مجوز موقت آمده باشد، بعداً موقع ارسال با NotReadableError از دست نرود.
+      const dataUrl = await readFileAsDataUrl(file);
+      if (!dataUrl) throw new Error('خواندن فایل انتخاب‌شده خروجی معتبری نداشت.');
+
+      nextPreviewUrl = URL.createObjectURL(file);
+      if (handwrittenImagePreview) {
+        URL.revokeObjectURL(handwrittenImagePreview);
+      }
+      setHandwrittenImageFile(file);
+      setHandwrittenImagePreview(nextPreviewUrl);
+      setHandwrittenImageDataUrl(dataUrl);
+      setHandwrittenParseError(null);
+    } catch (error) {
+      if (nextPreviewUrl) URL.revokeObjectURL(nextPreviewUrl);
+      setHandwrittenImageFile(null);
+      setHandwrittenImagePreview(null);
+      setHandwrittenImageDataUrl(null);
+      setHandwrittenImageMimeType('image/jpeg');
+      if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
+      console.error('Handwritten file read error:', error);
+      setHandwrittenParseError(
+        'مرورگر نتوانست فایل انتخاب‌شده را بخواند. لطفاً عکس را اول داخل حافظهٔ گوشی/کامپیوتر ذخیره کن، از حالت iCloud/Google Photos خارجش کن، یا یک اسکرین‌شات/عکس جدید بگیر و دوباره انتخاب کن.'
+      );
     }
-    setHandwrittenImageFile(file);
-    setHandwrittenImagePreview(URL.createObjectURL(file));
   };
 
   // تبدیل فایل به data URL (base64) فقط در حافظهٔ RAM — هیچ فایلی روی دیسک نوشته نمی‌شود.
@@ -3786,8 +3831,8 @@ export default function Home() {
       setHandwrittenParseError('لطفاً ابتدا پرسنل متقاضی را انتخاب کنید.');
       return;
     }
-    if (!handwrittenImageFile) {
-      setHandwrittenParseError('ابتدا یک تصویر انتخاب کنید.');
+    if (!handwrittenImageDataUrl) {
+      setHandwrittenParseError('ابتدا یک تصویر انتخاب کنید و صبر کنید تا آماده‌سازی تصویر کامل شود.');
       return;
     }
     setIsHandwrittenParsing(true);
@@ -3821,12 +3866,12 @@ export default function Home() {
 
     let parsedDataUrl = '';
     try {
-      parsedDataUrl = await readFileAsDataUrl(handwrittenImageFile);
+      parsedDataUrl = handwrittenImageDataUrl;
 
       // آماده‌سازی context (مشابه sendChatMessage ولی فقط context ضروری)
       const contextBody = {
         image: parsedDataUrl,
-        mimeType: handwrittenImageFile.type || 'image/jpeg',
+        mimeType: handwrittenImageMimeType || handwrittenImageFile?.type || 'image/jpeg',
         year: currentYear,
         month: currentMonth,
         personnel: {
