@@ -171,29 +171,12 @@ export function normalizeShiftRequestList(
  * (Gemini از responseSchema بومی استفاده می‌کند؛ Llama به یک شرح دقیق نیاز دارد.)
  */
 export const GROQ_JSON_CONTRACT = `
-OUTPUT CONTRACT — return EXACTLY one JSON object with this shape (no markdown, no prose outside JSON):
-{
-  "status": "ready" | "clarification" | "chat",
-  "reply": string,                      // Persian chat bubble text (required)
-  "summary": string,                    // short Persian recap (may be "")
-  "warnings": string[],                 // may be []
-  "questions": string[],                // may be []
-  "requests": [
-    {
-      "requestType": "shift" | "OFF" | "leave" | "pattern" | "avoid_shift",
-      "preferredShift": "M" | "E" | "N" | "ME" | "EN" | "MN" | "MEN" | "OFF" | "L",
-      "patternSteps": string[],         // only for requestType="pattern"
-      "isEssential": boolean,
-      "offHardness": "hard" | "soft",   // only for requestType="OFF"
-      "scope": "all" | "even" | "odd" | "weekly_even" | "weekly_odd" | "custom_days" | "range",
-      "startDate": string,              // only for scope="range", Persian "YYYY/MM/DD"
-      "endDate": string,                // only for scope="range"
-      "selectedDays": number[],         // REQUIRED when scope="custom_days", Latin digits 1..totalDays
-      "description": string             // short Persian recap of this single item
-    }
-  ]
-}
-Every key listed above must use exactly these names and value types.
-Use Latin digits (1,2,3) inside selectedDays — never Persian digits.
-Never output the literal strings "undefined", "null", "?" as a value; omit the item instead.
+OUTPUT — exactly one JSON object, no markdown, no prose outside it:
+{"status":"ready|clarification|chat","reply":"<Persian>","summary":"<Persian>","warnings":[],"questions":[],
+ "requests":[{"requestType":"shift|OFF|leave|pattern|avoid_shift","preferredShift":"M|E|N|ME|EN|MN|MEN|OFF|L",
+ "patternSteps":[],"isEssential":false,"offHardness":"hard|soft","scope":"all|even|odd|weekly_even|weekly_odd|custom_days|range",
+ "startDate":"","endDate":"","selectedDays":[],"description":"<Persian>"}]}
+Rules: selectedDays REQUIRED when scope="custom_days", Latin digits only (1,2,3 — never ۱,۲,۳).
+startDate/endDate only for scope="range". patternSteps only for requestType="pattern".
+Never emit "undefined"/"null"/"?" as a value — omit the whole item instead.
 `;

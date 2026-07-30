@@ -246,12 +246,23 @@ const AI_TEXT_ENDPOINT = '/api/ai/chat-requests';
 const AI_IMAGE_ENDPOINT = '/api/ai/parse-image-request';
 
 const CHAT_REQUEST_TIMEOUT_MS = 55000;
-const CHAT_REQUEST_MAX_ATTEMPTS = 3;
 const IMAGE_REQUEST_TIMEOUT_MS = 60000;
-const IMAGE_REQUEST_MAX_ATTEMPTS = 2;
 
-/** وضعیت‌هایی که یعنی «دوباره تلاش کن» (سرور خودش هم چرخش کلید را انجام داده). */
-const RETRYABLE_AI_STATUSES = new Set([429, 500, 502, 503, 504]);
+// ⚠️ فقط یک تلاش. تلاش مجدد سمت کلاینت **عمداً** حذف شده است.
+//
+// چرا؟ سرور خودش قبلاً هر کلید و هر مدل را امتحان کرده (تا ۹ فراخوانی).
+// اگر کلاینت هم ۳ بار همان را تکرار کند، یک پیام کاربر تا ۲۷ فراخوانی API
+// می‌سازد و در چند ثانیه سقف «توکن در دقیقه» و «درخواست در دقیقه» را منفجر
+// می‌کند — دقیقاً همان چیزی که باعث پیام «سهمیهٔ هر سه کلید تمام شد» می‌شد،
+// در حالی که سهمیهٔ واقعی اصلاً تمام نشده بود.
+// وقتی سرور ۴۲۹ برمی‌گرداند یعنی «الان ظرفیت نیست»؛ کوبیدن دوباره فقط
+// وضعیت را بدتر می‌کند. کاربر دکمهٔ «تلاش مجدد» دارد و خودش تصمیم می‌گیرد.
+const CHAT_REQUEST_MAX_ATTEMPTS = 1;
+const IMAGE_REQUEST_MAX_ATTEMPTS = 1;
+
+// فقط خطاهای واقعاً گذرای زیرساختی ارزش یک تلاش دوباره را دارند.
+// ۴۲۹ (سهمیه) عمداً در این فهرست نیست — تکرارش ضدتولید است.
+const RETRYABLE_AI_STATUSES = new Set([502, 503, 504]);
 
 async function postAiWithRetry(
   endpoint: string,

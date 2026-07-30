@@ -13,7 +13,7 @@ export const MODEL_BUSY_MESSAGE =
   "سرور هوش مصنوعی فعلاً شلوغ است؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.";
 
 export const QUOTA_EXHAUSTED_MESSAGE =
-  "سهمیهٔ رایگان همهٔ کلیدهای هوش مصنوعی برای این لحظه مصرف شده است؛ چند دقیقه دیگر دوباره تلاش کنید.";
+  "سرویس هوش مصنوعی همین الان ظرفیت خالی ندارد. معمولاً چند ثانیه بیشتر طول نمی‌کشد — کمی صبر کن و دوباره بفرست.";
 
 export const MODEL_TIMEOUT_MESSAGE =
   "پاسخ هوش مصنوعی بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید (در صورت امکان پیام را کوتاه‌تر بنویسید).";
@@ -79,6 +79,26 @@ export class ProviderRequestError extends Error {
     this.provider = provider;
     this.status = status;
   }
+}
+
+/**
+ * پیام سهمیه با ذکر زمان واقعی انتظار.
+ *
+ * قبلاً همیشه «چند دقیقه دیگر» گفته می‌شد که هم نادرست بود (معمولاً چند ثانیه
+ * است) و هم کاربر را می‌ترساند که سهمیه‌اش واقعاً تمام شده. حالا اگر سرویس
+ * زمان دقیق داده باشد، همان به کاربر گفته می‌شود.
+ */
+export function buildQuotaMessage(providerLabel: string, retryAfterMs?: number): string {
+  const seconds = typeof retryAfterMs === "number" ? Math.ceil(retryAfterMs / 1000) : undefined;
+
+  if (seconds !== undefined && seconds > 0 && seconds <= 90) {
+    return `سرویس ${providerLabel} همین الان ظرفیت خالی ندارد. حدود ${seconds} ثانیهٔ دیگر دوباره بفرست 🙂`;
+  }
+  if (seconds !== undefined && seconds > 90) {
+    const minutes = Math.ceil(seconds / 60);
+    return `سرویس ${providerLabel} موقتاً به سقف مصرف خورده. حدود ${minutes} دقیقهٔ دیگر دوباره تلاش کن.`;
+  }
+  return `سرویس ${providerLabel} همین الان ظرفیت خالی ندارد؛ چند لحظه صبر کن و دوباره بفرست.`;
 }
 
 /** کد وضعیت HTTP مناسب برای هر خطای هوش مصنوعی. */

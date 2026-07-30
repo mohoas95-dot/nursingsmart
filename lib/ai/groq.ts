@@ -22,6 +22,7 @@
 
 import { ApiKeyPool, classifyFailure, parseRetryAfterMs } from "./key-pool";
 import {
+  buildQuotaMessage,
   MissingApiKeyError,
   ModelBusyError,
   ModelTimeoutError,
@@ -97,7 +98,11 @@ const TOTAL_BUDGET_MS = Math.max(6_000, Number(process.env.GROQ_TOTAL_BUDGET_MS)
  * برای مدل‌های reasoning، توکن‌های تفکر هم از همین سهم برداشت می‌شوند؛ پس سقف
  * سخاوتمندانه‌تری لازم است تا پاسخ وسط کار بریده نشود و JSON ناقص برنگردد.
  */
-const MAX_OUTPUT_TOKENS = Math.max(512, Number(process.env.GROQ_MAX_OUTPUT_TOKENS) || 4_096);
+// ⚠️ Groq مقدار max_completion_tokens را از سهمیهٔ TPM **رزرو** می‌کند، حتی اگر
+// مدل آن‌قدر تولید نکند. مقدار ۴۰۹۶ یعنی نصف سقف ۸۰۰۰ توکنیِ رایگان پیش از
+// نوشتن اولین کلمه مصرف شده بود. پاسخ واقعی این سیستم به‌ندرت از ۱۲۰۰ توکن
+// بیشتر می‌شود، پس ۱۵۰۰ هم امن است و هم سه برابر بودجهٔ بیشتری آزاد می‌کند.
+const MAX_OUTPUT_TOKENS = Math.max(512, Number(process.env.GROQ_MAX_OUTPUT_TOKENS) || 1_500);
 
 /**
  * دما: ۰٫۶ (مقدار پیشنهادی خود Groq برای GPT-OSS).
@@ -111,6 +116,12 @@ const TEMPERATURE = Number.isFinite(Number(process.env.GROQ_TEMPERATURE))
 
 /** سطح تلاش تفکر برای مدل‌های GPT-OSS: کم = تأخیر پایین، برای این کار کافی است. */
 const REASONING_EFFORT = (process.env.GROQ_REASONING_EFFORT || "low").toLowerCase();
+
+/**
+ * سقف تعداد فراخوانی واقعی API برای یک درخواست کاربر.
+ * محافظ اصلی سهمیه: بدون آن، یک پیام می‌توانست ۹ فراخوانی چندهزارتوکنی بزند.
+ */
+const MAX_CALLS_PER_REQUEST = Math.max(1, Number(process.env.GROQ_MAX_CALLS_PER_REQUEST) || 4);
 
 /** آیا این مدل از پارامترهای reasoning پشتیبانی می‌کند؟ */
 function isReasoningModel(model: string): boolean {
@@ -261,15 +272,30 @@ export async function generateGroqJson<T = Record<string, unknown>>(
   // اگر مدلی پارامترهای reasoning را نپذیرد، از آن به بعد بدون آن‌ها می‌فرستیم.
   let dropReasoningParams = false;
 
+  // سقف سخت تعداد فراخوانی برای یک درخواست منطقی.
+  //
+  // بدون این سقف، حلقهٔ «هر مدل × هر کلید» می‌توانست ۹ فراخوانی بزند و هر
+  // فراخوانی چند هزار توکن مصرف کند — یعنی یک پیام کاربر به‌تنهایی سقف
+  // دقیقه‌ای را رد می‌کرد و باعث ۴۲۹ شدن هر سه کلید می‌شد.
+  // ۴ تلاش کافی است: کلید ۱ و ۲ و ۳ روی مدل اصلی، به‌علاوهٔ یک مدل جایگزین.
+  let callsMade = 0;
+
   for (const model of MODEL_CHAIN) {
     const keys = groqKeyPool.order();
     for (let index = 0; index < keys.length; index++) {
       const keyState = keys[index];
+      if (callsMade >= MAX_CALLS_PER_REQUEST) {
+        console.warn(`[groq] سقف ${MAX_CALLS_PER_REQUEST} فراخوانی برای این درخواست پر شد؛ توقف برای حفظ سهمیه.`);
+        throw sawQuota
+          ? new QuotaExhaustedError(undefined, GROQ_PROVIDER, groqKeyPool.nextAvailableInMs())
+          : new ModelBusyError(undefined, GROQ_PROVIDER);
+      }
       if (remaining() <= 2_000) {
         throw sawQuota
           ? new QuotaExhaustedError(undefined, GROQ_PROVIDER, groqKeyPool.nextAvailableInMs())
           : new ModelTimeoutError(undefined, GROQ_PROVIDER);
       }
+      callsMade++;
 
       let outcome = await callGroqOnce(
         keyState.value,
@@ -355,11 +381,8 @@ export async function generateGroqJson<T = Record<string, unknown>>(
   );
 
   if (sawQuota) {
-    throw new QuotaExhaustedError(
-      "سهمیهٔ رایگان هر سه کلید Groq فعلاً تمام شده است؛ چند دقیقه دیگر دوباره تلاش کنید.",
-      GROQ_PROVIDER,
-      groqKeyPool.nextAvailableInMs(),
-    );
+    const waitMs = groqKeyPool.nextAvailableInMs();
+    throw new QuotaExhaustedError(buildQuotaMessage("گفت‌وگوی متنی", waitMs), GROQ_PROVIDER, waitMs);
   }
   if (sawTimeout && !sawBusy) {
     throw new ModelTimeoutError(undefined, GROQ_PROVIDER);

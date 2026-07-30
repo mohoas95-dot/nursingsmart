@@ -23,6 +23,7 @@
 import { GoogleGenAI, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
 import { ApiKeyPool, classifyFailure, parseRetryAfterMs } from "./key-pool";
 import {
+  buildQuotaMessage,
   MissingApiKeyError,
   ModelBusyError,
   ModelTimeoutError,
@@ -76,6 +77,9 @@ export const geminiKeyPool = new ApiKeyPool({
 
 const PER_CALL_TIMEOUT_MS = Math.max(5_000, Number(process.env.GEMINI_CALL_TIMEOUT_MS) || 24_000);
 const TOTAL_BUDGET_MS = Math.max(8_000, Number(process.env.GEMINI_TOTAL_BUDGET_MS) || 48_000);
+
+/** سقف تعداد فراخوانی واقعی API برای یک تصویر (محافظ سهمیه). */
+const MAX_CALLS_PER_REQUEST = Math.max(1, Number(process.env.GEMINI_MAX_CALLS_PER_REQUEST) || 4);
 
 /** کش کلاینت‌ها بر اساس کلید تا در هر فراخوانی شیء تازه ساخته نشود. */
 const clientCache = new Map<string, GoogleGenAI>();
@@ -157,15 +161,26 @@ export async function generateGeminiVision(
   let sawTimeout = false;
   let lastError: unknown;
 
+  // سقف سخت فراخوانی — همان منطق Groq. تصویر گران‌ترین ورودی است
+  // (یک عکس چند صد تا چند هزار توکن)، پس تکرار بی‌حساب سریع سهمیه را می‌سوزاند.
+  let callsMade = 0;
+
   for (const model of MODEL_CHAIN) {
     const keys = geminiKeyPool.order();
     for (let index = 0; index < keys.length; index++) {
       const keyState = keys[index];
+      if (callsMade >= MAX_CALLS_PER_REQUEST) {
+        console.warn(`[gemini] سقف ${MAX_CALLS_PER_REQUEST} فراخوانی برای این درخواست پر شد؛ توقف برای حفظ سهمیه.`);
+        throw sawQuota
+          ? new QuotaExhaustedError(undefined, GEMINI_PROVIDER, geminiKeyPool.nextAvailableInMs())
+          : new ModelBusyError(undefined, GEMINI_PROVIDER);
+      }
       if (remaining() <= 2_500) {
         throw sawQuota
           ? new QuotaExhaustedError(undefined, GEMINI_PROVIDER, geminiKeyPool.nextAvailableInMs())
           : new ModelTimeoutError(undefined, GEMINI_PROVIDER);
       }
+      callsMade++;
 
       try {
         const response = await callWithTimeout(
@@ -217,10 +232,11 @@ export async function generateGeminiVision(
   console.error("[gemini] همهٔ کلیدها و مدل‌های بینایی ناموفق بودند:", lastError);
 
   if (sawQuota) {
+    const waitMs = geminiKeyPool.nextAvailableInMs();
     throw new QuotaExhaustedError(
-      "سهمیهٔ رایگان هر سه کلید Gemini فعلاً تمام شده است؛ چند دقیقه دیگر دوباره تلاش کنید یا درخواست را متنی بنویسید.",
+      `${buildQuotaMessage("تحلیل تصویر", waitMs)} اگر عجله داری، همین درخواست را متنی بنویس — آن از سرویس دیگری استفاده می‌کند.`,
       GEMINI_PROVIDER,
-      geminiKeyPool.nextAvailableInMs(),
+      waitMs,
     );
   }
   if (sawTimeout) {

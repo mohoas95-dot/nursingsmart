@@ -23,7 +23,7 @@
  *   instance تازه یک بار کلید سوخته را امتحان کند و فوراً به کلید بعدی برود.
  */
 
-export type KeyFailureKind = "quota" | "invalid" | "busy" | "network";
+export type KeyFailureKind = "quota" | "daily_quota" | "invalid" | "busy" | "network";
 
 export interface KeyPoolOptions {
   /** نام سرویس برای لاگ‌ها (مثلاً "groq" یا "gemini"). */
@@ -50,10 +50,36 @@ interface KeyState {
   failures: number;
 }
 
-/** مدت قرنطینه پس از خوردن به سقف سهمیه (پیش‌فرض ۱۰ دقیقه). */
+/**
+ * مدت قرنطینه پس از خوردن به سقف سهمیه.
+ *
+ * ⚠️ درس گران‌قیمت: این مقدار قبلاً ۱۰ دقیقه بود و فاجعه ساخت.
+ * سقف‌های رایگان عمدتاً **دقیقه‌ای** هستند (TPM/RPM)، نه روزانه. وقتی Groq
+ * می‌گوید «۷ ثانیهٔ دیگر دوباره امتحان کن»، کنار گذاشتن کلید برای ۱۰ دقیقه
+ * یعنی هر سه کلید پشت سر هم می‌سوزند و کاربر پیام «سهمیهٔ هر سه کلید تمام شد»
+ * می‌گیرد، در حالی که در واقعیت فقط باید چند ثانیه صبر می‌کرد.
+ *
+ * حالا پیش‌فرض ۳۰ ثانیه است و مهم‌تر از آن، اگر سرویس هدر `retry-after` بدهد
+ * **دقیقاً به همان مقدار** احترام گذاشته می‌شود (نه بیشتر).
+ */
 const QUOTA_COOLDOWN_MS = Math.max(
-  30_000,
-  Number(process.env.AI_KEY_QUOTA_COOLDOWN_MS) || 10 * 60_000,
+  1_000,
+  Number(process.env.AI_KEY_QUOTA_COOLDOWN_MS) || 30_000,
+);
+
+/**
+ * سقف قرنطینه برای خطای سهمیه. حتی اگر سرویس عدد بزرگی پیشنهاد دهد، بیش از این
+ * کلید را کنار نمی‌گذاریم مگر آنکه واقعاً سهمیهٔ روزانه تمام شده باشد.
+ */
+const QUOTA_COOLDOWN_MAX_MS = Math.max(
+  QUOTA_COOLDOWN_MS,
+  Number(process.env.AI_KEY_QUOTA_COOLDOWN_MAX_MS) || 5 * 60_000,
+);
+
+/** قرنطینهٔ بلند فقط وقتی سرویس صریحاً از تمام‌شدن سهمیهٔ روزانه خبر دهد. */
+const DAILY_QUOTA_COOLDOWN_MS = Math.max(
+  60_000,
+  Number(process.env.AI_KEY_DAILY_QUOTA_COOLDOWN_MS) || 30 * 60_000,
 );
 
 /** مدت قرنطینه برای کلید نامعتبر/باطل (پیش‌فرض ۶ ساعت). */
@@ -77,6 +103,8 @@ function cooldownFor(kind: KeyFailureKind): number {
   switch (kind) {
     case "quota":
       return QUOTA_COOLDOWN_MS;
+    case "daily_quota":
+      return DAILY_QUOTA_COOLDOWN_MS;
     case "invalid":
       return INVALID_KEY_COOLDOWN_MS;
     case "busy":
@@ -84,6 +112,26 @@ function cooldownFor(kind: KeyFailureKind): number {
     default:
       return BUSY_COOLDOWN_MS;
   }
+}
+
+/**
+ * محاسبهٔ مدت قرنطینه.
+ *
+ * قاعدهٔ کلیدی: اگر سرویس گفت «X ثانیه دیگر»، **دقیقاً همان** را رعایت کن.
+ * قبلاً از Math.max استفاده می‌شد که یعنی پیشنهاد ۷ ثانیه‌ای سرویس نادیده
+ * گرفته می‌شد و کلید ۱۰ دقیقه می‌خوابید. حالا:
+ *   - retry-after موجود  → همان مقدار (با کمی حاشیه) و محدود به سقف
+ *   - retry-after نبود   → مقدار پیش‌فرض همان نوع خطا
+ */
+function resolveCooldown(kind: KeyFailureKind, retryAfterMs?: number): number {
+  if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+    // ۲۵۰ms حاشیه تا دقیقاً لبهٔ پنجرهٔ سرویس نخوریم
+    const suggested = retryAfterMs + 250;
+    if (kind === "quota") return Math.min(suggested, QUOTA_COOLDOWN_MAX_MS);
+    if (kind === "busy" || kind === "network") return Math.min(suggested, QUOTA_COOLDOWN_MAX_MS);
+    return suggested;
+  }
+  return cooldownFor(kind);
 }
 
 /**
@@ -215,12 +263,27 @@ export class ApiKeyPool {
     this.ensureLoaded();
     const state = this.keys.find(item => item.value === key);
     if (!state) return;
-    const cooldown = Math.max(cooldownFor(kind), retryAfterMs ?? 0);
+    const cooldown = resolveCooldown(kind, retryAfterMs);
     state.cooldownUntil = Date.now() + cooldown;
     state.lastFailure = kind;
     state.failures++;
     console.warn(
       `[${this.provider}] کلید ${state.label} به دلیل «${kind}» برای ${Math.round(cooldown / 1000)} ثانیه کنار گذاشته شد.`,
+    );
+  }
+
+  /**
+   * مجموع فراخوانی‌های موفق و ناموفق از زمان بالا آمدن این نمونه.
+   * برای پاسخ به «واقعاً چند درخواست فرستادم؟» در مسیر /api/ai/health.
+   */
+  totals(): { successes: number; failures: number } {
+    this.ensureLoaded();
+    return this.keys.reduce(
+      (accumulator, state) => ({
+        successes: accumulator.successes + state.successes,
+        failures: accumulator.failures + state.failures,
+      }),
+      { successes: 0, failures: 0 },
     );
   }
 
@@ -239,12 +302,24 @@ export class ApiKeyPool {
   }
 }
 
-/** تشخیص نوع خطا از روی وضعیت HTTP و متن پیام سرویس. */
+/**
+ * تشخیص نوع خطا از روی وضعیت HTTP و متن پیام سرویس.
+ *
+ * تفکیک «سقف دقیقه‌ای» از «سقف روزانه» حیاتی است:
+ *   - سقف دقیقه‌ای (TPM/RPM) چند ثانیه بعد آزاد می‌شود → قرنطینهٔ کوتاه
+ *   - سقف روزانه (RPD/TPD) تا فردا آزاد نمی‌شود → قرنطینهٔ بلند
+ * اگر هر دو را یکسان بگیریم، یک محدودیت گذرای چندثانیه‌ای باعث می‌شود
+ * هر سه کلید دقایق طولانی از دسترس خارج شوند.
+ */
 export function classifyFailure(status: number | undefined, message: string): KeyFailureKind {
   const text = String(message || "");
   if (status === 401 || status === 403) return "invalid";
   if (/api key not valid|invalid api key|unauthorized|permission denied|api_key_invalid/i.test(text)) {
     return "invalid";
+  }
+  // سقف روزانه — فقط وقتی سرویس صریحاً «per day / daily» گفته باشد
+  if (/per ?day|daily|RPD|TPD|requests per day|tokens per day/i.test(text)) {
+    return "daily_quota";
   }
   if (status === 429) return "quota";
   if (/quota|rate.?limit|resource_exhausted|too many requests|insufficient|billing/i.test(text)) {
@@ -259,17 +334,43 @@ export function classifyFailure(status: number | undefined, message: string): Ke
 
 /** استخراج مقدار `retry-after` از هدر یا بدنهٔ خطا (ثانیه → میلی‌ثانیه). */
 export function parseRetryAfterMs(headerValue: string | null | undefined, message?: string): number | undefined {
+  const CAP_MS = 60 * 60_000;
+
   if (headerValue) {
-    const seconds = Number(headerValue);
-    if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, 60 * 60_000);
+    // معمولاً ثانیهٔ ساده («2») است، اما گاهی پسوند دارد («7.66s»)
+    const numeric = Number(String(headerValue).replace(/[^\d.]/g, ""));
+    if (Number.isFinite(numeric) && numeric > 0) return Math.min(numeric * 1000, CAP_MS);
   }
-  const match = /try again in ([\d.]+)\s*(s|seconds|m|minutes)/i.exec(String(message || ""));
-  if (match) {
-    const amount = Number(match[1]);
-    if (Number.isFinite(amount)) {
-      const multiplier = /^m/i.test(match[2]) ? 60_000 : 1000;
-      return Math.min(amount * multiplier, 60 * 60_000);
+
+  const text = String(message || "");
+
+  // «Please try again in 7.66s» / «try again in 2 minutes»
+  const tryAgain = /try again in\s*([\d.]+)\s*(ms|s|sec|seconds|m|min|minutes|h|hours)?/i.exec(text);
+  if (tryAgain) {
+    const amount = Number(tryAgain[1]);
+    if (Number.isFinite(amount) && amount > 0) {
+      const unit = (tryAgain[2] || "s").toLowerCase();
+      const multiplier = unit.startsWith("h")
+        ? 3_600_000
+        : unit.startsWith("m") && unit !== "ms"
+          ? 60_000
+          : unit === "ms"
+            ? 1
+            : 1000;
+      return Math.min(amount * multiplier, CAP_MS);
     }
   }
+
+  // Gemini: «retryDelay":"13s"» داخل بدنهٔ خطا
+  const retryDelay = /"?retry_?delay"?\s*[:=]\s*"?([\d.]+)\s*(ms|s|m)?"?/i.exec(text);
+  if (retryDelay) {
+    const amount = Number(retryDelay[1]);
+    if (Number.isFinite(amount) && amount > 0) {
+      const unit = (retryDelay[2] || "s").toLowerCase();
+      const multiplier = unit === "ms" ? 1 : unit === "m" ? 60_000 : 1000;
+      return Math.min(amount * multiplier, CAP_MS);
+    }
+  }
+
   return undefined;
 }

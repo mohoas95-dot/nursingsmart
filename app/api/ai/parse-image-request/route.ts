@@ -9,6 +9,7 @@ import {
 import { extractJsonObject } from "@/lib/ai/json";
 import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
+import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
 
 /**
  * مسیر تحلیل «تصویر» چت‌باکس — موتور: Google Gemini 2.5 Flash.
@@ -183,22 +184,18 @@ OUTPUT RULES (CRITICAL):
 Respond ONLY with a JSON object matching the response schema. Do not write any prose outside the JSON.
 `;
 
-    const context = {
-      targetMonth: { year, month, totalDays },
-      personnel: personnel || null,
-      userNote: typeof note === "string" ? note.slice(0, 1000) : "",
-      calendarDays: Array.isArray(calendarDays)
-        ? calendarDays.map(day => ({
-            day: day.day,
-            dayOfWeek: day.dayOfWeek,
-            weekdayName: day.weekdayName,
-            isHoliday: day.isHoliday,
-            holidayTitle: day.holidayTitle,
-          }))
-        : [],
-      existingRequests: Array.isArray(existingRequests) ? existingRequests : [],
-      scheduleHistory: Array.isArray(scheduleHistory) ? scheduleHistory : [],
-    };
+    // زمینهٔ فشرده (نه JSON خام) — تصویر خودش گران است، پس متن همراهش
+    // باید تا حد ممکن کم‌حجم باشد تا سهمیهٔ توکن هدر نرود.
+    const compactContext = buildCompactContext({
+      year: Number(year),
+      month: Number(month),
+      totalDays,
+      personnel,
+      calendarDays,
+      existingRequests: existingRequests as never,
+      scheduleHistory: scheduleHistory as never,
+      note: typeof note === "string" ? note : undefined,
+    });
 
     const { response, model, keyLabel } = await generateGeminiVision({
       contents: [
@@ -207,8 +204,9 @@ Respond ONLY with a JSON object matching the response schema. Do not write any p
           parts: [
             {
               text:
-                "CONTEXT_JSON:\n" +
-                JSON.stringify(context) +
+                "CONTEXT:\n" +
+                compactContext +
+                "\n\n" + CALENDAR_FORMAT_LEGEND +
                 "\n\nRead the Persian text in the attached image and respond with the requested JSON object.",
             },
             {

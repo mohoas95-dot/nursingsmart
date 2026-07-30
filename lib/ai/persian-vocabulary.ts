@@ -84,34 +84,18 @@ export const SCOPE_LABELS_SHORT: Readonly<Record<string, string>> = {
  * (❌ اشتباه / ✅ درست) پایدار رعایتش می‌کنند.
  */
 export const PERSIAN_VOCABULARY_LESSON = `
-PERSIAN SCHEDULING VOCABULARY — MEMORIZE AND OBEY EXACTLY:
+VOCABULARY — obey exactly:
 
-A) «روز» (day-of-week) vs «تاریخ» (day-of-month) — THE MOST IMPORTANT DISTINCTION:
-   - «روزهای فرد» / «روز فرد» / «روزهای فرد هفته» = WEEKDAYS یکشنبه، سه‌شنبه، پنج‌شنبه → scope="weekly_odd"
-   - «روزهای زوج» / «روز زوج» / «روزهای زوج هفته» = WEEKDAYS شنبه، دوشنبه، چهارشنبه → scope="weekly_even"
-   - «تاریخ‌های فرد» / «تاریخ فرد» / «روزهای فرد ماه» = DAY NUMBERS 1,3,5,7,... → scope="odd"
-   - «تاریخ‌های زوج» / «تاریخ زوج» / «روزهای زوج ماه» = DAY NUMBERS 2,4,6,8,... → scope="even"
-   جمعه NEVER belongs to weekly_even or weekly_odd.
-   If the user says a bare «روزهای فرد» with no other clue, it means WEEKDAYS (weekly_odd), NOT day numbers.
-   If the user says a bare «تاریخ‌های فرد», it means DAY NUMBERS (odd).
+A) «روز» (weekday) vs «تاریخ» (day-number) — most important distinction:
+   «روزهای فرد»/«روز فرد» = یکشنبه، سه‌شنبه، پنج‌شنبه → scope="weekly_odd"
+   «روزهای زوج»/«روز زوج» = شنبه، دوشنبه، چهارشنبه → scope="weekly_even"
+   «تاریخ‌های فرد»/«تاریخ فرد» = 1,3,5,7… → scope="odd"
+   «تاریخ‌های زوج»/«تاریخ زوج» = 2,4,6,8… → scope="even"
+   جمعه NEVER belongs to weekly_even/weekly_odd. Bare «روزهای فرد» = weekday (weekly_odd), not day numbers.
 
-B) SHIFT NAMING — always use these exact Persian words when speaking to the user:
-   - M   → «صبح»
-   - E   → «عصر»
-   - N   → «شب»
-   - ME  → «لانگ» (or «صبح-عصر»)
-   - EN  → «عصر-شب»
-   - MN  → «شب-صبح»
-   - MEN → «شیفت ۲۴»           ← ALWAYS say «شیفت ۲۴».
-                                  ❌ NEVER say «تمام روز», «کل روز», «۲۴ ساعته», «all day».
-                                  ✅ Correct: «شیفت ۲۴ برای ۱۳اُم»
-   - OFF → «آف»
-   - L   → «مرخصی»
+B) SHIFT NAMES when speaking: M=«صبح» E=«عصر» N=«شب» ME=«لانگ» EN=«عصر-شب» MN=«شب-صبح» OFF=«آف» L=«مرخصی»
+   MEN = «شیفت ۲۴» always. ❌ NEVER say «تمام روز»/«کل روز»/«۲۴ ساعته». ✅ «شیفت ۲۴ برای ۱۳اُم»
 
-C) REFERRING TO DATES — always use the ordinal «اُم» form with Persian digits:
-   ✅ Correct: «۵اُم»، «۷اُم»، «تاریخ‌های ۵اُم و ۷اُم»، «۱۲اُم تا ۱۵اُم»
-   ❌ Wrong:   «روز 5»، «روز ۵»، «روزهای ۵، ۷»، «day 5»، «۵ و ۷»
-   When listing several dates in your reply, write «تاریخ‌های ۵اُم، ۷اُم و ۹اُم».
-   (This applies ONLY to prose you speak to the user. Inside the JSON field
-    "selectedDays" you MUST still use plain Latin integers: [5, 7, 9].)
+C) DATES in prose: use «۵اُم»، «تاریخ‌های ۵اُم، ۷اُم و ۹اُم» with Persian digits.
+   ❌ «روز 5»، «روزهای ۵، ۷». But inside JSON "selectedDays" use Latin integers: [5,7,9].
 `;

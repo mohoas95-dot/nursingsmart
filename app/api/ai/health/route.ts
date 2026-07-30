@@ -36,6 +36,10 @@ export async function GET() {
       modelChain: getGroqModelChain(),
       keysConfigured: groqKeyPool.size(),
       keysAvailableNow: groqKeyPool.availableCount(),
+      // شمارش واقعی فراخوانی‌ها از زمان آخرین راه‌اندازی این نمونه.
+      // برای پاسخ به «واقعاً چند درخواست فرستادم؟» مفید است.
+      callsSinceStart: groqKeyPool.totals(),
+      nextKeyFreeInSeconds: Math.ceil((groqKeyPool.nextAvailableInMs() ?? 0) / 1000),
       keys: groqKeys,
       envNames: ["GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_API_KEY_3"],
     },
@@ -46,6 +50,8 @@ export async function GET() {
       modelChain: getGeminiVisionModelChain(),
       keysConfigured: geminiKeyPool.size(),
       keysAvailableNow: geminiKeyPool.availableCount(),
+      callsSinceStart: geminiKeyPool.totals(),
+      nextKeyFreeInSeconds: Math.ceil((geminiKeyPool.nextAvailableInMs() ?? 0) / 1000),
       keys: geminiKeys,
       envNames: ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3"],
     },
@@ -62,6 +68,21 @@ export async function GET() {
     payload.hints.push("هیچ کلید Gemini تنظیم نشده است؛ تحلیل تصویر کار نخواهد کرد. GEMINI_API_KEY را در Vercel اضافه کنید.");
   } else if (geminiKeyPool.size() < 3) {
     payload.hints.push(`فقط ${geminiKeyPool.size()} کلید Gemini تنظیم شده؛ برای پایداری بیشتر تا ۳ کلید اضافه کنید.`);
+  }
+
+  // ⚠️ نکتهٔ حیاتی که اغلب باعث سردرگمی می‌شود:
+  // چند کلید فقط وقتی سهمیه را چند برابر می‌کند که هر کلید به حساب/پروژهٔ
+  // **جداگانه‌ای** تعلق داشته باشد. اگر هر سه کلید را از یک حساب ساخته باشید،
+  // هر سه از یک کاسه می‌خورند و چرخش کلید هیچ سود سهمیه‌ای ندارد.
+  if (groqKeyPool.size() > 1) {
+    payload.hints.push(
+      "یادآوری: سهمیهٔ Groq در سطح «سازمان/حساب» حساب می‌شود. سه کلید از یک حساب = یک سهمیه. برای سه برابر شدن واقعی، هر کلید باید از یک حساب Groq جدا باشد.",
+    );
+  }
+  if (geminiKeyPool.size() > 1) {
+    payload.hints.push(
+      "یادآوری: سهمیهٔ Gemini در سطح «پروژهٔ Google Cloud» حساب می‌شود. سه کلید از یک پروژه = یک سهمیه. برای سه برابر شدن واقعی، هر کلید باید از یک پروژهٔ جدا باشد.",
+    );
   }
 
   return NextResponse.json(payload, {
