@@ -4,7 +4,7 @@
  * موتور تحلیل «متن» چت‌باکس: Groq (Llama).
  *
  * چرا Groq برای متن؟
- *   - مدل‌های Llama 3.3 70B / 3.1 8B روی سخت‌افزار LPU با سرعت بسیار بالا
+ *   - مدل‌های باز (GPT-OSS، Qwen) روی سخت‌افزار LPU با سرعت بسیار بالا
  *     (چند صد توکن بر ثانیه) و در پلن رایگان اجرا می‌شوند.
  *   - سهمیهٔ رایگان روزانه سخاوتمندانه است و با ۳ کلید عملاً سه برابر می‌شود.
  *
@@ -37,16 +37,27 @@ const GROQ_ENDPOINT = process.env.GROQ_BASE_URL
   : "https://api.groq.com/openai/v1/chat/completions";
 
 /**
- * مدل اصلی متنی. پیش‌فرض روی Llama 3.3 70B (قوی‌ترین گزینهٔ رایگان Groq برای
- * درک محاوره و اصطلاحات فارسی پرستاری) تنظیم شده است.
+ * مدل اصلی متنی: OpenAI GPT-OSS 120B.
+ *
+ * چرا ارتقا از Llama 3.3 70B؟
+ *   ۱. کیفیت گفت‌وگو: مدل ۱۲۰ میلیارد پارامتری با قابلیت reasoning، پاسخ‌های
+ *      فارسیِ به‌مراتب طبیعی‌تر، گرم‌تر و انسانی‌تر می‌دهد. Llama 3.3 در فارسی
+ *      لحن خشک و ترجمه‌ای داشت که کاربر هم همین را گزارش کرد.
+ *   ۲. سرعت بیشتر: ~۵۰۰ توکن بر ثانیه در برابر ~۲۸۰ توکن Llama 3.3.
+ *   ۳. بقا: Groq اعلام کرده llama-3.3-70b-versatile و llama-3.1-8b-instant در
+ *      تاریخ ۲۰۲۶/۰۸/۱۶ خاموش می‌شوند و جایگزین رسمی همین gpt-oss است.
+ *      ماندن روی Llama یعنی خرابی قطعی چت‌باکس در کمتر از یک ماه.
  */
-export const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+export const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 /**
- * زنجیرهٔ جایگزین: وقتی هر سه کلید روی مدل اصلی به سقف خوردند، مدل سبک‌تر با
- * سهمیهٔ روزانهٔ بسیار بالاتر (۸B) وارد عمل می‌شود تا چت‌باکس هرگز از کار نیفتد.
+ * زنجیرهٔ جایگزین — همگی مدل‌های زنده و پشتیبانی‌شدهٔ Groq:
+ *   • gpt-oss-20b : سریع‌ترین مدل Groq (~۱۰۰۰ tps)، جانشین رسمی Llama 3.1 8B.
+ *   • qwen3.6-27b : باهوش‌ترین مدل Groq طبق سنجهٔ Artificial Analysis؛ در زبان‌های
+ *                   غیرانگلیسی از جمله فارسی قوی است.
+ * هیچ مدل منسوخ‌شده‌ای در این زنجیره نیست.
  */
-const DEFAULT_GROQ_FALLBACK_MODELS = ["llama-3.1-8b-instant", "openai/gpt-oss-20b"];
+const DEFAULT_GROQ_FALLBACK_MODELS = ["openai/gpt-oss-20b", "qwen/qwen3.6-27b"];
 
 const CONFIGURED_FALLBACKS = (process.env.GROQ_FALLBACK_MODELS || "")
   .split(",")
@@ -81,13 +92,35 @@ const PER_CALL_TIMEOUT_MS = Math.max(4_000, Number(process.env.GROQ_CALL_TIMEOUT
 /** سقف کل بودجهٔ زمانی یک درخواست منطقی (کمتر از maxDuration مسیر API). */
 const TOTAL_BUDGET_MS = Math.max(6_000, Number(process.env.GROQ_TOTAL_BUDGET_MS) || 42_000);
 
-/** حداکثر توکن خروجی. */
-const MAX_OUTPUT_TOKENS = Math.max(256, Number(process.env.GROQ_MAX_OUTPUT_TOKENS) || 2_048);
+/**
+ * حداکثر توکن خروجی.
+ * برای مدل‌های reasoning، توکن‌های تفکر هم از همین سهم برداشت می‌شوند؛ پس سقف
+ * سخاوتمندانه‌تری لازم است تا پاسخ وسط کار بریده نشود و JSON ناقص برنگردد.
+ */
+const MAX_OUTPUT_TOKENS = Math.max(512, Number(process.env.GROQ_MAX_OUTPUT_TOKENS) || 4_096);
 
-/** دمای پایین: خروجی ساختاریافته و قابل پیش‌بینی. */
+/**
+ * دما: ۰٫۶ (مقدار پیشنهادی خود Groq برای GPT-OSS).
+ * عمداً از ۰٫۲ قبلی بالاتر آمده — دمای خیلی پایین باعث می‌شد جمله‌ها قالبی و
+ * تکراری شوند و همان «خشک و بی‌روح» بودنی را بسازند که کاربر گزارش کرد.
+ * ساختار JSON با response_format تضمین می‌شود، نه با پایین نگه‌داشتن دما.
+ */
 const TEMPERATURE = Number.isFinite(Number(process.env.GROQ_TEMPERATURE))
   ? Number(process.env.GROQ_TEMPERATURE)
-  : 0.2;
+  : 0.6;
+
+/** سطح تلاش تفکر برای مدل‌های GPT-OSS: کم = تأخیر پایین، برای این کار کافی است. */
+const REASONING_EFFORT = (process.env.GROQ_REASONING_EFFORT || "low").toLowerCase();
+
+/** آیا این مدل از پارامترهای reasoning پشتیبانی می‌کند؟ */
+function isReasoningModel(model: string): boolean {
+  return /gpt-oss|qwen3\.6|minimax/i.test(model);
+}
+
+/** آیا این مدل پارامتر reasoning_effort سبک/متوسط/زیاد را می‌پذیرد؟ (فقط GPT-OSS) */
+function supportsReasoningEffort(model: string): boolean {
+  return /gpt-oss/i.test(model);
+}
 
 export interface GroqMessage {
   role: "system" | "user" | "assistant";
@@ -126,10 +159,37 @@ async function callGroqOnce(
   model: string,
   options: GroqJsonOptions,
   timeoutMs: number,
+  /** اگر true باشد، پارامترهای reasoning حذف می‌شوند (پس از خطای ۴۰۰ مربوط به آن‌ها). */
+  withoutReasoningParams = false,
 ): Promise<GroqCallOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    // بدنهٔ پایه، مشترک بین همهٔ مدل‌ها.
+    const requestBody: Record<string, unknown> = {
+      model,
+      temperature: TEMPERATURE,
+      // مدل‌های جدید Groq نام max_completion_tokens را ترجیح می‌دهند؛
+      // max_tokens هنوز پذیرفته می‌شود اما منسوخ شمرده شده است.
+      max_completion_tokens: options.maxTokens ?? MAX_OUTPUT_TOKENS,
+      // JSON mode: خروجی همیشه یک شیء JSON معتبر است.
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: options.systemPrompt },
+        ...options.messages,
+      ],
+    };
+
+    if (isReasoningModel(model) && !withoutReasoningParams) {
+      // در حالت JSON mode، مقدار "raw" خطای ۴۰۰ می‌دهد (توکن‌های <think> با
+      // JSON قاطی می‌شوند). "hidden" فقط پاسخ نهایی را برمی‌گرداند که دقیقاً
+      // همان چیزی است که می‌خواهیم و توکن خروجی را هم هدر نمی‌دهد.
+      requestBody.reasoning_format = "hidden";
+      if (supportsReasoningEffort(model)) {
+        requestBody.reasoning_effort = REASONING_EFFORT;
+      }
+    }
+
     const response = await fetch(GROQ_ENDPOINT, {
       method: "POST",
       headers: {
@@ -137,17 +197,7 @@ async function callGroqOnce(
         Authorization: `Bearer ${apiKey}`,
       },
       signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        temperature: TEMPERATURE,
-        max_tokens: options.maxTokens ?? MAX_OUTPUT_TOKENS,
-        // JSON mode: خروجی همیشه یک شیء JSON معتبر است.
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: options.systemPrompt },
-          ...options.messages,
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -208,6 +258,9 @@ export async function generateGroqJson<T = Record<string, unknown>>(
   let lastError: string | undefined;
   let lastStatus: number | undefined;
 
+  // اگر مدلی پارامترهای reasoning را نپذیرد، از آن به بعد بدون آن‌ها می‌فرستیم.
+  let dropReasoningParams = false;
+
   for (const model of MODEL_CHAIN) {
     const keys = groqKeyPool.order();
     for (let index = 0; index < keys.length; index++) {
@@ -218,12 +271,33 @@ export async function generateGroqJson<T = Record<string, unknown>>(
           : new ModelTimeoutError(undefined, GROQ_PROVIDER);
       }
 
-      const outcome = await callGroqOnce(
+      let outcome = await callGroqOnce(
         keyState.value,
         model,
         options,
         Math.min(PER_CALL_TIMEOUT_MS, Math.max(3_500, remaining() - 1_000)),
+        dropReasoningParams,
       );
+
+      // اگر خطای ۴۰۰ به پارامترهای reasoning مربوط بود، همان کلید/مدل را یک بار
+      // بدون آن پارامترها تکرار می‌کنیم. این کار سرویس را در برابر تغییرات آیندهٔ
+      // Groq مقاوم می‌کند، بدون اینکه کاربر خطایی ببیند.
+      if (
+        !outcome.ok &&
+        outcome.status === 400 &&
+        !dropReasoningParams &&
+        /reasoning|think/i.test(outcome.errorMessage || "")
+      ) {
+        console.warn(`[groq] مدل «${model}» پارامترهای reasoning را نپذیرفت؛ تلاش مجدد بدون آن‌ها.`);
+        dropReasoningParams = true;
+        outcome = await callGroqOnce(
+          keyState.value,
+          model,
+          options,
+          Math.min(PER_CALL_TIMEOUT_MS, Math.max(3_500, remaining() - 1_000)),
+          true,
+        );
+      }
 
       if (outcome.ok) {
         const parsed = extractJsonObject<T>(outcome.content);

@@ -7,6 +7,13 @@ import { ResetRequestList } from './components/auth/ResetRequestList';
 import { useResetRequestCount } from './components/auth/useResetRequestCount';
 import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
 import { AiEngineBadge } from '../features/shared/components/AiEngineBadge';
+import { readImageFileAsDataUrl, IMAGE_UNREADABLE_MESSAGE } from '../lib/image-file';
+import {
+  formatDayList,
+  getShiftLabel,
+  SCOPE_LABELS,
+  SCOPE_LABELS_SHORT,
+} from '../lib/ai/persian-vocabulary';
 import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
 import { isValidIranianNationalId, toEnglishDigits } from '../lib/auth/validation';
 import { useOfficialCalendar } from '../hooks/useOfficialCalendar';
@@ -190,7 +197,7 @@ const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
   accentClass: string;
 }> = [
   { id: 'en', title: 'EN', subtitle: 'عصر و شب', accentClass: 'from-indigo-500 to-violet-600' },
-  { id: 'men', title: 'MEN', subtitle: 'شیفت 24', accentClass: 'from-sky-500 to-cyan-600' },
+  { id: 'men', title: 'MEN', subtitle: 'شیفت ۲۴', accentClass: 'from-sky-500 to-cyan-600' },
   { id: 'long_off', title: 'لانگ آف', subtitle: 'ME یک‌روزدرمیان', accentClass: 'from-teal-500 to-emerald-600' },
   { id: 'off', title: 'OFF 😴', subtitle: 'آف با انتخاب روز', accentClass: 'from-slate-600 to-slate-800' },
   { id: 'leave', title: 'مرخصی 🏖', subtitle: 'انتخاب روزهای مرخصی', accentClass: 'from-amber-500 to-orange-600' },
@@ -201,9 +208,9 @@ const QUICK_REQUEST_SCOPE_OPTIONS: ReadonlyArray<{
   title: string;
   subtitle: string;
 }> = [
-  { id: 'odd', title: 'تاریخ فرد', subtitle: '۱، ۳، ۵...' },
-  { id: 'even', title: 'تاریخ زوج', subtitle: '۲، ۴، ۶...' },
-  { id: 'weekly_odd', title: 'روز فرد', subtitle: 'یکشنبه، سه‌شنبه، پنجشنبه' },
+  { id: 'odd', title: 'تاریخ فرد', subtitle: '۱اُم، ۳اُم، ۵اُم…' },
+  { id: 'even', title: 'تاریخ زوج', subtitle: '۲اُم، ۴اُم، ۶اُم…' },
+  { id: 'weekly_odd', title: 'روز فرد', subtitle: 'یکشنبه، سه‌شنبه، پنج‌شنبه' },
   { id: 'weekly_even', title: 'روز زوج', subtitle: 'شنبه، دوشنبه، چهارشنبه' },
 ];
 
@@ -230,7 +237,7 @@ class ConcurrencyConflictError extends Error {
 // روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
 //
 // معماری دو موتوره:
-//   • متن  → /api/ai/chat-requests        (Groq / Llama 3.3 70B)
+//   • متن  → /api/ai/chat-requests        (Groq / GPT-OSS 120B)
 //   • تصویر → /api/ai/parse-image-request  (Gemini 2.5 Flash)
 // چرخش بین ۳ کلید هر سرویس در سمت سرور انجام می‌شود؛ اینجا فقط تلاش مجدد
 // سبک برای خطاهای گذرای شبکه‌ای/سروری داریم تا چت‌باکس هرگز قفل نشود.
@@ -2123,6 +2130,11 @@ export default function Home() {
   const [handwrittenImageFile, setHandwrittenImageFile] = useState<File | null>(null);
   const [handwrittenImagePreview, setHandwrittenImagePreview] = useState<string | null>(null);
   const [isHandwrittenParsing, setIsHandwrittenParsing] = useState<boolean>(false);
+  // در حال «زودخوانی» فایل بلافاصله پس از انتخاب (پیش از ارسال)
+  const [isHandwrittenReading, setIsHandwrittenReading] = useState<boolean>(false);
+  // محتوای خوانده‌شدهٔ عکس (Data URL) که هنگام انتخاب فایل ذخیره می‌شود تا موقع
+  // ارسال دیگر به ارجاع فایل — که ممکن است بیات شده باشد — نیازی نباشد.
+  const handwrittenDataUrlRef = React.useRef<string | null>(null);
   const [handwrittenParseError, setHandwrittenParseError] = useState<string | null>(null);
   const handwrittenFileInputRef = React.useRef<HTMLInputElement | null>(null);
   // نگهداری آخرین ObjectURL در ref تا در زمان unmount قطعی آزاد شود
@@ -2290,25 +2302,20 @@ export default function Home() {
     }
   };
 
+  // خلاصهٔ فارسی یک درخواست. واژگان از lib/ai/persian-vocabulary می‌آید تا
+  // دقیقاً همان چیزی باشد که هوش مصنوعی هم در چت می‌گوید:
+  //   • MEN همیشه «شیفت ۲۴» است، نه «تمام روز»
+  //   • روزها به شکل «۵اُم، ۷اُم» نوشته می‌شوند، نه «روزهای 5، 7»
+  //   • «تاریخ زوج/فرد» (شمارهٔ روز ماه) از «روز زوج/فرد» (روز هفته) جدا است
   const getRequestSummaryText = (r: ShiftRequest): string => {
-    const shiftLabel = r.preferredShift === 'M' ? 'صبح (M)' :
-                       r.preferredShift === 'E' ? 'عصر (E)' :
-                       r.preferredShift === 'N' ? 'شب (N)' :
-                       r.preferredShift === 'ME' ? 'عصر-صبح (ME)' :
-                       r.preferredShift === 'EN' ? 'شب-عصر (EN)' :
-                       r.preferredShift === 'MN' ? 'شب-صبح (MN)' :
-                       r.preferredShift === 'MEN' ? 'تمام روز (MEN)' :
-                       r.preferredShift === 'OFF' ? 'آف قطعی' :
-                       r.preferredShift === 'L' ? 'مرخصی' : r.preferredShift;
+    const shiftLabel = r.preferredShift === 'OFF'
+      ? 'آف قطعی'
+      : getShiftLabel(r.preferredShift);
 
     let timeLabel = '';
-    if (r.scope === 'all') timeLabel = 'کل روزهای ماه';
-    else if (r.scope === 'even') timeLabel = 'روزهای زوج ماه';
-    else if (r.scope === 'odd') timeLabel = 'روزهای فرد ماه';
-    else if (r.scope === 'weekly_even') timeLabel = 'روزهای زوج هفته';
-    else if (r.scope === 'weekly_odd') timeLabel = 'روزهای فرد هفته';
-    else if (r.scope === 'range') timeLabel = `بازه ${r.startDate} تا ${r.endDate}`;
-    else if (r.scope === 'custom_days') timeLabel = `روزهای ${r.selectedDays?.join('، ')}`;
+    if (r.scope === 'range') timeLabel = `بازه ${r.startDate} تا ${r.endDate}`;
+    else if (r.scope === 'custom_days') timeLabel = `تاریخ‌های ${formatDayList(r.selectedDays)}`;
+    else timeLabel = SCOPE_LABELS_SHORT[r.scope as string] || '';
 
     if (r.requestType === 'avoid_shift') {
       return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
@@ -3777,19 +3784,32 @@ export default function Home() {
     setHandwrittenImageFile(null);
     setHandwrittenImagePreview(null);
     setHandwrittenParseError(null);
+    // محتوای زودخوانده‌شده هم آزاد می‌شود تا حافظه اشغال نماند
+    handwrittenDataUrlRef.current = null;
     if (handwrittenFileInputRef.current) {
       handwrittenFileInputRef.current.value = '';
     }
   }, []);
 
-  const handleHandwrittenFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // انتخاب فایل + «زودخوانی» فوری محتوا.
+  //
+  // چرا همین‌جا می‌خوانیم و نه موقع ارسال؟
+  //   خطای NotReadableError («The requested file could not be read…») وقتی رخ
+  //   می‌دهد که ارجاع فایل بین انتخاب و ارسال بیات شود — روی موبایل خیلی رایج
+  //   است (عکس تازهٔ دوربین، فایل روی Google Photos/iCloud، یا کدگذاری مجدد
+  //   HEIC در iOS). با خواندن محتوا در همان لحظهٔ انتخاب، آن پنجرهٔ زمانی عملاً
+  //   حذف می‌شود و اگر هم مشکلی باشد، کاربر فوراً و با پیام فارسی می‌فهمد،
+  //   نه بعد از نوشتن پیام و زدن دکمهٔ ارسال.
+  const handleHandwrittenFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       clearHandwrittenImage();
       return;
     }
     const mimeType = (file.type || '').toLowerCase();
-    if (!ACCEPTED_IMAGE_TYPES.includes(mimeType)) {
+    // برخی دستگاه‌ها برای HEIC مقدار type را خالی می‌فرستند؛ در آن حالت به پسوند نگاه می‌کنیم.
+    const hasAcceptedExtension = /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || '');
+    if (!ACCEPTED_IMAGE_TYPES.includes(mimeType) && !(mimeType === '' && hasAcceptedExtension)) {
       setHandwrittenParseError('فرمت تصویر پشتیبانی نمی‌شود. فقط JPG، PNG، WebP و HEIC مجاز هستند.');
       if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
       return;
@@ -3799,22 +3819,26 @@ export default function Home() {
       if (handwrittenFileInputRef.current) handwrittenFileInputRef.current.value = '';
       return;
     }
+
     setHandwrittenParseError(null);
     if (handwrittenImagePreview) {
       URL.revokeObjectURL(handwrittenImagePreview);
     }
     setHandwrittenImageFile(file);
     setHandwrittenImagePreview(URL.createObjectURL(file));
-  };
 
-  // تبدیل فایل به data URL (base64) فقط در حافظهٔ RAM — هیچ فایلی روی دیسک نوشته نمی‌شود.
-  const readFileAsDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-      reader.onerror = () => reject(reader.error || new Error('خواندن فایل ناموفق بود.'));
-      reader.readAsDataURL(file);
-    });
+    // زودخوانی: محتوا را همین حالا در حافظه می‌گیریم تا موقع ارسال به فایل نیاز نباشد.
+    setIsHandwrittenReading(true);
+    try {
+      const dataUrl = await readImageFileAsDataUrl(file);
+      handwrittenDataUrlRef.current = dataUrl;
+    } catch (error) {
+      handwrittenDataUrlRef.current = null;
+      setHandwrittenParseError(error instanceof Error ? error.message : IMAGE_UNREADABLE_MESSAGE);
+    } finally {
+      setIsHandwrittenReading(false);
+    }
+  };
 
   // ارسال تصویر دست‌نوشته به API: متن + تصویر هر دو اختیاری‌اند، اما حداقل یکی باید باشد.
   // پاسخ API همان آرایهٔ requests ساختاریافته است که در chatProposedRequests می‌نشیند
@@ -3832,6 +3856,10 @@ export default function Home() {
     }
     if (!handwrittenImageFile) {
       setHandwrittenParseError('ابتدا یک تصویر انتخاب کنید.');
+      return;
+    }
+    if (isHandwrittenReading) {
+      setHandwrittenParseError('عکس هنوز در حال آماده‌سازی است؛ یک لحظه صبر کن.');
       return;
     }
     setIsHandwrittenParsing(true);
@@ -3865,7 +3893,11 @@ export default function Home() {
 
     let parsedDataUrl = '';
     try {
-      parsedDataUrl = await readFileAsDataUrl(handwrittenImageFile);
+      // اول از محتوای «زودخوانده‌شده» استفاده می‌کنیم (در لحظهٔ انتخاب فایل گرفته شد).
+      // فقط اگر به هر دلیلی موجود نبود، دوباره از روی خودِ فایل می‌خوانیم — این
+      // مسیر دوم همان جایی است که قبلاً NotReadableError می‌داد، و حالا خودش هم
+      // چندلایه و مقاوم است.
+      parsedDataUrl = handwrittenDataUrlRef.current || (await readImageFileAsDataUrl(handwrittenImageFile));
 
       // آماده‌سازی context (مشابه sendChatMessage ولی فقط context ضروری)
       const contextBody = {
@@ -6576,7 +6608,7 @@ export default function Home() {
                                         <option value="ME">عصر-صبح (ME)</option>
                                         <option value="EN">شب-عصر (EN)</option>
                                         <option value="MN">شب-صبح (MN)</option>
-                                        <option value="MEN">ترکیبی (MEN)</option>
+                                        <option value="MEN">شیفت ۲۴ (MEN)</option>
                                         <option value="L">مرخصی</option>
                                       </select>
                                     ) : (
@@ -6608,7 +6640,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">شب</span> شب (N)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> کل روز (MEN)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> شیفت ۲۴ (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
                 </div>
@@ -7242,6 +7274,11 @@ export default function Home() {
                             <div className={`text-rose-600 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
                               ⚠️ {handwrittenParseError}
                             </div>
+                          ) : isHandwrittenReading ? (
+                            <div className={`text-slate-600 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              در حال آماده‌سازی عکس...
+                            </div>
                           ) : isHandwrittenParsing ? (
                             <div className={`text-indigo-700 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
                               <Loader2 className="w-3 h-3 animate-spin" />
@@ -7249,12 +7286,12 @@ export default function Home() {
                             </div>
                           ) : handwrittenImagePreview ? (
                             <div className={`text-slate-500 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
-                              برای ارسال، روی دکمهٔ «ارسال تصویر» بزن. فایلی روی سرور ذخیره نمی‌شود.
+                              عکس آماده است ✅ برای ارسال، روی دکمهٔ «ارسال تصویر» بزن. فایلی روی سرور ذخیره نمی‌شود.
                             </div>
                           ) : null}
                         </div>
 
-                        {handwrittenImagePreview && !isHandwrittenParsing && (
+                        {handwrittenImagePreview && !isHandwrittenParsing && !isHandwrittenReading && (
                           <button
                             type="button"
                             onClick={handleSendHandwrittenImage}
@@ -7564,33 +7601,17 @@ export default function Home() {
                                   {r.requestType === 'pattern' ? (
                                     <span className="text-violet-700 font-bold">{r.patternSteps?.join(' / ') || 'الگوی سفارشی'}</span>
                                   ) : r.requestType === 'avoid_shift' ? (
-                                    <span className="text-rose-600 font-bold">شیفت {
-                                      r.preferredShift === 'M' ? 'صبح' :
-                                      r.preferredShift === 'E' ? 'عصر' :
-                                      r.preferredShift === 'N' ? 'شب' :
-                                      r.preferredShift === 'ME' ? 'عصر-صبح' :
-                                      r.preferredShift === 'EN' ? 'شب-عصر' : r.preferredShift
-                                    } نباشم</span>
+                                    <span className="text-rose-600 font-bold">شیفت {getShiftLabel(r.preferredShift)} نباشم</span>
                                   ) : (
-                                    r.preferredShift === 'M' ? 'صبح' :
-                                    r.preferredShift === 'E' ? 'عصر' :
-                                    r.preferredShift === 'N' ? 'شب' :
-                                    r.preferredShift === 'ME' ? 'عصر-صبح (ME)' :
-                                    r.preferredShift === 'EN' ? 'شب-عصر (EN)' :
-                                    r.preferredShift === 'MN' ? 'شب-صبح (MN)' :
-                                    r.preferredShift === 'MEN' ? 'ترکیبی کل روز (MEN)' :
-                                    r.preferredShift === 'OFF' ? 'آف' :
-                                    r.preferredShift === 'L' ? 'مرخصی روزانه' : r.preferredShift
+                                    getShiftLabel(r.preferredShift)
                                   )}
                                 </td>
                                 <td className="px-6 py-3.5 text-slate-600 text-xs font-bold text-slate-500">
-                                  {r.scope === 'all' && 'تمام روزهای ماه'}
-                                  {r.scope === 'even' && 'تاریخ زوج ماه'}
-                                  {r.scope === 'odd' && 'تاریخ فرد ماه'}
-                                  {r.scope === 'weekly_even' && 'روزهای زوج هفته (شنبه، دوشنبه، چهارشنبه)'}
-                                  {r.scope === 'weekly_odd' && 'روزهای فرد هفته (یک‌شنبه، سه‌شنبه، پنج‌شنبه)'}
-                                  {r.scope === 'range' && `از ${r.startDate} تا ${r.endDate}`}
-                                  {r.scope === 'custom_days' && `روزهای انتخابی: ${r.selectedDays?.join('، ')}`}
+                                  {r.scope === 'range'
+                                    ? `از ${r.startDate} تا ${r.endDate}`
+                                    : r.scope === 'custom_days'
+                                      ? `تاریخ‌های ${formatDayList(r.selectedDays)}`
+                                      : SCOPE_LABELS[r.scope as string] || ''}
                                 </td>
                                 <td className="px-6 py-3.5 text-center">
                                   {(role === 'admin' || role === 'headnurse') ? (
@@ -8961,7 +8982,7 @@ export default function Home() {
                         <option value="ME">عصر-صبح (ME)</option>
                         <option value="EN">شب-عصر (EN)</option>
                         <option value="MN">شب-صبح (MN)</option>
-                        <option value="MEN">ترکیبی کل روز (MEN)</option>
+                        <option value="MEN">شیفت ۲۴ (MEN)</option>
                       </select>
                     </div>
                   )}
@@ -8994,11 +9015,11 @@ export default function Home() {
                   className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500"
                   id="select-req-scope"
                 >
-                  <option value="all">تمام روزهای ماه</option>
-                  <option value="even">تاریخ زوج ماه</option>
-                  <option value="odd">تاریخ فرد ماه</option>
+                  <option value="all">همهٔ روزهای ماه</option>
+                  <option value="even">تاریخ‌های زوج ماه (۲اُم، ۴اُم، ۶اُم…)</option>
+                  <option value="odd">تاریخ‌های فرد ماه (۱اُم، ۳اُم، ۵اُم…)</option>
                   <option value="weekly_even">روزهای زوج هفته (شنبه، دوشنبه، چهارشنبه)</option>
-                  <option value="weekly_odd">روزهای فرد هفته (یک‌شنبه، سه‌شنبه، پنج‌شنبه)</option>
+                  <option value="weekly_odd">روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه)</option>
                   <option value="custom_days">روزهای انتخابی از تقویم (کلیک و تیک روی روزهای خاص)</option>
                 </select>
               </div>

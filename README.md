@@ -39,8 +39,15 @@ PostgreSQL/Prisma setup, national-ID login, session security, first-login passwo
 
 | ورودی کاربر | سرویس | مدل پیش‌فرض | مسیر API | کلیدها |
 |---|---|---|---|---|
-| پیام **متنی** | Groq | `llama-3.3-70b-versatile` | `POST /api/ai/chat-requests` | `GROQ_API_KEY`, `GROQ_API_KEY_2`, `GROQ_API_KEY_3` |
+| پیام **متنی** | Groq | `openai/gpt-oss-120b` | `POST /api/ai/chat-requests` | `GROQ_API_KEY`, `GROQ_API_KEY_2`, `GROQ_API_KEY_3` |
 | **تصویر** (OCR فارسی) | Google Gemini | `gemini-2.5-flash` | `POST /api/ai/parse-image-request` | `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `GEMINI_API_KEY_3` |
+
+> **چرا GPT-OSS 120B و نه Llama؟** سه دلیل: لحن فارسی به‌مراتب گرم‌تر و طبیعی‌تر،
+> سرعت تقریباً دو برابر (~۵۰۰ در برابر ~۲۸۰ توکن بر ثانیه)، و مهم‌تر از همه
+> **بقا** — Groq اعلام کرده `llama-3.3-70b-versatile` و `llama-3.1-8b-instant`
+> در تاریخ **۲۰۲۶/۰۸/۱۶** خاموش می‌شوند و جانشین رسمی‌شان همین GPT-OSS است.
+> تست `tests/ai-model-policy.test.ts` نگهبان این موضوع است و اگر کسی مدل
+> منسوخ‌شده‌ای را برگرداند، بیلد را قرمز می‌کند.
 
 ### جداسازی کامل دو موتور
 
@@ -84,8 +91,10 @@ GET /api/ai/health
 |---|---|---|
 | `GROQ_API_KEY` / `_2` / `_3` | — | سه کلید رایگان Groq (متن) |
 | `GEMINI_API_KEY` / `_2` / `_3` | — | سه کلید رایگان Gemini (تصویر) |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | مدل متنی اصلی |
-| `GROQ_FALLBACK_MODELS` | `llama-3.1-8b-instant,openai/gpt-oss-20b` | زنجیرهٔ جایگزین متن (با کاما) |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | مدل متنی اصلی |
+| `GROQ_FALLBACK_MODELS` | `openai/gpt-oss-20b,qwen/qwen3.6-27b` | زنجیرهٔ جایگزین متن (با کاما) |
+| `GROQ_TEMPERATURE` | `0.6` | دما؛ پایین‌تر = خشک‌تر، بالاتر = خلاق‌تر |
+| `GROQ_REASONING_EFFORT` | `low` | عمق تفکر مدل: `low`/`medium`/`high` |
 | `GROQ_CALL_TIMEOUT_MS` | `20000` | تایم‌اوت هر فراخوانی Groq |
 | `GROQ_TOTAL_BUDGET_MS` | `42000` | سقف کل زمان متن (کمتر از `maxDuration=60`) |
 | `GEMINI_VISION_MODEL` | `gemini-2.5-flash` | مدل بینایی اصلی |

@@ -6,6 +6,7 @@ import {
   isRetryableAiError,
 } from "@/lib/ai";
 import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
+import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 
 /**
  * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور: Groq.
@@ -61,11 +62,12 @@ RULES FOR PARSING:
 8. Day resolution:
    - «۱۰ام» / «دهم» / «10» → day 10
    - ranges like «۱۲ام تا ۱۵ام» → scope="custom_days", selectedDays=[12,13,14,15] (preferred and safest)
-   - «روزهای زوج» → scope="even"، «روزهای فرد» → scope="odd"
-   - «روزهای زوج هفته» (شنبه/دوشنبه/چهارشنبه) → scope="weekly_even"
-   - «روزهای فرد هفته» (یکشنبه/سه‌شنبه/پنجشنبه) → scope="weekly_odd"
    - «کل ماه» → scope="all"
    - specific days «۳ و ۷ و ۹» → scope="custom_days", selectedDays=[3,7,9]
+   - For odd/even, apply section (A) of the vocabulary lesson below EXACTLY:
+     «روزهای فرد»/«روز فرد» → weekly_odd  |  «روزهای زوج»/«روز زوج» → weekly_even
+     «تاریخ‌های فرد»/«تاریخ فرد» → odd     |  «تاریخ‌های زوج»/«تاریخ زوج» → even
+${PERSIAN_VOCABULARY_LESSON}
 
 CRITICAL — NEVER USE PLACEHOLDERS:
   - NEVER set any field to "undefined", "null", "?" or an empty placeholder.

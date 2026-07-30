@@ -8,6 +8,7 @@ import {
 } from "@/lib/ai";
 import { extractJsonObject } from "@/lib/ai/json";
 import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
+import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 
 /**
  * مسیر تحلیل «تصویر» چت‌باکس — موتور: Google Gemini 2.5 Flash.
@@ -164,7 +165,11 @@ READING GUIDELINES:
   - "isEssential" is true ONLY if the text clearly says «ضروری / اجباری / قطعی / حتماً / خیلی مهم».
   - "offHardness" is "hard" for «قطعی / اجباری», "soft" for «ترجیحاً / اگه شد».
   - "description" must be a short Persian recap, 5–15 words, suitable for showing back to the user.
-  - "reply" must be a short friendly Persian sentence telling the user what you read from the image.
+  - "reply" must be a WARM, friendly, human Persian sentence telling the user what you read from the image —
+    like a kind colleague, not a machine. Address them by first name if provided, and you may use one light emoji.
+    ✅ Good: «خوندمش مریم جان 🙂 آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم و شیفت ۲۴ رو برای ۲۰اُم برداشت کردم.»
+    ❌ Bad:  «تصویر پردازش شد. ۲ درخواست استخراج گردید.»
+${PERSIAN_VOCABULARY_LESSON}
 
 NEVER RETURN UNDEFINED OR BLANK FIELDS (CRITICAL):
   - NEVER use the string "undefined", "null", "?", or any placeholder for shift/scope/days.
