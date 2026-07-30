@@ -1,9 +1,12 @@
-import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+import { generateDeepSeekJSON, ModelBusyError, ModelTimeoutError } from "@/lib/deepseek";
 
-// Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
+// Node runtime + generous ceiling: the retry/fallback logic in lib/deepseek.ts
 // keeps its own (shorter) budget, so we always answer before Vercel kills us.
+//
+// Hybrid architecture: this route (plain-text parsing, no images) runs on
+// DeepSeek (deepseek-chat) with Multi-Key Fallback / Round-Robin across
+// DEEPSEEK_API_KEY_1/2/3.
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -14,8 +17,6 @@ export async function POST(req: NextRequest) {
     if (!text || typeof text !== "string") {
       return NextResponse.json({ error: "متن درخواست نمی‌تواند خالی باشد." }, { status: 400 });
     }
-
-    const ai = getGeminiClient();
 
     const systemPrompt = `
 You are an expert bilingual AI assistant for a Persian hospital nursing scheduling system.
@@ -91,52 +92,29 @@ CRITICAL — NEVER USE PLACEHOLDERS:
     hospital practice (M for morning صبح, E for عصر, N for شب, ME for لانگ, EN for عصر و شب,
     MEN for ۲۴/24 ساعته, OFF for آف, L for مرخصی).
 
-Respond ONLY with the filled JSON array as defined in the response schema. Keep descriptions neat and in Persian.
+OUTPUT FORMAT (CRITICAL — RESPOND ONLY WITH JSON):
+Return ONLY a single JSON object (no markdown fences, no prose) of this exact shape:
+{
+  "requests": [
+    {
+      "requestType": "shift" | "OFF" | "leave" | "avoid_shift",
+      "preferredShift": "M" | "E" | "N" | "ME" | "EN" | "MN" | "MEN" | "OFF" | "L",
+      "scope": "all" | "even" | "odd" | "weekly_even" | "weekly_odd" | "custom_days" | "range",
+      "startDate": string,
+      "endDate": string,
+      "selectedDays": number[],
+      "description": string
+    }
+  ]
+}
+Keep descriptions neat and in Persian. Omit fields that do not apply rather than sending null/"undefined".
 `;
 
-    const response = await generateContentWithRetry(ai, {
-      contents: text,
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            requests: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  requestType: {
-                    type: Type.STRING,
-                    enum: ["shift", "OFF", "leave", "avoid_shift"]
-                  },
-                  preferredShift: {
-                    type: Type.STRING,
-                    enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"]
-                  },
-                  scope: {
-                    type: Type.STRING,
-                    enum: ["all", "even", "odd", "weekly_even", "weekly_odd", "custom_days", "range"]
-                  },
-                  startDate: { type: Type.STRING },
-                  endDate: { type: Type.STRING },
-                  selectedDays: {
-                    type: Type.ARRAY,
-                    items: { type: Type.INTEGER }
-                  },
-                  description: { type: Type.STRING }
-                },
-                required: ["requestType", "scope"]
-              }
-            }
-          },
-          required: ["requests"]
-        }
-      }
-    });
+    const parsedData = await generateDeepSeekJSON<any>([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: text },
+    ], { temperature: 0.3, maxTokens: 1536 });
 
-    const parsedData = JSON.parse(response.text || "{}");
     const rawRequests = Array.isArray(parsedData.requests) ? parsedData.requests : [];
 
     // حذف آیتم‌های ناقص: اگر requestType یا scope نامعتبر باشد، یا preferredShift placeholder باشد، حذف شود.
@@ -174,7 +152,7 @@ Respond ONLY with the filled JSON array as defined in the response schema. Keep 
     if (error instanceof ModelTimeoutError) {
       return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
     }
-    console.error("Error parsing smart requests via Gemini API:", error);
+    console.error("Error parsing smart requests via DeepSeek API:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش هوش مصنوعی" },
       { status: 500 }

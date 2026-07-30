@@ -1,28 +1,28 @@
 import { GoogleGenAI, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
+import { loadApiKeys, withApiKeyRotation } from "./apiKeyRotation";
+import { ModelBusyError, ModelTimeoutError, MODEL_BUSY_MESSAGE, MODEL_TIMEOUT_MESSAGE } from "./aiErrors";
 
 /**
  * Model selection strategy
  * -----------------------------------------------------------------------
- * The newest "flash" previews are the ones Google throttles first: they are
- * the models that most often answer 503 "model is overloaded / high demand".
- * That is exactly what the Vercel logs were showing:
+ * Gemini is now used ONLY for vision / OCR of Persian handwritten shift
+ * notes (the hybrid architecture routes plain text chat to DeepSeek — see
+ * lib/deepseek.ts). "gemini-2.5-flash" is the default because it currently
+ * has the best accuracy for Persian handwriting recognition.
  *
- *   Gemini model "gemini-3.6-flash" attempt 1/2 is busy; retrying.
- *   Gemini model "gemini-3.5-flash" attempt 1/2 is busy; retrying.
- *
- * So the default chain now starts with a *stable, generally-available* model
- * and falls back to the even cheaper / higher-quota lite models, which are
- * almost never saturated. Everything stays overridable from Vercel env vars.
+ * The newest "flash" previews are sometimes throttled first (503 "model is
+ * overloaded / high demand"), so a fallback chain is still kept and stays
+ * fully overridable from environment variables.
  */
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 // Ordered fallback chain, used automatically when the primary model is
 // temporarily unavailable (503 "high demand") or rate-limited (429).
 // Override with a comma-separated GEMINI_FALLBACK_MODELS env var.
 const DEFAULT_FALLBACK_MODELS = [
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash-lite",
   "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-1.5-flash",
 ];
 
 export const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "")
@@ -39,33 +39,37 @@ export function getModelChain(): string[] {
   return [...MODEL_CHAIN];
 }
 
-// Persian message shown to the user when every model in the chain is busy.
-export const MODEL_BUSY_MESSAGE =
-  "سرور هوش مصنوعی فعلاً شلوغ است؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.";
+// Re-exported for backward compatibility with existing imports across the
+// codebase (routes import these directly from "@/lib/gemini").
+export { MODEL_BUSY_MESSAGE, MODEL_TIMEOUT_MESSAGE, ModelBusyError, ModelTimeoutError };
 
-export const MODEL_TIMEOUT_MESSAGE =
-  "پاسخ هوش مصنوعی بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید (در صورت امکان پیام را کوتاه‌تر بنویسید).";
+// ---------------------------------------------------------------------------
+// Multi-Key Fallback / Round-Robin for Gemini
+// ---------------------------------------------------------------------------
+// GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3 are tried in order.
+// On a rate-limit (429), quota-exceeded, or any transient failure (5xx,
+// timeout) the request automatically rotates to the next key — without
+// interrupting the user — before eventually also rotating through the model
+// fallback chain on the working key. See lib/apiKeyRotation.ts.
+// ---------------------------------------------------------------------------
 
-export class ModelBusyError extends Error {
-  constructor(message: string = MODEL_BUSY_MESSAGE) {
-    super(message);
-    this.name = "ModelBusyError";
-  }
+export function loadGeminiKeys(): string[] {
+  return loadApiKeys({
+    envPrefix: "GEMINI_API_KEY",
+    count: 3,
+    // Back-compat: also accept the legacy single-key env vars.
+    legacyEnvNames: ["GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"],
+  });
 }
 
-export class ModelTimeoutError extends Error {
-  constructor(message: string = MODEL_TIMEOUT_MESSAGE) {
-    super(message);
-    this.name = "ModelTimeoutError";
+export function getGeminiClient(apiKey?: string) {
+  const key = apiKey || loadGeminiKeys()[0];
+  if (!key) {
+    throw new Error(
+      "هیچ کلید Gemini تنظیم نشده است. لطفاً GEMINI_API_KEY_1 (و در صورت نیاز _2/_3) را تنظیم کنید."
+    );
   }
-}
-
-export function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not defined in environment variables.");
-  }
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({ apiKey: key });
 }
 
 // Detects transient capacity errors from the Gemini API: HTTP 503 (model
@@ -78,6 +82,16 @@ function isModelBusyError(error: unknown): boolean {
   return /high demand|unavailable|overloaded|resource_exhausted|quota|rate.?limit|deadline|internal error|\b429\b|\b500\b|\b503\b|\b504\b/i.test(message);
 }
 
+// A key that is invalid / unauthorized / suspended: rotate to the next key
+// immediately instead of retrying the same broken key.
+function isKeyInvalidError(error: unknown): boolean {
+  const candidate = error as { status?: number | string; code?: number | string; message?: string } | null;
+  const status = Number(candidate?.status ?? candidate?.code);
+  if (status === 401 || status === 403) return true;
+  const message = String(candidate?.message ?? error ?? "");
+  return /api key not valid|invalid api key|permission denied|unauthenticated|forbidden/i.test(message);
+}
+
 // A model name that this project/key does not have access to (404 / 400
 // "not found"): skip straight to the next model instead of burning retries.
 function isModelUnavailableError(error: unknown): boolean {
@@ -86,6 +100,14 @@ function isModelUnavailableError(error: unknown): boolean {
   const message = String(candidate?.message ?? error ?? "");
   if (status === 404) return true;
   return /not found|is not supported|does not exist|unsupported model|permission denied/i.test(message);
+}
+
+// Combined predicate used by the outer API-key rotation layer: any error
+// that is either a busy/rate-limit condition OR an invalid-key condition
+// should cause a rotation to the next GEMINI_API_KEY.
+function isKeyRotationRetryableError(error: unknown): boolean {
+  if (error instanceof ModelBusyError || error instanceof ModelTimeoutError) return true;
+  return isModelBusyError(error) || isKeyInvalidError(error) || isAbortError(error);
 }
 
 // Some models reject the thinkingConfig knob; in that case retry without it.
@@ -99,9 +121,9 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const ATTEMPTS_PER_MODEL = Math.max(1, Number(process.env.GEMINI_ATTEMPTS_PER_MODEL) || 2);
 
-// Hard ceiling for one logical request (all models + retries). Kept well
-// under the serverless function's maxDuration so we can always return a
-// friendly JSON error instead of letting Vercel kill the function.
+// Hard ceiling for one logical request (all keys + models + retries). Kept
+// well under the serverless function's maxDuration so we can always return
+// a friendly JSON error instead of letting Vercel kill the function.
 const TOTAL_BUDGET_MS = Math.max(5000, Number(process.env.GEMINI_TOTAL_BUDGET_MS) || 26000);
 
 // Per single API call timeout — prevents one hanging call from eating the
@@ -153,19 +175,14 @@ function isAbortError(error: unknown): boolean {
 }
 
 /**
- * Calls generateContent with per-call timeout, jittered exponential backoff
- * and automatic model fallback.
- *
- * - Only transient errors (429/503/500/504/timeout) trigger retry/fallback.
- * - A model the key cannot access is skipped immediately.
- * - The whole operation is bounded by TOTAL_BUDGET_MS, so the HTTP route
- *   always answers before the serverless function times out.
+ * Runs the model-fallback-chain loop (unchanged behaviour) against a single,
+ * already-authenticated GoogleGenAI client/key.
  */
-export async function generateContentWithRetry(
+async function generateContentOnClient(
   ai: GoogleGenAI,
   params: Omit<GenerateContentParameters, "model">,
+  startedAt: number,
 ): Promise<GenerateContentResponse> {
-  const startedAt = Date.now();
   const remaining = () => TOTAL_BUDGET_MS - (Date.now() - startedAt);
   let lastBusyError: unknown;
   let requestParams = withThinkingConfig(params);
@@ -196,6 +213,10 @@ export async function generateContentWithRetry(
           attempt--;
           continue;
         }
+        if (isKeyInvalidError(error)) {
+          // Let the outer key-rotation layer switch to the next API key.
+          throw error;
+        }
         if (isModelUnavailableError(error)) {
           console.warn(`Gemini model "${model}" is not available for this API key; skipping to next model.`);
           lastBusyError = lastBusyError ?? error;
@@ -216,5 +237,61 @@ export async function generateContentWithRetry(
   }
 
   console.error("All Gemini models in the chain are busy:", lastBusyError);
-  throw new ModelBusyError();
+  throw lastBusyError ?? new ModelBusyError();
+}
+
+/**
+ * Calls generateContent with per-call timeout, jittered exponential backoff,
+ * automatic model fallback, AND automatic API-key rotation.
+ *
+ * Multi-Key Fallback / Round-Robin: GEMINI_API_KEY_1 is tried first; on a
+ * rate-limit (429), quota-exceeded, invalid-key, or any transient failure it
+ * automatically rotates to GEMINI_API_KEY_2, then _3, WITHOUT interrupting
+ * the user's request. Only after every key is exhausted is a friendly error
+ * (ModelBusyError) thrown.
+ *
+ * - Only transient errors (429/503/500/504/timeout) trigger retry/fallback.
+ * - A model the key cannot access is skipped immediately.
+ * - The whole operation is bounded by TOTAL_BUDGET_MS, so the HTTP route
+ *   always answers before the serverless function times out.
+ */
+export async function generateContentWithRetry(
+  aiOrParams: GoogleGenAI | Omit<GenerateContentParameters, "model">,
+  maybeParams?: Omit<GenerateContentParameters, "model">,
+): Promise<GenerateContentResponse> {
+  // Backward-compatible dual signature:
+  //   generateContentWithRetry(ai, params)          -- legacy call sites
+  //   generateContentWithRetry(params)               -- new call sites that
+  //                                                      want key rotation
+  const usingLegacySignature = maybeParams !== undefined;
+  const params = usingLegacySignature ? maybeParams! : (aiOrParams as Omit<GenerateContentParameters, "model">);
+
+  if (usingLegacySignature) {
+    // Caller already built a client for a specific key (older code path);
+    // just run the model-fallback loop on it, no key rotation possible.
+    return generateContentOnClient(aiOrParams as GoogleGenAI, params, Date.now());
+  }
+
+  const apiKeys = loadGeminiKeys();
+  const startedAt = Date.now();
+
+  try {
+    return await withApiKeyRotation(
+      "GEMINI",
+      apiKeys,
+      async apiKey => {
+        const ai = new GoogleGenAI({ apiKey });
+        return generateContentOnClient(ai, params, startedAt);
+      },
+      isKeyRotationRetryableError,
+    );
+  } catch (error) {
+    if (isModelBusyError(error) || isKeyInvalidError(error)) {
+      throw new ModelBusyError();
+    }
+    if (isAbortError(error)) {
+      throw new ModelTimeoutError();
+    }
+    throw error;
+  }
 }

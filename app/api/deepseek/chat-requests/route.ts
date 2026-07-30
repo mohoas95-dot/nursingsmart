@@ -1,9 +1,13 @@
-import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+import { generateDeepSeekJSON, ModelBusyError, ModelTimeoutError } from "@/lib/deepseek";
 
-// Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
+// Node runtime + generous ceiling: the retry/fallback logic in lib/deepseek.ts
 // keeps its own (shorter) budget, so we always answer before Vercel kills us.
+//
+// Hybrid architecture: this route (plain-text chat / structured request
+// extraction) runs on DeepSeek (deepseek-chat) with Multi-Key Fallback /
+// Round-Robin across DEEPSEEK_API_KEY_1/2/3. Vision/OCR of handwritten notes
+// still uses Gemini — see app/api/gemini/parse-handwritten-shift/route.ts.
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -82,10 +86,9 @@ export async function POST(req: NextRequest) {
     }
 
     const totalDays = calendarDays.length || 31;
-    const ai = getGeminiClient();
 
     const systemPrompt = `
-You are a warm Persian chat assistant running on Google Gemini inside a hospital nursing scheduling app.
+You are a warm Persian chat assistant running on DeepSeek inside a hospital nursing scheduling app.
 Speak conversational Persian, friendly and concise. The user is a nurse/personnel. If a first name is provided, greet and refer to them naturally by first name.
 
 Your goal is to turn natural Persian scheduling conversations into clean structured shift requests.
@@ -125,8 +128,30 @@ UNDERSTANDING REQUIREMENTS:
 - Use scheduleHistory to infer likely routine/pattern only as a suggestion in reply. Do not fabricate a final structured pattern unless the user confirms or clearly asks for it.
 - Use existingRequests to warn if the new request seems excessive or conflicting, but do not refuse; explain no guarantee.
 
-OUTPUT RULES:
-Return only JSON matching the schema.
+OUTPUT RULES (CRITICAL — RESPOND ONLY WITH JSON):
+Return ONLY a single JSON object (no markdown fences, no prose outside JSON) matching EXACTLY this shape:
+{
+  "status": "ready" | "clarification" | "chat",
+  "reply": string,
+  "summary": string,
+  "warnings": string[],
+  "questions": string[],
+  "requests": [
+    {
+      "requestType": "shift" | "OFF" | "leave" | "pattern" | "avoid_shift",
+      "preferredShift": "M" | "E" | "N" | "ME" | "EN" | "MN" | "MEN" | "OFF" | "L",
+      "patternSteps": string[],
+      "isEssential": boolean,
+      "offHardness": "hard" | "soft",
+      "scope": "all" | "even" | "odd" | "weekly_even" | "weekly_odd" | "custom_days" | "range",
+      "startDate": string,
+      "endDate": string,
+      "selectedDays": number[],
+      "description": string
+    }
+  ]
+}
+Omit fields that do not apply to a given request item rather than sending null/"undefined".
 status meanings:
 - "ready": clean requests are extracted and ready for user confirmation.
 - "clarification": ask AT MOST one question because a critical detail (dates/shift) is genuinely missing; requests must be [].
@@ -139,6 +164,7 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
 - Mention EVERY item of requests in reply/summary, one short clause per item (e.g. «صبح تک در روزهای غیرتعطیل»، «۲۴ ساعته برای ۱۳ مرداد»، «آف در مابقی تعطیلات»).
 - NEVER announce a request, pattern or shift in reply/summary that is NOT present in the requests array. If something cannot be expressed as a structured item, leave it out of the spoken summary too (you may mention it only as a caveat in warnings).
 - If you produce 3 items, describe 3 items; if 1, describe 1. What the assistant says must equal what the user sees in the analysis panel.
+Respond only with the JSON object described above — never wrap it in markdown code fences and never add commentary outside of it.
 `;
 
     const context = {
@@ -158,57 +184,14 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
       })),
     };
 
-    const response = await generateContentWithRetry(ai, {
-      contents: `CONTEXT_JSON:\n${JSON.stringify(context)}\n\nAnalyze the conversation and respond with the requested JSON object.`,
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            status: { type: Type.STRING, enum: ["ready", "clarification", "chat"] },
-            reply: { type: Type.STRING },
-            summary: { type: Type.STRING },
-            warnings: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            questions: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            requests: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  requestType: { type: Type.STRING, enum: ["shift", "OFF", "leave", "pattern", "avoid_shift"] },
-                  preferredShift: { type: Type.STRING, enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"] },
-                  patternSteps: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING, enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"] }
-                  },
-                  isEssential: { type: Type.BOOLEAN },
-                  offHardness: { type: Type.STRING, enum: ["hard", "soft"] },
-                  scope: { type: Type.STRING, enum: ["all", "even", "odd", "weekly_even", "weekly_odd", "custom_days", "range"] },
-                  startDate: { type: Type.STRING },
-                  endDate: { type: Type.STRING },
-                  selectedDays: {
-                    type: Type.ARRAY,
-                    items: { type: Type.INTEGER }
-                  },
-                  description: { type: Type.STRING }
-                },
-                required: ["requestType", "scope"]
-              }
-            }
-          },
-          required: ["status", "reply", "requests"]
-        }
-      }
-    });
+    const parsedData = await generateDeepSeekJSON<any>([
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: `CONTEXT_JSON:\n${JSON.stringify(context)}\n\nAnalyze the conversation and respond with the requested JSON object.`,
+      },
+    ], { temperature: 0.4, maxTokens: 2048 });
 
-    const parsedData = JSON.parse(response.text || "{}");
     const status = ["ready", "clarification", "chat"].includes(parsedData.status) ? parsedData.status : "chat";
     const normalizedRequests = status === "ready"
       ? (Array.isArray(parsedData.requests) ? parsedData.requests : [])
@@ -231,7 +214,7 @@ SYNC RULE (CRITICAL — reply/summary must match requests EXACTLY):
     if (error instanceof ModelTimeoutError) {
       return NextResponse.json({ error: error.message, retryable: true }, { status: 504 });
     }
-    console.error("Error in Gemini request chat:", error);
+    console.error("Error in DeepSeek request chat:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در گفت‌وگوی هوشمند" },
       { status: 500 }

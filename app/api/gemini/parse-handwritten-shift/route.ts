@@ -1,6 +1,6 @@
 import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-import { generateContentWithRetry, getGeminiClient, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
+import { generateContentWithRetry, ModelBusyError, ModelTimeoutError } from "@/lib/gemini";
 
 // Node runtime + generous ceiling: the retry/fallback logic in lib/gemini.ts
 // keeps its own (shorter) budget, so we always answer before Vercel kills us.
@@ -96,8 +96,6 @@ export async function POST(req: NextRequest) {
 
     const totalDays = Array.isArray(calendarDays) ? calendarDays.length || 31 : 31;
 
-    const ai = getGeminiClient();
-
     const systemPrompt = `
 You are an expert bilingual (Persian + English) AI assistant specialized in reading Persian/English nurse handwritten shift-request notes and converting them into structured data.
 
@@ -190,7 +188,9 @@ Respond ONLY with a JSON object matching the response schema below. Do not write
 
     // ارسال تصویر به‌صورت inlineData + متن دستورالعمل.
     // Gemini مدل multi-modal است و خودش OCR + تحلیل را انجام می‌دهد.
-    const response = await generateContentWithRetry(ai, {
+    // generateContentWithRetry با یک آرگومان، به‌صورت خودکار بین
+    // GEMINI_API_KEY_1/2/3 چرخش می‌کند (Multi-Key Fallback / Round-Robin).
+    const response = await generateContentWithRetry({
       contents: [
         {
           role: "user",
