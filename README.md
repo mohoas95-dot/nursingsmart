@@ -31,3 +31,21 @@ The granular object layout, optimistic-locking contract, circuit breaker, and on
 ## Authentication
 
 PostgreSQL/Prisma setup, national-ID login, session security, first-login password change, and the head-nurse password-reset workflow are documented in [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
+
+## پایداری دستیار هوشمند Gemini (تنظیمات محیطی)
+
+مدل‌های تازه‌منتشرشده «flash» بیشترین خطای ۵۰۳ (شلوغی/high demand) را می‌دهند.
+به همین دلیل زنجیرهٔ پیش‌فرض مدل‌ها با یک مدل پایدار شروع می‌شود و به مدل‌های
+سبک‌تر با سهمیهٔ بالاتر برمی‌گردد. همهٔ موارد از Vercel قابل تغییر است:
+
+| متغیر | پیش‌فرض | توضیح |
+|---|---|---|
+| `GEMINI_MODEL` | `gemini-3.5-flash` | مدل اصلی |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-2.5-flash` | زنجیرهٔ جایگزین (با کاما) |
+| `GEMINI_ATTEMPTS_PER_MODEL` | `2` | تعداد تلاش برای هر مدل |
+| `GEMINI_CALL_TIMEOUT_MS` | `14000` | تایم‌اوت هر فراخوانی مدل |
+| `GEMINI_TOTAL_BUDGET_MS` | `26000` | سقف کل زمان (کمتر از `maxDuration=60`) |
+| `GEMINI_THINKING_LEVEL` | `low` | `low`/`medium`/`high` یا `off` برای حذف کامل |
+
+اگر باز هم شلوغی دیدید، سریع‌ترین راه‌حل بدون تغییر کد:
+`GEMINI_MODEL=gemini-3.1-flash-lite` (پایدارترین و کم‌تأخیرترین گزینه).

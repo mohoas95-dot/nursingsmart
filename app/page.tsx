@@ -212,6 +212,51 @@ class ConcurrencyConflictError extends Error {
 
 
 
+
+// ---------------------------------------------------------------------------
+// ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت و تلاش مجدد خودکار
+// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، قطع موقت شبکه).
+// ---------------------------------------------------------------------------
+const CHAT_REQUEST_TIMEOUT_MS = 40000;
+const CHAT_REQUEST_MAX_ATTEMPTS = 2;
+
+async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= CHAT_REQUEST_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      await new Promise(resolve => setTimeout(resolve, 800 * 2 ** (attempt - 2) + Math.random() * 300));
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CHAT_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch('/api/gemini/chat-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if ((response.status === 503 || response.status === 504 || response.status === 429)
+        && attempt < CHAT_REQUEST_MAX_ATTEMPTS) {
+        lastError = new Error('مدل هوش مصنوعی موقتاً شلوغ است.');
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= CHAT_REQUEST_MAX_ATTEMPTS) break;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw new Error(
+    lastError instanceof Error && /abort/i.test(lastError.name + lastError.message)
+      ? 'پاسخ دستیار هوشمند بیش از حد طول کشید؛ لطفاً دوباره تلاش کنید.'
+      : 'ارتباط با دستیار هوشمند برقرار نشد؛ لطفاً چند لحظه دیگر دوباره تلاش کنید.'
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const [authenticatedUser, setAuthenticatedUser] = useState<AuthenticatedUser | null>(null);
@@ -1977,6 +2022,11 @@ export default function Home() {
   // Forms states for Request
   const [showAddRequestModal, setShowAddRequestModal] = useState<boolean>(false);
   const [editingRequest, setEditingRequest] = useState<ShiftRequest | null>(null);
+  // ویرایش نامحدود درخواست ثبت‌شده به‌صورت روزبه‌روز روی تقویم (تا پیش از اتمام مهلت)
+  const [requestEditTarget, setRequestEditTarget] = useState<ShiftRequest | null>(null);
+  const [requestEditDays, setRequestEditDays] = useState<Record<number, NonNullable<ShiftRequest['preferredShift']>>>({});
+  const [requestEditActiveDay, setRequestEditActiveDay] = useState<number | null>(null);
+  const [isSavingRequestEdit, setIsSavingRequestEdit] = useState<boolean>(false);
   // editingCell now managed by useScheduleState hook
   const [reqPersonnelId, setReqPersonnelId] = useState<string>('');
   const [reqType, setReqType] = useState<'shift' | 'OFF' | 'leave' | 'pattern' | 'avoid_shift'>('shift');
@@ -1992,7 +2042,11 @@ export default function Home() {
   // Additional system request states
   const [draftRequests, setDraftRequests] = useState<ShiftRequest[]>([]);
   const [showSplitRequests, setShowSplitRequests] = useState<boolean>(false);
-  const [quickSelectedTemplateId, setQuickSelectedTemplateId] = useState<QuickRequestTemplateId | null>('en');
+  const [quickSelectedTemplateId, setQuickSelectedTemplateId] = useState<QuickRequestTemplateId | null>(null);
+  // زیرشاخه‌های هر الگو به‌صورت پیش‌فرض مخفی‌اند و فقط با کلیک روی همان کارت باز می‌شوند
+  const [quickScopePickerFor, setQuickScopePickerFor] = useState<QuickRequestTemplateId | null>(null);
+  // هر دو بخش «درخواست‌های پرکاربرد» و «CHAT BOX» در ابتدا بسته‌اند
+  const [openRequestPanel, setOpenRequestPanel] = useState<'quick' | 'chat' | null>(null);
   const [quickSelectedScope, setQuickSelectedScope] = useState<QuickRequestScope>('odd');
   const [quickSelectedDays, setQuickSelectedDays] = useState<number[]>([]);
   const [quickPersonnelId, setQuickPersonnelId] = useState<string>('');
@@ -2083,6 +2137,47 @@ export default function Home() {
     setChatFailedText(null);
   }, [requestChatPersonnel?.id, requestChatPersonnel?.firstName, currentYear, currentMonth]);
 
+  // ====== ویرایش روزبه‌روز درخواست‌های ثبت‌شده ======
+  // کدهای شیفت قابل انتخاب در تقویم ویرایش (شامل آف و مرخصی)
+  const EDITABLE_SHIFT_CODES: ReadonlyArray<{ code: NonNullable<ShiftRequest['preferredShift']>; label: string; className: string }> = [
+    { code: 'M', label: 'صبح (M)', className: 'bg-sky-100 text-sky-800 border-sky-300' },
+    { code: 'E', label: 'عصر (E)', className: 'bg-amber-100 text-amber-800 border-amber-300' },
+    { code: 'N', label: 'شب (N)', className: 'bg-indigo-100 text-indigo-800 border-indigo-300' },
+    { code: 'ME', label: 'صبح-عصر (ME)', className: 'bg-teal-100 text-teal-800 border-teal-300' },
+    { code: 'EN', label: 'عصر-شب (EN)', className: 'bg-violet-100 text-violet-800 border-violet-300' },
+    { code: 'MN', label: 'شب-صبح (MN)', className: 'bg-cyan-100 text-cyan-800 border-cyan-300' },
+    { code: 'MEN', label: '۲۴ ساعته (MEN)', className: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300' },
+    { code: 'OFF', label: 'آف 😴', className: 'bg-slate-200 text-slate-800 border-slate-400' },
+    { code: 'L', label: 'مرخصی 🏖', className: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  ];
+
+  // روزهای واقعی یک درخواست را بر اساس scope آن روی تقویم ماه جاری باز می‌کند
+  const resolveRequestDays = (r: ShiftRequest): number[] => {
+    const days = calendarDays.length > 0 ? calendarDays : [];
+    switch (r.scope) {
+      case 'all':
+        return days.map(d => d.day);
+      case 'even':
+        return days.filter(d => d.day % 2 === 0).map(d => d.day);
+      case 'odd':
+        return days.filter(d => d.day % 2 === 1).map(d => d.day);
+      case 'weekly_even':
+        return days.filter(d => d.dayOfWeek === 0 || d.dayOfWeek === 2 || d.dayOfWeek === 4).map(d => d.day);
+      case 'weekly_odd':
+        return days.filter(d => d.dayOfWeek === 1 || d.dayOfWeek === 3 || d.dayOfWeek === 5).map(d => d.day);
+      case 'custom_days':
+        return [...(r.selectedDays || [])];
+      case 'range': {
+        const startDay = Number(String(r.startDate || '').split('/').pop());
+        const endDay = Number(String(r.endDate || '').split('/').pop());
+        if (!Number.isFinite(startDay) || !Number.isFinite(endDay)) return [];
+        return days.filter(d => d.day >= startDay && d.day <= endDay).map(d => d.day);
+      }
+      default:
+        return [...(r.selectedDays || [])];
+    }
+  };
+
   const getRequestSummaryText = (r: ShiftRequest): string => {
     const shiftLabel = r.preferredShift === 'M' ? 'صبح (M)' :
                        r.preferredShift === 'E' ? 'عصر (E)' :
@@ -2106,7 +2201,11 @@ export default function Home() {
     if (r.requestType === 'avoid_shift') {
       return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
     } else if (r.requestType === 'OFF') {
-      const hardnessLabel = r.offHardness === 'hard' ? '🔴 آف سخت' : r.offHardness === 'soft' ? '🟡 آف نرم' : '🔴 آف قطعی';
+      // پرسنل فقط «آف» را می‌بیند؛ تعیین سخت/نرم بودن در اختیار سرپرستار است
+      const canSeeHardness = role === 'admin' || role === 'headnurse';
+      const hardnessLabel = !canSeeHardness
+        ? '⚫ آف'
+        : r.offHardness === 'hard' ? '🔴 آف سخت' : r.offHardness === 'soft' ? '🟡 آف نرم' : '🔴 آف قطعی';
       return `${hardnessLabel} [${timeLabel}]`;
     } else if (r.requestType === 'leave') {
       return `🟢 مرخصی [${timeLabel}]`;
@@ -3333,7 +3432,8 @@ export default function Home() {
         id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         requestType: quickSelectedTemplateId === 'off' ? 'OFF' : 'leave',
         preferredShift: quickSelectedTemplateId === 'off' ? 'OFF' : 'L',
-        offHardness: quickSelectedTemplateId === 'off' ? 'hard' : undefined,
+        // نوع آف (سخت/نرم) را فقط سرپرستار تعیین می‌کند؛ آف ثبت‌شده توسط پرسنل بدون نوع می‌ماند
+        offHardness: quickSelectedTemplateId === 'off' ? (role === 'personnel' ? undefined : 'hard') : undefined,
         scope: 'custom_days',
         selectedDays: [...quickSelectedDays].sort((a, b) => a - b),
       }];
@@ -3442,11 +3542,9 @@ export default function Home() {
     setIsRequestChatProcessing(true);
 
     try {
-      const response = await fetch('/api/gemini/chat-requests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: nextMessages.map(message => ({ role: message.role, content: message.content })),
+      const response = await postChatRequestWithRetry({
+          // فقط چند پیام آخر ارسال می‌شود تا حجم درخواست و زمان پاسخ مدل کم بماند
+          messages: nextMessages.slice(-8).map(message => ({ role: message.role, content: message.content })),
           year: currentYear,
           month: currentMonth,
           personnel: {
@@ -3476,9 +3574,8 @@ export default function Home() {
               offHardness: request.offHardness,
             })),
           scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
-        }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'پردازش گفت‌وگو انجام نشد.');
 
       const assistantMessage: RequestChatMessage = {
@@ -3503,7 +3600,7 @@ export default function Home() {
               : item.preferredShift,
           patternSteps: item.patternSteps,
           isEssential: !!item.isEssential,
-          offHardness: item.requestType === 'OFF' ? (item.offHardness || 'hard') : undefined,
+          offHardness: item.requestType === 'OFF' ? (role === 'personnel' ? undefined : (item.offHardness || 'hard')) : undefined,
           scope: item.scope || 'custom_days',
           startDate: item.startDate,
           endDate: item.endDate,
@@ -3608,7 +3705,7 @@ export default function Home() {
       preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
       patternSteps: steps,
       isEssential: role === 'personnel' ? false : reqIsEssential,
-      offHardness: reqType === 'OFF' ? reqOffHardness : undefined,
+      offHardness: reqType === 'OFF' ? (role === 'personnel' ? undefined : reqOffHardness) : undefined,
       scope: reqScope,
       startDate: reqScope === 'range' ? reqStartDate : undefined,
       endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -3636,7 +3733,7 @@ export default function Home() {
         preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
         patternSteps: steps,
         isEssential: role === 'personnel' ? false : reqIsEssential,
-        offHardness: reqType === 'OFF' ? reqOffHardness : undefined,
+        offHardness: reqType === 'OFF' ? (role === 'personnel' ? undefined : reqOffHardness) : undefined,
         scope: reqScope,
         startDate: reqScope === 'range' ? reqStartDate : undefined,
         endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -3729,7 +3826,7 @@ export default function Home() {
           preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
           patternSteps: steps,
           isEssential: role === 'personnel' ? false : reqIsEssential,
-          offHardness: reqType === 'OFF' ? reqOffHardness : undefined,
+          offHardness: reqType === 'OFF' ? (role === 'personnel' ? undefined : reqOffHardness) : undefined,
           scope: reqScope,
           startDate: reqScope === 'range' ? reqStartDate : undefined,
           endDate: reqScope === 'range' ? reqEndDate : undefined,
@@ -3756,6 +3853,99 @@ export default function Home() {
       }
     } else {
       await handleFinalSubmitRequests();
+    }
+  };
+
+  // باز کردن ویرایشگر تقویمی برای یک درخواست ثبت‌شده
+  const handleOpenRequestEditor = (r: ShiftRequest) => {
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت و ویرایش درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+    const days = resolveRequestDays(r);
+    const defaultCode: NonNullable<ShiftRequest['preferredShift']> =
+      r.requestType === 'OFF' ? 'OFF'
+      : r.requestType === 'leave' ? 'L'
+      : (r.preferredShift || 'M');
+    const map: Record<number, NonNullable<ShiftRequest['preferredShift']>> = {};
+    days.forEach(day => { map[day] = defaultCode; });
+    setRequestEditTarget(r);
+    setRequestEditDays(map);
+    setRequestEditActiveDay(null);
+  };
+
+  const handleCloseRequestEditor = () => {
+    setRequestEditTarget(null);
+    setRequestEditDays({});
+    setRequestEditActiveDay(null);
+  };
+
+  // ثبت نهایی ویرایش: هر شیفت متفاوت به یک درخواست custom_days جداگانه تبدیل می‌شود
+  const handleSaveRequestEdit = async () => {
+    if (!requestEditTarget) return;
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت و ویرایش درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+
+    const entries = Object.entries(requestEditDays)
+      .map(([day, code]) => ({ day: Number(day), code }))
+      .filter(entry => Number.isInteger(entry.day) && !!entry.code);
+
+    if (entries.length === 0) {
+      alert('حداقل یک روز را انتخاب و نوع شیفت آن را مشخص کنید (یا در صورت نیاز، کل درخواست را حذف کنید).');
+      return;
+    }
+
+    // گروه‌بندی روزها بر اساس کد شیفت انتخابی
+    const grouped = new Map<NonNullable<ShiftRequest['preferredShift']>, number[]>();
+    entries.forEach(({ day, code }) => {
+      const list = grouped.get(code) || [];
+      list.push(day);
+      grouped.set(code, list);
+    });
+
+    const now = new Date().toISOString();
+    const rebuilt: ShiftRequest[] = Array.from(grouped.entries()).map(([code, days], index) => ({
+      ...requestEditTarget,
+      id: index === 0 ? requestEditTarget.id : `req_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+      requestType: code === 'OFF' ? 'OFF' : code === 'L' ? 'leave' : 'shift',
+      preferredShift: code,
+      patternSteps: undefined,
+      // نوع آف را فقط سرپرستار تعیین می‌کند و مقدار قبلی حفظ می‌شود
+      offHardness: code === 'OFF'
+        ? (role === 'personnel' ? requestEditTarget.offHardness : (requestEditTarget.offHardness || 'hard'))
+        : undefined,
+      isEssential: role === 'personnel' ? requestEditTarget.isEssential : requestEditTarget.isEssential,
+      scope: 'custom_days',
+      startDate: undefined,
+      endDate: undefined,
+      selectedDays: days.sort((a, b) => a - b),
+      createdAt: requestEditTarget.createdAt || now,
+      updatedAt: now,
+    }));
+
+    setIsSavingRequestEdit(true);
+    try {
+      const withoutOriginal = requests.filter(item => item.id !== requestEditTarget.id);
+      const updatedR = [...withoutOriginal, ...rebuilt];
+      await saveState(personnel, updatedR, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [requestEditTarget.personnelId],
+      });
+      const person = personnel.find(item => item.id === requestEditTarget.personnelId);
+      logEvent({
+        category: 'requests',
+        severity: 'success',
+        title: 'درخواست ثبت‌شده ویرایش شد',
+        detail: `پرسنل: ${person ? `${person.firstName} ${person.lastName}` : requestEditTarget.personnelId} — ${entries.length} روز در ${rebuilt.length} درخواست — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+      });
+      handleCloseRequestEditor();
+    } catch (error) {
+      console.error('Error editing request days:', error);
+      alert('خطا در ثبت ویرایش درخواست: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsSavingRequestEdit(false);
     }
   };
 
@@ -5300,15 +5490,16 @@ export default function Home() {
         </div>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
-          <TehranDateTime lastSync={calendarSyncedAt} />
+          {/* کارت ساعت/تاریخ تهران فقط در داشبورد زمان‌بندی (همه نقش‌ها) نمایش داده می‌شود */}
+          {activeTab === 'schedule' && <TehranDateTime lastSync={calendarSyncedAt} />}
           {officialCalendarState.status !== 'ready' && (
             <div className={`rounded-2xl border p-4 text-xs font-black print:hidden ${officialCalendarState.status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`} role="status">
               {officialCalendarState.status === 'error' ? 'اتصال به تقویم رسمی کشور برقرار نشد؛ لطفاً اتصال اینترنت را بررسی و صفحه را تازه‌سازی کنید.' : 'در حال همگام‌سازی کامل روزها، مناسبت‌ها و تعطیلات رسمی ماه انتخاب‌شده…'}
             </div>
           )}
 
-          {/* کارت «بازه برنامه‌ریزی» فقط برای مدیر و سرپرستار — پرسنل نیازی به این توضیحات ندارند */}
-          {role !== 'personnel' && (
+          {/* کارت «بازه برنامه‌ریزی» و دکمه‌های بازتولید فقط برای مدیر/سرپرستار و فقط در داشبورد */}
+          {role !== 'personnel' && activeTab === 'schedule' && (
           <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 print:hidden">
             <div className="flex items-center gap-3 text-xs flex-wrap">
               <span className="bg-indigo-50 text-indigo-700 p-1.5 rounded-xl border border-indigo-100"><Sparkles className="w-4 h-4"/></span>
@@ -6121,6 +6312,76 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* دو بخش «درخواست‌های پرکاربرد» و «CHAT BOX» به‌صورت آکاردئونی و در ابتدا بسته هستند */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* آکاردئون ۱ — سبز/زمردی */}
+                <button
+                  type="button"
+                  onClick={() => setOpenRequestPanel(prev => (prev === 'quick' ? null : 'quick'))}
+                  aria-expanded={openRequestPanel === 'quick'}
+                  className={`group relative overflow-hidden flex items-center justify-between gap-3 rounded-[1.75rem] border px-5 py-5 text-right transition-all duration-300 cursor-pointer ${
+                    openRequestPanel === 'quick'
+                      ? 'bg-gradient-to-bl from-emerald-500 via-teal-500 to-green-600 text-white border-emerald-600 shadow-xl shadow-emerald-200/60 scale-[1.01]'
+                      : 'bg-gradient-to-bl from-emerald-50 via-white to-teal-50 text-slate-800 border-emerald-200 hover:border-emerald-400 hover:shadow-lg hover:shadow-emerald-100 hover:-translate-y-0.5'
+                  }`}
+                >
+                  <span className="pointer-events-none absolute -left-10 -top-10 h-28 w-28 rounded-full bg-white/20 blur-2xl" />
+                  <span className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-gradient-to-l from-emerald-400 via-teal-400 to-green-500" />
+                  <span className="relative flex items-center gap-3 min-w-0">
+                    <span className={`shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl shadow-sm transition-colors ${
+                      openRequestPanel === 'quick' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      <Sparkles className="w-5 h-5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm sm:text-base font-black">درخواست‌های پر کاربرد</span>
+                      <span className={`block text-[10px] sm:text-[11px] font-bold mt-1 leading-5 ${openRequestPanel === 'quick' ? 'text-emerald-50' : 'text-slate-500'}`}>
+                        الگوهای آماده EN / MEN / لانگ‌آف / OFF / مرخصی
+                      </span>
+                    </span>
+                  </span>
+                  <span className={`relative shrink-0 flex h-8 w-8 items-center justify-center rounded-full transition-all ${
+                    openRequestPanel === 'quick' ? 'bg-white/20 text-white rotate-180' : 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-200'
+                  }`}>
+                    <ChevronDown className="w-4 h-4" />
+                  </span>
+                </button>
+
+                {/* آکاردئون ۲ — بنفش/نیلی */}
+                <button
+                  type="button"
+                  onClick={() => setOpenRequestPanel(prev => (prev === 'chat' ? null : 'chat'))}
+                  aria-expanded={openRequestPanel === 'chat'}
+                  className={`group relative overflow-hidden flex items-center justify-between gap-3 rounded-[1.75rem] border px-5 py-5 text-right transition-all duration-300 cursor-pointer ${
+                    openRequestPanel === 'chat'
+                      ? 'bg-gradient-to-bl from-violet-600 via-indigo-600 to-sky-600 text-white border-indigo-600 shadow-xl shadow-indigo-200/60 scale-[1.01]'
+                      : 'bg-gradient-to-bl from-violet-50 via-white to-sky-50 text-slate-800 border-violet-200 hover:border-violet-400 hover:shadow-lg hover:shadow-violet-100 hover:-translate-y-0.5'
+                  }`}
+                >
+                  <span className="pointer-events-none absolute -left-10 -top-10 h-28 w-28 rounded-full bg-white/20 blur-2xl" />
+                  <span className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-gradient-to-l from-violet-400 via-indigo-400 to-sky-500" />
+                  <span className="relative flex items-center gap-3 min-w-0">
+                    <span className={`shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl text-[10px] font-black shadow-sm transition-colors ${
+                      openRequestPanel === 'chat' ? 'bg-amber-300 text-slate-900' : 'bg-violet-100 text-violet-700'
+                    }`}>
+                      AI
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm sm:text-base font-black">CHAT BOX 🤩</span>
+                      <span className={`block text-[10px] sm:text-[11px] font-bold mt-1 leading-5 ${openRequestPanel === 'chat' ? 'text-indigo-50' : 'text-slate-500'}`}>
+                        اگر نتونستی درخواستتو بالا ثبت کنی بیا اینجا بنویس یا عکس بفرست!
+                      </span>
+                    </span>
+                  </span>
+                  <span className={`relative shrink-0 flex h-8 w-8 items-center justify-center rounded-full transition-all ${
+                    openRequestPanel === 'chat' ? 'bg-white/20 text-white rotate-180' : 'bg-violet-100 text-violet-700 group-hover:bg-violet-200'
+                  }`}>
+                    <ChevronDown className="w-4 h-4" />
+                  </span>
+                </button>
+              </div>
+
+              {openRequestPanel === 'quick' && (
               <div className="bg-gradient-to-br from-indigo-50 via-white to-emerald-50/60 border border-indigo-100 rounded-[2rem] shadow-sm overflow-hidden">
                 <div className="p-5 sm:p-6 border-b border-indigo-100/70 bg-white/70">
                   <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
@@ -6160,14 +6421,20 @@ export default function Home() {
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {QUICK_REQUEST_TEMPLATES.map(template => {
                       const isSelected = quickSelectedTemplateId === template.id;
+                      const needsScope = template.id !== 'off' && template.id !== 'leave';
+                      const isScopePickerOpen = needsScope && quickScopePickerFor === template.id;
                       return (
+                        <React.Fragment key={`quick-template-cell-${template.id}`}>
                         <button
                           type="button"
                           key={template.id}
                           onClick={() => {
                             setQuickSelectedTemplateId(template.id);
                             setQuickSelectedDays([]);
+                            // زیرشاخه فقط برای الگوهای شیفتی و دقیقاً زیر همان کارت باز می‌شود
+                            setQuickScopePickerFor(prev => (needsScope && prev !== template.id ? template.id : null));
                           }}
+                          aria-expanded={isScopePickerOpen}
                           className={`group relative overflow-hidden rounded-2xl border p-3 min-h-[94px] text-right transition-all cursor-pointer ${
                             isSelected
                               ? 'bg-white border-indigo-300 shadow-lg shadow-indigo-100 scale-[1.02]'
@@ -6184,44 +6451,47 @@ export default function Home() {
                             </span>
                           )}
                         </button>
+
+                        {/* زیرشاخه‌ها فقط پس از کلیک روی همین کارت، همان‌جا ظاهر و پس از انتخاب محو می‌شوند */}
+                        {isScopePickerOpen && (
+                          <div className="col-span-2 md:col-span-5 bg-white/95 border border-indigo-200 rounded-3xl p-4 space-y-3 shadow-xs animate-fadeIn">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <h5 className="text-sm font-black text-slate-800">زیرشاخه «{template.title}» را انتخاب کن</h5>
+                                <p className="text-[10px] font-bold text-slate-400 mt-1">جمعه‌ها در گزینه‌های «روز فرد/زوج» محاسبه نمی‌شوند.</p>
+                              </div>
+                              <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 rounded-full">
+                                {template.id === 'long_off' ? 'لانگ‌آف = ME + OFF نرم روز مقابل' : 'ثبت مستقیم درخواست شیفت'}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+                              {QUICK_REQUEST_SCOPE_OPTIONS.map(option => (
+                                <button
+                                  type="button"
+                                  key={`${template.id}-${option.id}`}
+                                  onClick={() => {
+                                    setQuickSelectedScope(option.id);
+                                    // پس از انتخاب، زیرشاخه دوباره محو می‌شود
+                                    setQuickScopePickerFor(null);
+                                  }}
+                                  className={`rounded-2xl border px-3 py-3 text-right transition-all cursor-pointer ${
+                                    quickSelectedScope === option.id
+                                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
+                                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
+                                  }`}
+                                >
+                                  <span className="block text-xs font-black">{option.title}</span>
+                                  <span className={`block text-[9px] mt-1 font-bold ${quickSelectedScope === option.id ? 'text-indigo-100' : 'text-slate-400'}`}>{option.subtitle}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </div>
-
-                  {quickSelectedTemplateId && quickSelectedTemplateId !== 'off' && quickSelectedTemplateId !== 'leave' && (
-                    <div className="bg-white/85 border border-slate-200 rounded-3xl p-4 space-y-4 shadow-xs animate-fadeIn">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <h5 className="text-sm font-black text-slate-800">زیرشاخه سریع را انتخاب کن</h5>
-                          <p className="text-[10px] font-bold text-slate-400 mt-1">جمعه‌ها در گزینه‌های «روز فرد/زوج» محاسبه نمی‌شوند.</p>
-                        </div>
-                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 rounded-full">
-                          {quickSelectedTemplateId === 'long_off' ? 'لانگ‌آف = ME + OFF نرم روز مقابل' : 'ثبت مستقیم درخواست شیفت'}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-                        {QUICK_REQUEST_SCOPE_OPTIONS.map(option => {
-                          const isScopeSelected = quickSelectedScope === option.id;
-                          return (
-                            <button
-                              type="button"
-                              key={option.id}
-                              onClick={() => setQuickSelectedScope(option.id)}
-                              className={`rounded-2xl border px-3 py-3 text-right transition-all cursor-pointer ${
-                                isScopeSelected
-                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
-                                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
-                              }`}
-                            >
-                              <span className="block text-xs font-black">{option.title}</span>
-                              <span className={`block text-[9px] mt-1 font-bold ${isScopeSelected ? 'text-indigo-100' : 'text-slate-400'}`}>{option.subtitle}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
 
                   {(quickSelectedTemplateId === 'off' || quickSelectedTemplateId === 'leave') && (
                     <div className="bg-white/90 border border-slate-200 p-4 rounded-3xl space-y-3 shadow-xs animate-fadeIn">
@@ -6322,7 +6592,9 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              )}
 
+              {(openRequestPanel === 'chat' || isChatFullscreen) && (
               <div
                 id="request-chat-box"
                 className={isChatFullscreen
@@ -6335,7 +6607,7 @@ export default function Home() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="shrink-0 bg-amber-300 text-slate-900 px-2 py-0.5 rounded-full text-[9px] font-black">CHAT BOX 🤩</span>
-                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini 3.6 Flash</span>
+                        <span className="hidden sm:inline shrink-0 bg-white/15 border border-white/20 text-white px-2 py-0.5 rounded-full text-[9px] font-black">Gemini Flash</span>
                         <span className="truncate text-[9px] font-bold text-indigo-100">فارسی بنویس؛ اگر مبهم باشد سؤال می‌پرسد.</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -6357,7 +6629,7 @@ export default function Home() {
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini 3.6 Flash</span>
+                        <span className="bg-white/15 border border-white/20 text-white px-3 py-1 rounded-full text-[10px] font-black">Gemini Flash</span>
                         <span className="bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full text-[10px] font-black">CHAT BOX 🤩</span>
                       </div>
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
@@ -6507,8 +6779,8 @@ export default function Home() {
                               {request.description && <p className={`font-bold text-slate-500 ${isChatFullscreen ? 'text-[9px] leading-4' : 'text-[10px] leading-5'}`}>{request.description}</p>}
                               <div className="flex flex-wrap gap-1.5">
                                 {request.isEssential && <span className="rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[9px] font-black text-red-700">ضروری</span>}
-                                {request.offHardness === 'hard' && <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[9px] font-black text-rose-700">Hard OFF</span>}
-                                {request.offHardness === 'soft' && <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-700">Soft OFF</span>}
+                                {(role === 'admin' || role === 'headnurse') && request.offHardness === 'hard' && <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[9px] font-black text-rose-700">Hard OFF</span>}
+                                {(role === 'admin' || role === 'headnurse') && request.offHardness === 'soft' && <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-700">Soft OFF</span>}
                               </div>
                             </div>
                           ))}
@@ -6542,6 +6814,7 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              )}
 
               <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto w-full">
@@ -6660,9 +6933,16 @@ export default function Home() {
                                 <td className="px-6 py-3.5 text-slate-600">
                                   {r.requestType === 'shift' && <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded text-xs">تعیین شیفت</span>}
                                   {r.requestType === 'avoid_shift' && <span className="bg-rose-50 text-rose-700 border border-rose-100 font-bold px-2 py-0.5 rounded text-xs">نبودن در شیفت</span>}
-                                  {r.requestType === 'OFF' && r.offHardness === 'hard' && <span className="bg-red-50 text-red-700 border border-red-200 font-black px-2 py-0.5 rounded text-xs">🔴 آف سخت (Hard OFF)</span>}
-                                  {r.requestType === 'OFF' && r.offHardness === 'soft' && <span className="bg-amber-50 text-amber-700 border border-amber-200 font-black px-2 py-0.5 rounded text-xs">🟡 آف نرم (Soft OFF)</span>}
-                                  {r.requestType === 'OFF' && !r.offHardness && <span className="bg-red-50 text-red-700 border border-red-200 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>}
+                                  {/* نوع آف (سخت/نرم) فقط برای سرپرستار و مدیر؛ پرسنل فقط «آف» می‌بیند */}
+                                  {r.requestType === 'OFF' && (role === 'admin' || role === 'headnurse') ? (
+                                    r.offHardness === 'hard'
+                                      ? <span className="bg-red-50 text-red-700 border border-red-200 font-black px-2 py-0.5 rounded text-xs">🔴 آف سخت (Hard OFF)</span>
+                                      : r.offHardness === 'soft'
+                                        ? <span className="bg-amber-50 text-amber-700 border border-amber-200 font-black px-2 py-0.5 rounded text-xs">🟡 آف نرم (Soft OFF)</span>
+                                        : <span className="bg-red-50 text-red-700 border border-red-200 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>
+                                  ) : r.requestType === 'OFF' ? (
+                                    <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2 py-0.5 rounded text-xs">درخواست آف</span>
+                                  ) : null}
                                   {r.requestType === 'leave' && <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded text-xs">درخواست مرخصی</span>}
                                   {r.requestType === 'pattern' && <span className="bg-violet-50 text-violet-700 border border-violet-100 font-bold px-2 py-0.5 rounded text-xs">الگوی شیفت</span>}
                                 </td>
@@ -6726,6 +7006,16 @@ export default function Home() {
                                   )}
                                 </td>
                                 <td className="px-6 py-3.5 text-center flex items-center justify-center gap-1">
+                                  {/* ویرایش نامحدود درخواست تا پیش از اتمام مهلت */}
+                                  <button
+                                    onClick={() => handleOpenRequestEditor(r)}
+                                    disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
+                                    className="text-sky-600 hover:text-sky-800 disabled:text-slate-300 disabled:cursor-not-allowed p-1.5 rounded-lg hover:bg-sky-50 transition-colors cursor-pointer"
+                                    title="ویرایش درخواست روی تقویم"
+                                    id={`btn-edit-req-${r.id}`}
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </button>
 
                                   <button
                                     onClick={() => setDeleteTarget({
@@ -8269,6 +8559,148 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* ====== ویرایشگر تقویمی درخواست ثبت‌شده ====== */}
+      {requestEditTarget && (() => {
+        const editPerson = personnel.find(item => item.id === requestEditTarget.personnelId);
+        const selectedCount = Object.keys(requestEditDays).length;
+        return (
+          <div className="fixed inset-0 z-[220] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 print:hidden">
+            <div className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-[2rem] bg-white shadow-2xl scrollbar-thin">
+              <div className="sticky top-0 z-10 bg-gradient-to-l from-sky-600 via-indigo-600 to-violet-600 text-white px-5 py-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="text-base font-black">ویرایش درخواست روی تقویم</h4>
+                  <p className="text-[11px] font-bold text-indigo-100 mt-1 truncate">
+                    {editPerson ? `${editPerson.firstName} ${editPerson.lastName}` : 'پرسنل'} — {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseRequestEditor}
+                  className="shrink-0 rounded-xl bg-white/15 hover:bg-white/25 border border-white/25 px-3 py-1.5 text-[11px] font-black transition-all cursor-pointer"
+                >
+                  بستن
+                </button>
+              </div>
+
+              <div className="p-4 sm:p-5 space-y-4">
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-[11px] font-bold text-sky-800 leading-6">
+                  روی هر روز کلیک کن تا زیرشاخهٔ انواع شیفت (M / E / N / ME / EN / MN / MEN و همچنین آف و مرخصی) همان‌جا باز شود.
+                  با انتخاب نوع شیفت، آن روز رنگی می‌شود. برای حذف یک روز، دوباره روی همان نوع انتخاب‌شده کلیک کن.
+                  ویرایش تا پیش از اتمام مهلت، نامحدود قابل تکرار است.
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-inner">
+                  {WEEKDAYS.map((weekday, index) => (
+                    <div key={`edit-weekday-${weekday}`} className={`rounded-lg py-1 text-center text-[8px] font-black ${index === 6 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{weekday[0]}</div>
+                  ))}
+                  {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, index) => <span key={`edit-empty-${index}`} />)}
+                  {calendarDays.map(dayInfo => {
+                    const assigned = requestEditDays[dayInfo.day];
+                    const isActive = requestEditActiveDay === dayInfo.day;
+                    const meta = EDITABLE_SHIFT_CODES.find(item => item.code === assigned);
+                    return (
+                      <React.Fragment key={`edit-day-${dayInfo.day}`}>
+                        <button
+                          type="button"
+                          onClick={() => setRequestEditActiveDay(prev => (prev === dayInfo.day ? null : dayInfo.day))}
+                          aria-expanded={isActive}
+                          className={`relative min-h-14 rounded-xl border px-1 py-1.5 text-[11px] font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
+                            isActive
+                              ? 'bg-indigo-600 text-white border-indigo-700 shadow-md scale-105'
+                              : assigned
+                                ? `${meta?.className || 'bg-indigo-100 text-indigo-800 border-indigo-300'} shadow-xs`
+                                : dayInfo.isHoliday
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
+                          }`}
+                          title={dayInfo.holidayTitle || (calendarOccasions[dayInfo.day] || []).join('، ')}
+                        >
+                          <span className="font-mono text-xs font-extrabold">{dayInfo.day}</span>
+                          <span className="text-[8px] opacity-80">{assigned || WEEKDAYS[dayInfo.dayOfWeek][0]}</span>
+                        </button>
+
+                        {/* زیرشاخهٔ انواع شیفت، دقیقاً زیر همان ردیف تقویم */}
+                        {isActive && (
+                          <div className="col-span-7 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-2 animate-fadeIn">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-black text-slate-700">
+                                نوع شیفت روز {dayInfo.day} ({WEEKDAYS[dayInfo.dayOfWeek]})
+                              </span>
+                              {assigned && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRequestEditDays(prev => {
+                                      const next = { ...prev };
+                                      delete next[dayInfo.day];
+                                      return next;
+                                    });
+                                    setRequestEditActiveDay(null);
+                                  }}
+                                  className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                >
+                                  حذف این روز
+                                </button>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+                              {EDITABLE_SHIFT_CODES.map(option => (
+                                <button
+                                  type="button"
+                                  key={`edit-${dayInfo.day}-${option.code}`}
+                                  onClick={() => {
+                                    setRequestEditDays(prev => ({ ...prev, [dayInfo.day]: option.code }));
+                                    setRequestEditActiveDay(null);
+                                  }}
+                                  className={`rounded-xl border px-2 py-2 text-[10px] font-black transition-all cursor-pointer ${
+                                    assigned === option.code
+                                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                                      : `${option.className} hover:brightness-95`
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600">
+                  <span>روزهای ویرایش‌شده: <b className="text-indigo-700 font-mono">{selectedCount}</b></span>
+                  <span className="text-slate-400">در صورت نیاز، هر روز می‌تواند نوع شیفت متفاوتی داشته باشد.</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={handleCloseRequestEditor}
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-black text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+                  >
+                    انصراف
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveRequestEdit}
+                    disabled={isSavingRequestEdit}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 px-4 py-3 text-xs font-black text-white shadow-lg shadow-emerald-100 transition-all cursor-pointer"
+                  >
+                    {isSavingRequestEdit ? (
+                      <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> در حال ثبت...</>
+                    ) : (
+                      <><Check className="w-4 h-4" /> ثبت نهایی ویرایش</>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );
