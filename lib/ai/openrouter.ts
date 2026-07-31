@@ -9,8 +9,8 @@
  *        (پیش‌فرض: https://api.bluesminds.com/v1)
  *      - کلید از OPENROUTER_API_KEY خوانده می‌شود
  *   2. تفکیک هوشمند مدل‌ها:
- *      - متنی (Text Analysis): deepseek/deepseek-chat (یا deepseek-v3)
- *      - تصویری (Vision/OCR): openai/gpt-4o-mini با fallback به openai/gpt-4o
+ *      - متنی (Text Analysis): deepseek-chat (یا deepseek-v3)
+ *      - تصویری (Vision/OCR): gpt-4o-mini با fallback به gpt-4o
  *   3. مدیریت اعتبار ۱۰۰ دلاری و ردیابی توکن‌ها
  *
  * این فایل نقطه مرکزی است و تمام مسیرهای API باید از اینجا استفاده کنند.
@@ -57,11 +57,11 @@ export const OPENROUTER_BASE_URL: string = (
 export const OPENROUTER_ENDPOINT: string = `${OPENROUTER_BASE_URL}/chat/completions`;
 
 // مدل‌های هوشمند بر اساس نوع ورودی
-export const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.OPENROUTER_DEEPSEEK_MODEL || 'deepseek/deepseek-chat';
-export const TEXT_MODEL_FALLBACK = process.env.OPENROUTER_TEXT_FALLBACK_MODEL || 'deepseek/deepseek-v3';
+export const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.OPENROUTER_DEEPSEEK_MODEL || 'deepseek-chat';
+export const TEXT_MODEL_FALLBACK = process.env.OPENROUTER_TEXT_FALLBACK_MODEL || 'deepseek-v3';
 
-export const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini';
-export const VISION_FALLBACK_MODEL = process.env.OPENROUTER_VISION_FALLBACK_MODEL || 'openai/gpt-4o';
+export const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'gpt-4o-mini';
+export const VISION_FALLBACK_MODEL = process.env.OPENROUTER_VISION_FALLBACK_MODEL || 'gpt-4o';
 
 export function getTextModelChain(): string[] {
   return Array.from(new Set([TEXT_MODEL, TEXT_MODEL_FALLBACK]));
@@ -269,7 +269,7 @@ async function callOpenRouterOnce(
 }
 
 // ---------------------------------------------------------------------------
-// درخواست متنی (Text Analysis) — مدل: deepseek/deepseek-chat
+// درخواست متنی (Text Analysis) — مدل: deepseek-chat
 // ---------------------------------------------------------------------------
 
 export async function generateOpenRouterJson<T = Record<string, unknown>>(
@@ -292,7 +292,7 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
   let lastStatus: number | undefined;
   let callsMade = 0;
 
-  // زنجیره مدل متنی: deepseek/deepseek-chat -> deepseek-v3 fallback
+  // زنجیره مدل متنی: deepseek-chat -> deepseek-v3 fallback
   const modelChain = getTextModelChain();
 
   for (const model of modelChain) {
@@ -407,7 +407,7 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
-// درخواست تصویری (Vision / OCR) — مدل: openai/gpt-4o-mini با fallback به gpt-4o
+// درخواست تصویری (Vision / OCR) — مدل: gpt-4o-mini با fallback به gpt-4o
 // ---------------------------------------------------------------------------
 
 export async function generateOpenRouterVision<T = Record<string, unknown>>(

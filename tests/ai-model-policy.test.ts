@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 /**
- * نگهبان سیاست مدل‌ها — معماری جدید بر پایه OpenRouter
+ * نگهبان سیاست مدل‌ها — معماری جدید بر پایه Bluesminds
  *
  * الزامات جدید:
- *   - متن (Text Analysis): deepseek/deepseek-chat (یا deepseek-v3)
- *   - تصویر (Vision/OCR): openai/gpt-4o-mini با fallback به openai/gpt-4o
+ *   - متن (Text Analysis): deepseek-chat (یا deepseek-v3)
+ *   - تصویر (Vision/OCR): gpt-4o-mini با fallback به gpt-4o
  *   - تمام درخواست‌ها از OPENROUTER_API_KEY استفاده می‌کنند
  *   - سیستم اعتبار ۱۰۰ دلاری با هشدار <15$ و بحرانی <5$
  *
@@ -45,30 +45,30 @@ async function loadOpenRouterModule() {
   }
 }
 
-test('مدل متنی پیش‌فرض باید deepseek/deepseek-chat یا deepseek-v3 باشد (طبق الزام)', async () => {
+test('مدل متنی پیش‌فرض باید deepseek-chat یا deepseek-v3 باشد (طبق الزام)', async () => {
   const { TEXT_MODEL } = await loadOpenRouterModule();
-  const validTextModels = ['deepseek/deepseek-chat', 'deepseek/deepseek-v3', 'deepseek/deepseek-chat-v3-0324'];
+  const validTextModels = ['deepseek-chat', 'deepseek-v3', 'deepseek/deepseek-chat', 'deepseek/deepseek-v3', 'deepseek/deepseek-chat-v3-0324'];
   assert.ok(
     validTextModels.includes(TEXT_MODEL) || TEXT_MODEL.includes('deepseek'),
-    `مدل متنی «${TEXT_MODEL}» باید یکی از مدل‌های DeepSeek باشد (deepseek/deepseek-chat یا deepseek-v3).`,
+    `مدل متنی «${TEXT_MODEL}» باید یکی از مدل‌های DeepSeek باشد (deepseek-chat یا deepseek-v3).`,
   );
 });
 
-test('مدل بینایی اصلی باید openai/gpt-4o-mini باشد (طبق الزام)', async () => {
+test('مدل بینایی اصلی باید gpt-4o-mini باشد (طبق الزام)', async () => {
   const { VISION_MODEL } = await loadOpenRouterModule();
-  assert.equal(
-    VISION_MODEL,
-    'openai/gpt-4o-mini',
-    `مدل بینایی پیش‌فرض باید 'openai/gpt-4o-mini' باشد، اما «${VISION_MODEL}» یافت شد.`,
+  const validVisionModels = ['gpt-4o-mini', 'openai/gpt-4o-mini'];
+  assert.ok(
+    validVisionModels.includes(VISION_MODEL),
+    `مدل بینایی پیش‌فرض باید 'gpt-4o-mini' باشد، اما «${VISION_MODEL}» یافت شد.`,
   );
 });
 
-test('مدل fallback بینایی باید openai/gpt-4o باشد (برای تصاویر شلوغ/کم‌کیفیت)', async () => {
+test('مدل fallback بینایی باید gpt-4o باشد (برای تصاویر شلوغ/کم‌کیفیت)', async () => {
   const { VISION_FALLBACK_MODEL } = await loadOpenRouterModule();
-  assert.equal(
-    VISION_FALLBACK_MODEL,
-    'openai/gpt-4o',
-    `مدل fallback بینایی باید 'openai/gpt-4o' باشد، اما «${VISION_FALLBACK_MODEL}» یافت شد.`,
+  const validFallbackModels = ['gpt-4o', 'openai/gpt-4o'];
+  assert.ok(
+    validFallbackModels.includes(VISION_FALLBACK_MODEL),
+    `مدل fallback بینایی باید 'gpt-4o' باشد، اما «${VISION_FALLBACK_MODEL}» یافت شد.`,
   );
 });
 
@@ -87,8 +87,10 @@ test('زنجیره مدل بینایی نباید شامل مدل‌های من�
   const { getVisionModelChain } = await loadOpenRouterModule();
   const chain = getVisionModelChain();
   assert.ok(chain.length >= 2, 'زنجیره بینایی باید حداقل دو مدل داشته باشد (اصلی + fallback برای تصاویر شلوغ)');
-  assert.equal(chain[0], 'openai/gpt-4o-mini');
-  assert.equal(chain[1], 'openai/gpt-4o');
+  const validPrimary = ['gpt-4o-mini', 'openai/gpt-4o-mini'];
+  const validFallback = ['gpt-4o', 'openai/gpt-4o'];
+  assert.ok(validPrimary.includes(chain[0]), `مدل اصلی بینایی باید gpt-4o-mini باشد، اما ${chain[0]} بود`);
+  assert.ok(validFallback.includes(chain[1]), `مدل fallback بینایی باید gpt-4o باشد، اما ${chain[1]} بود`);
 });
 
 test('زنجیره‌ها تکراری ندارند', async () => {
@@ -125,12 +127,12 @@ test('قیمت‌گذاری مدل‌ها بر اساس الزامات تعری�
   const creditModule = await import(`../lib/ai/credit.ts?pricing=${Date.now()}`);
   const { MODEL_PRICING, calculateCostUSD } = creditModule;
 
-  assert.ok(MODEL_PRICING['deepseek/deepseek-chat'], 'قیمت‌گذاری DeepSeek باید وجود داشته باشد');
-  assert.ok(MODEL_PRICING['openai/gpt-4o-mini'], 'قیمت‌گذاری gpt-4o-mini باید وجود داشته باشد');
-  assert.ok(MODEL_PRICING['openai/gpt-4o'], 'قیمت‌گذاری gpt-4o باید وجود داشته باشد');
+  assert.ok(MODEL_PRICING['deepseek-chat'] || MODEL_PRICING['deepseek/deepseek-chat'], 'قیمت‌گذاری DeepSeek باید وجود داشته باشد');
+  assert.ok(MODEL_PRICING['gpt-4o-mini'] || MODEL_PRICING['openai/gpt-4o-mini'], 'قیمت‌گذاری gpt-4o-mini باید وجود داشته باشد');
+  assert.ok(MODEL_PRICING['gpt-4o'] || MODEL_PRICING['openai/gpt-4o'], 'قیمت‌گذاری gpt-4o باید وجود داشته باشد');
 
   // تست محاسبه هزینه
-  const cost = calculateCostUSD('openai/gpt-4o-mini', 1000, 1000);
+  const cost = calculateCostUSD('gpt-4o-mini', 1000, 1000);
   assert.ok(cost > 0 && cost < 0.01, `هزینه باید معقول باشد، اما ${cost} بود`);
 });
 
