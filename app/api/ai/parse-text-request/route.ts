@@ -1,24 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  OPENROUTER_PROVIDER,
-  TEXT_MODEL,
-  generateOpenRouterJson,
+  GEMINI_PROVIDER,
+  GEMINI_PRIMARY_MODEL,
+  GEMINI_FALLBACK_MODEL,
+  generateGeminiJson,
   httpStatusForAiError,
   isRetryableAiError,
 } from "@/lib/ai";
 import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
-import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور جدید: OpenRouter / deepseek/deepseek-chat
- *
- * این مسیر برای فرم‌های «متن آزاد» استفاده می‌شود که فقط یک آرایه درخواست
- * می‌خواهند و نیازی به پاسخ محاوره‌ای ندارند.
- * طبق معماری جدید:
- *   - فقط درخواست‌های متنی (Text Analysis) با مدل deepseek/deepseek-chat
- *   - کلید از OPENROUTER_API_KEY
- *   - ردیابی اعتبار ۱۰۰ دلاری
+ * پارس یک‌مرحله‌ای متن درخواست — موتور جدید: Gemini Direct
+ * primary: gemini-2.5-flash, fallback: gemini-3.5-flash
  */
 
 export const runtime = "nodejs";
@@ -67,7 +61,7 @@ RULES FOR PARSING:
 7. «مرخصی» / «استحقاقی» → requestType="leave", preferredShift="L".
 8. Day resolution:
    - «۱۰ام» / «دهم» / «10» → day 10
-   - ranges like «۱۲ام تا ۱۵ام» → scope="custom_days", selectedDays=[12,13,14,15] (preferred and safest)
+   - ranges like «۱۲ام تا ۱۵ام» → scope="custom_days", selectedDays=[12,13,14,15]
    - «کل ماه» → scope="all"
    - specific days «۳ و ۷ و ۹» → scope="custom_days", selectedDays=[3,7,9]
    - For odd/even, apply section (A) of the vocabulary lesson below EXACTLY:
@@ -99,34 +93,21 @@ OUTPUT CONTRACT — return EXACTLY one JSON object (no markdown, no prose):
 Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
 `;
 
-    const { data, model, keyLabel, usage } = await generateOpenRouterJson<{ requests?: unknown }>({
+    const { data, model, keyLabel } = await generateGeminiJson<{ requests?: unknown }>({
       systemPrompt,
       messages: [{ role: "user", content: text.slice(0, 4000) }],
-      requestType: 'text',
     });
 
     const { requests } = normalizeShiftRequestList(data.requests, totalDays);
-    const creditInfo = getCreditDisplayInfo();
 
     return NextResponse.json({
       requests,
       engine: {
-        provider: OPENROUTER_PROVIDER,
+        provider: GEMINI_PROVIDER,
         model,
         key: keyLabel,
-        modelType: 'text',
-        modelDisplayName: 'DeepSeek Chat',
-      },
-      usage: {
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cost: usage.cost,
-        remainingCredit: usage.remainingCredit,
-      },
-      credit: {
-        remaining: creditInfo.remaining,
-        initial: creditInfo.initial,
-        status: creditInfo.status,
+        primaryModel: GEMINI_PRIMARY_MODEL,
+        fallbackModel: GEMINI_FALLBACK_MODEL,
       },
     });
   } catch (error) {
@@ -136,14 +117,14 @@ Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: OPENROUTER_PROVIDER,
-          modelType: 'text',
-          model: TEXT_MODEL,
+          provider: GEMINI_PROVIDER,
+          model: GEMINI_PRIMARY_MODEL,
+          retryAfterMs: (error as any)?.retryAfterMs,
         },
         { status },
       );
     }
-    console.error("Error parsing smart requests via OpenRouter:", error);
+    console.error("Error parsing smart requests via Gemini:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش هوش مصنوعی" },
       { status: 500 },
