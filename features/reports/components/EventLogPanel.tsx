@@ -26,7 +26,6 @@ import {
   type SystemEventLog,
   type SystemEventSeverity,
 } from '../../../domain/logging/system-events';
-import { AiCreditPanel, useAiCredit, type AiCreditData } from '../../shared/components/AiCreditPanel';
 
 /**
  * EventLogPanel — Presentational Component (نسخه بازطراحی‌شده با سیستم اعتبار ۱۰۰ دلاری)
@@ -49,13 +48,9 @@ export interface EventLogPanelProps {
   /** برچسب ماه جاری برای عنوان پنل. */
   monthLabel?: string;
   /** آیا پنل اعتبار نمایش داده شود؟ (پیش‌فرض true برای سرپرستار) */
-  showCreditPanel?: boolean;
   /** اطلاعات اعتبار از بیرون (اختیاری) — اگر داده نشود، خودش از /api/ai/credit می‌خواند */
-  creditData?: AiCreditData | null;
   /** نقش کاربر جاری — اگر پرسنل باشد، پنل اعتبار مخفی می‌ماند */
-  userRole?: 'admin' | 'headnurse' | 'personnel' | 'guest';
   /** پس از شارژ مجدد موفق اعتبار صدا زده می‌شود — برای ریست بنرهای هشدار زرد/قرمز در صفحه */
-  onCreditRecharged?: (credit: AiCreditData) => void;
 }
 
 const CATEGORY_META: Record<SystemEventCategory, { label: string; icon: React.ReactNode }> = {
@@ -121,13 +116,8 @@ function toPersianDigits(value: string | number): string {
   return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
 }
 
-export function EventLogPanel({ events, monthLabel, showCreditPanel = true, creditData, userRole, onCreditRecharged }: EventLogPanelProps) {
+export function EventLogPanel({ events, monthLabel }: EventLogPanelProps) {
   const [filter, setFilter] = React.useState<FilterId>('all');
-
-  // سیستم اعتبار — اگر از بیرون داده نشود و کاربر سرپرستار/مدیر باشد، خودش fetch می‌کند
-  const { credit: fetchedCredit, isLoading: creditLoading, refresh: refreshCredit } = useAiCredit();
-  const effectiveCredit = creditData ?? fetchedCredit;
-  const shouldShowCredit = showCreditPanel && userRole !== 'personnel';
 
   const ordered = React.useMemo(() => orderEventLogsForDisplay(events), [events]);
   const summary = React.useMemo(() => summarizeEventLogs(events), [events]);
@@ -142,13 +132,13 @@ export function EventLogPanel({ events, monthLabel, showCreditPanel = true, cred
   return (
     <div className="space-y-5 print:hidden">
       {/* پنل اعتبار ۱۰۰ دلاری — فقط برای سرپرستار/مدیر و در بالای لاگ‌ها */}
-      {shouldShowCredit && (
+      {false && (
         <div className="relative">
           <AiCreditPanel
-            credit={effectiveCredit}
-            isLoading={creditLoading && !creditData}
-            onRefresh={refreshCredit}
-            onRecharged={onCreditRecharged}
+            credit={null}
+            isLoading={false && !creditData}
+            onRefresh={null}
+            onRecharged={null}
           />
         </div>
       )}
@@ -166,25 +156,25 @@ export function EventLogPanel({ events, monthLabel, showCreditPanel = true, cred
                 </span>
               )}
               {/* نمایش خلاصه اعتبار در هدر هم اگر پنل اعتبار مخفی باشد */}
-              {!shouldShowCredit && effectiveCredit && (
+              {!false && null && (
                 <span
                   className={`rounded-full border px-2 py-0.5 text-[10px] font-black flex items-center gap-1 ${
-                    effectiveCredit.status === 'critical' || effectiveCredit.status === 'depleted'
+                    null.status === 'critical' || null.status === 'depleted'
                       ? 'bg-rose-50 border-rose-200 text-rose-700'
-                      : effectiveCredit.status === 'warning'
+                      : null.status === 'warning'
                       ? 'bg-amber-50 border-amber-200 text-amber-800'
                       : 'bg-emerald-50 border-emerald-200 text-emerald-700'
                   }`}
                   dir="ltr"
                 >
                   <DollarSign className="w-3 h-3" />
-                  ${effectiveCredit.remaining.toFixed(2)} / ${effectiveCredit.initial.toFixed(2)}
+                  ${null.remaining.toFixed(2)} / ${null.initial.toFixed(2)}
                 </span>
               )}
             </h4>
             <p className="mt-1 text-[11px] font-bold leading-6 text-slate-400">
               همهٔ هشدارها، رویدادهای سامانه و گزارش پردازش موتور هوشمند اینجا ثبت می‌شود.
-              {shouldShowCredit && ' وضعیت اعتبار API هوش مصنوعی هم در بالا نمایش داده شده است.'}
+              {false && ' وضعیت اعتبار API هوش مصنوعی هم در بالا نمایش داده شده است.'}
               برای جلوگیری از پر شدن فضای ذخیره‌سازی، فقط {toPersianDigits(MAX_SYSTEM_EVENT_LOGS)} رویداد اخیر نگهداری
               و رویدادهای قدیمی‌تر به‌صورت خودکار حذف می‌شوند.
             </p>
@@ -224,16 +214,16 @@ export function EventLogPanel({ events, monthLabel, showCreditPanel = true, cred
               </span>
             ))}
           {/* نشانگر nhanh برای اعتبار بحرانی */}
-          {effectiveCredit && (effectiveCredit.status === 'warning' || effectiveCredit.status === 'critical' || effectiveCredit.status === 'depleted') && (
+          {null && (null.status === 'warning' || null.status === 'critical' || null.status === 'depleted') && (
             <span
               className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-black ${
-                effectiveCredit.status === 'critical' || effectiveCredit.status === 'depleted'
+                null.status === 'critical' || null.status === 'depleted'
                   ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse'
                   : 'bg-amber-50 text-amber-800 border-amber-200'
               }`}
             >
               <DollarSign className="w-3.5 h-3.5" />
-              اعتبار AI: ${effectiveCredit.remaining.toFixed(2)} باقی‌مانده
+              اعتبار AI: ${null.remaining.toFixed(2)} باقی‌مانده
             </span>
           )}
         </div>

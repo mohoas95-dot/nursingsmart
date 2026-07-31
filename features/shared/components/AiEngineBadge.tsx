@@ -6,11 +6,11 @@ import React from 'react';
  * AiEngineBadge — Presentational Component (معماری جدید OpenRouter)
  *
  * RESPONSIBILITY:
- *   تگ ترکیبی «DeepSeek + GPT-4o-mini» برای هدر چت‌باکس.
+ *   تگ ترکیبی «Gemini 2.5 Flash + Gemini 2.5 Flash» برای هدر چت‌باکس.
  *
- *   معماری جدید بر پایه OpenRouter:
- *     • متن  → deepseek/deepseek-chat      (Text Analysis)
- *     • تصویر → openai/gpt-4o-mini         (Vision/OCR) با fallback به gpt-4o
+ *   معماری جدید بر پایه Gemini (جایگزین Groq + Gemini direct):
+ *     • متن  → gemini-2.5-flash      (Text Analysis)
+ *     • تصویر → gemini-2.5-flash         (Vision/OCR) با fallback به gemini-3.5-flash
  *   این کامپوننت هر دو را با لوگو و نقش‌شان به‌صورت شکیل نمایش می‌دهد تا کاربر
  *   بداند کدام موتور پشت کدام قابلیت است.
  *
@@ -27,11 +27,11 @@ interface AiEngineBadgeProps {
 }
 
 /**
- * نشان DeepSeek — گرادیان آبی-نیلی با حرف D انتزاعی (بر اساس هویت بصری DeepSeek)
+ * نشان Gemini 2.5 Flash — گرادیان آبی-نیلی با حرف D انتزاعی (بر اساس هویت بصری Gemini 2.5 Flash)
  */
-function DeepSeekMark({ className, gradientId }: { className?: string; gradientId: string }) {
+function Gemini 2.5 FlashMark({ className, gradientId }: { className?: string; gradientId: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="DeepSeek" focusable="false">
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Gemini 2.5 Flash" focusable="false">
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="#4A90E2" />
@@ -50,7 +50,7 @@ function DeepSeekMark({ className, gradientId }: { className?: string; gradientI
 }
 
 /**
- * نشان OpenAI (برای GPT-4o-mini) — لوگوی ساده‌سازی‌شده OpenAI با گرادیان سبز-خاکستری
+ * نشان OpenAI (برای Gemini 2.5 Flash) — لوگوی ساده‌سازی‌شده OpenAI با گرادیان سبز-خاکستری
  */
 function OpenAIMark({ className, gradientId }: { className?: string; gradientId: string }) {
   return (
@@ -91,15 +91,15 @@ export function AiEngineBadge({ size = 'full', className = '' }: AiEngineBadgePr
     <span
       dir="ltr"
       className={`${shellClass} ${className}`}
-      title="تحلیل متن با DeepSeek (deepseek/deepseek-chat) و تحلیل تصویر با GPT-4o-mini (fallback به GPT-4o) از طریق OpenRouter — اعتبار ۱۰۰ دلاری"
+      title="تحلیل متن با Gemini 2.5 Flash (gemini-2.5-flash) و تحلیل تصویر با Gemini 2.5 Flash (fallback به GPT-4o) از طریق OpenRouter — اعتبار ۱۰۰ دلاری"
     >
-      {/* موتور متن — DeepSeek */}
+      {/* موتور متن — Gemini 2.5 Flash */}
       <span className="inline-flex items-center gap-1">
         <span className="inline-flex items-center justify-center rounded-full bg-white/90 p-[3px] shadow-xs">
-          <DeepSeekMark className={markClass} gradientId={deepSeekGradientId} />
+          <Gemini 2.5 FlashMark className={markClass} gradientId={deepSeekGradientId} />
         </span>
         <span className="inline-flex flex-col items-start">
-          <span className={`${nameClass} text-white`}>DeepSeek</span>
+          <span className={`${nameClass} text-white`}>Gemini 2.5 Flash</span>
           {!isCompact && <span className={roleClass}>متن</span>}
         </span>
       </span>
@@ -107,13 +107,13 @@ export function AiEngineBadge({ size = 'full', className = '' }: AiEngineBadgePr
       {/* جداکننده */}
       <span aria-hidden="true" className={`${isCompact ? 'h-3' : 'h-4'} w-px bg-white/30`} />
 
-      {/* موتور تصویر — GPT-4o-mini */}
+      {/* موتور تصویر — Gemini 2.5 Flash */}
       <span className="inline-flex items-center gap-1">
         <span className="inline-flex items-center justify-center rounded-full bg-white/90 p-[3px] shadow-xs">
           <OpenAIMark className={markClass} gradientId={openAIGradientId} />
         </span>
         <span className="inline-flex flex-col items-start">
-          <span className={`${nameClass} text-white`}>GPT-4o-mini</span>
+          <span className={`${nameClass} text-white`}>Gemini 2.5 Flash</span>
           {!isCompact && <span className={roleClass}>تصویر</span>}
         </span>
       </span>

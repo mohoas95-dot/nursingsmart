@@ -267,7 +267,7 @@ export function AiCreditPanel({ credit, isLoading, onRefresh, onRecharged, class
               </span>
             </h4>
             <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-              مدیریت هزینه API از طریق OpenRouter — مدل متنی DeepSeek و بینایی GPT-4o-mini
+              مدیریت هزینه API با gemini-2.5-flash و fallback gemini-3.5-flash
             </p>
           </div>
         </div>
@@ -513,7 +513,7 @@ export function AiCreditPanel({ credit, isLoading, onRefresh, onRecharged, class
       <div className="bg-slate-50 border-t border-slate-100 px-4 py-2.5 flex items-center gap-2">
         <CreditCard className="w-3.5 h-3.5 text-slate-400" />
         <span className="text-[10px] font-bold text-slate-500 leading-5">
-          متن → <b dir="ltr">deepseek/deepseek-chat</b> ($0.27/$1.10) | تصویر → <b dir="ltr">openai/gpt-4o-mini</b> ($0.15/$0.60) با fallback به <b dir="ltr">gpt-4o</b> برای تصاویر شلوغ
+          متن → <b dir="ltr">gemini-2.5-flash</b> ($0.27/$1.10) | تصویر → <b dir="ltr">gemini-2.5-flash</b> ($0.15/$0.60) با fallback به <b dir="ltr">gemini-3.5-flash</b> برای تصاویر شلوغ
         </span>
       </div>
 

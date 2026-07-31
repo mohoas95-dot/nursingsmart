@@ -237,8 +237,8 @@ class ConcurrencyConflictError extends Error {
 // روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
 //
 // معماری جدید بر پایه OpenRouter (طبق الزامات بازطراحی):
-//   • متن  → /api/ai/chat-requests        (OpenRouter / deepseek/deepseek-chat)
-//   • تصویر → /api/ai/parse-image-request  (OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o)
+//   • متن  → /api/ai/chat-requests        (gemini-2.5-flash)
+//   • تصویر → /api/ai/parse-image-request  (gemini-2.5-flash با fallback gemini-3.5-flash)
 //   • اعتبار ۱۰۰ دلاری با ردیابی توکن و هشدار <15$ زرد و <5$ قرمز در UI سرپرستار
 // چرخش بین کلیدهای OpenRouter در سمت سرور انجام می‌شود؛ اعتبار به‌صورت خودکار کسر می‌گردد.
 // ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ async function postAiWithRetry(
   );
 }
 
-/** پیام متنی → OpenRouter / DeepSeek */
+/** پیام متنی → gemini-2.5-flash */
 async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
@@ -313,7 +313,7 @@ async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   });
 }
 
-/** تصویر → OpenRouter / GPT-4o-mini (fallback gpt-4o) */
+/** تصویر → gemini-2.5-flash (fallback gemini-3.5-flash) */
 async function postImageRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_IMAGE_ENDPOINT, payload, {
     timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
@@ -5971,7 +5971,7 @@ export default function Home() {
             </div>
             {aiCreditBanner.status === 'critical' && (
               <p className="mt-1 text-[11px] font-bold text-white/90 leading-5">
-                سرویس هوش مصنوعی (چت متنی DeepSeek و OCR تصویری GPT-4o-mini) در آستانه قطعی است. از دکمه «شارژ مجدد ۱۰۰ دلار» در بخش «گزارشات و لاگ» استفاده کنید تا اعتبار به حالت عادی بازگردد و از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
+                سرویس هوش مصنوعی (چت متنی gemini-2.5-flash و OCR تصویری gemini-2.5-flash با fallback gemini-3.5-flash) در آستانه قطعی است. از دکمه «شارژ مجدد ۱۰۰ دلار» در بخش «گزارشات و لاگ» استفاده کنید تا اعتبار به حالت عادی بازگردد و از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
               </p>
             )}
           </div>
@@ -7823,7 +7823,7 @@ export default function Home() {
                   events={eventLogs}
                   monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
                   userRole={role}
-                  showCreditPanel={true}
+                  showCreditPanel={false}
                   onCreditRecharged={() => {
                     // پس از شارژ مجدد موفق، بنرهای هشدار زرد/قرمز بالای داشبورد به حالت عادی ریست می‌شوند
                     setAiCreditBanner(null);

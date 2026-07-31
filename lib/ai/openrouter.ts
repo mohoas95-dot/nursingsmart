@@ -1,19 +1,14 @@
 /**
  * lib/ai/openrouter.ts
  * ---------------------------------------------------------------------------
- * موتور واحد هوش مصنوعی بر پایه OpenRouter (جایگزین Groq + Gemini direct)
+ * موتور واحد هوش مصنوعی بر پایه Gemini (جایگزین Groq + Gemini direct + DeepSeek + OpenRouter)
  *
  * الزامات جدید:
- *   1. ارائه‌دهنده: تمام درخواست‌ها از طریق OpenRouter / Bluesminds ارسال می‌شوند.
- *      - Base URL اختصاصی Bluesminds از OPENROUTER_BASE_URL خوانده می‌شود
- *        (پیش‌فرض: https://api.bluesminds.com/v1)
- *      - کلید از OPENROUTER_API_KEY خوانده می‌شود
- *   2. تفکیک هوشمند مدل‌ها:
- *      - متنی (Text Analysis): deepseek-chat (یا deepseek-v3)
- *      - تصویری (Vision/OCR): gpt-4o-mini با fallback به gpt-4o
- *   3. مدیریت اعتبار ۱۰۰ دلاری و ردیابی توکن‌ها
- *
- * این فایل نقطه مرکزی است و تمام مسیرهای API باید از اینجا استفاده کنند.
+ *   1. مدل اصلی: gemini-2.5-flash (متن و تصویر)
+ *      مدل fallback: gemini-3.5-flash (فقط در صورت تحلیل طولانی، مفهوم نامفهوم، شلوغی، مشکل جدی)
+ *   2. کلید اصلی از GEMINI_API_KEY خوانده می‌شود
+ *   3. از ۵ کلید API برای پایداری استفاده می‌شود
+ *   4. اگر همه کلیدها به سقف روزانه بخورند، زمان انتظار بازگشایی به کاربر در چت باکس نشان داده می‌شود
  */
 
 import { ApiKeyPool, classifyFailure, parseRetryAfterMs } from './key-pool';
@@ -32,7 +27,7 @@ import { deductCredit, getCreditStatusLevel } from './credit';
 // ثابت‌ها و پیکربندی
 // ---------------------------------------------------------------------------
 
-export const OPENROUTER_PROVIDER = 'openrouter';
+export const OPENROUTER_PROVIDER = 'gemini-service';
 
 /**
  * Base URL اختصاصی Bluesminds.
@@ -50,18 +45,18 @@ export const OPENROUTER_PROVIDER = 'openrouter';
  * بنابراین همهٔ درخواست‌های API به Bluesminds ارسال می‌شوند.
  */
 export const OPENROUTER_BASE_URL: string = (
-  process.env.OPENROUTER_BASE_URL || 'https://api.bluesminds.com/v1'
+  process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta'
 ).replace(/\/+$/, '');
 
-// Endpoint نهایی درخواست‌های API — بر پایهٔ OPENROUTER_BASE_URL ساخته می‌شود
+// Endpoint نهایی درخواست‌های API
 export const OPENROUTER_ENDPOINT: string = `${OPENROUTER_BASE_URL}/chat/completions`;
 
-// مدل‌های هوشمند بر اساس نوع ورودی
-export const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.OPENROUTER_DEEPSEEK_MODEL || 'deepseek-chat';
-export const TEXT_MODEL_FALLBACK = process.env.OPENROUTER_TEXT_FALLBACK_MODEL || 'deepseek-v3';
+// مدل‌های هوشمند بر اساس نوع ورودی (فقط gemini)
+export const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
+export const TEXT_MODEL_FALLBACK = process.env.GEMINI_TEXT_FALLBACK_MODEL || 'gemini-3.5-flash';
 
-export const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'gpt-4o-mini';
-export const VISION_FALLBACK_MODEL = process.env.OPENROUTER_VISION_FALLBACK_MODEL || 'gpt-4o';
+export const VISION_MODEL = process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash';
+export const VISION_FALLBACK_MODEL = process.env.GEMINI_VISION_FALLBACK_MODEL || 'gemini-3.5-flash';
 
 export function getTextModelChain(): string[] {
   return Array.from(new Set([TEXT_MODEL, TEXT_MODEL_FALLBACK]));
@@ -71,14 +66,15 @@ export function getVisionModelChain(): string[] {
   return Array.from(new Set([VISION_MODEL, VISION_FALLBACK_MODEL]));
 }
 
-// استخر کلید OpenRouter — می‌تواند چند کلید داشته باشد
+// استخر کلید Gemini — از ۵ کلید برای پایداری سیستم استفاده می‌شود
 export const openRouterKeyPool = new ApiKeyPool({
   provider: OPENROUTER_PROVIDER,
   envNames: [
-    'OPENROUTER_API_KEY',
-    'OPENROUTER_API_KEY_2',
-    'OPENROUTER_API_KEY_3',
-    'OPENROUTER_API_KEYS',
+    'GEMINI_API_KEY',
+    'GEMINI_API_KEY_2',
+    'GEMINI_API_KEY_3',
+    'GEMINI_API_KEY_4',
+    'GEMINI_API_KEY_5',
   ],
 });
 
@@ -277,7 +273,7 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
 ): Promise<OpenRouterJsonResult<T>> {
   if (openRouterKeyPool.size() === 0) {
     throw new MissingApiKeyError(
-      'کلید API سرویس OpenRouter تنظیم نشده است؛ متغیر OPENROUTER_API_KEY را در .env.local اضافه کنید.',
+      'کلید API سرویس Gemini تنظیم نشده است؛ متغیر GEMINI_API_KEY را در .env.local اضافه کنید.',
       OPENROUTER_PROVIDER,
     );
   }
@@ -288,6 +284,8 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
   let sawQuota = false;
   let sawBusy = false;
   let sawTimeout = false;
+  let sawInvalidConcept = false;
+  let sawSeriousError = false;
   let lastError: string | undefined;
   let lastStatus: number | undefined;
   let callsMade = 0;
@@ -296,6 +294,15 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
   const modelChain = getTextModelChain();
 
   for (const model of modelChain) {
+    // محدودیت سوئیچ به fallback: فقط در صورت تحلیل طولانی، مفهوم نامفهوم، شلوغی، مشکل جدی
+    if (model === modelChain[1] || model === TEXT_MODEL_FALLBACK) {
+      const shouldTryFallback = sawTimeout || sawBusy || sawInvalidConcept || sawSeriousError;
+      if (!shouldTryFallback) {
+        console.warn(`[openrouter:text] سوئیچ به مدل ${model} ممنوع است؛ شرایط لازم (طولانی، نامفهوم، شلوغ، جدی) وجود ندارد.`);
+        break;
+      }
+    }
+
     const keys = openRouterKeyPool.order();
     for (let index = 0; index < keys.length; index++) {
       const keyState = keys[index];
@@ -355,8 +362,9 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
             },
           };
         }
-        // JSON invalid but model succeeded
+        // JSON invalid but model succeeded -> مفهوم نامفهوم (شرط سوئیچ به fallback)
         openRouterKeyPool.reportSuccess(keyState.value);
+        sawInvalidConcept = true;
         lastError = 'خروجی مدل JSON معتبر نبود.';
         console.warn(`[openrouter:text] مدل «${model}» خروجی غیر-JSON داد؛ تلاش بعدی.`);
         continue;
@@ -415,7 +423,7 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
 ): Promise<OpenRouterVisionResult<T>> {
   if (openRouterKeyPool.size() === 0) {
     throw new MissingApiKeyError(
-      'کلید API سرویس OpenRouter تنظیم نشده است؛ متغیر OPENROUTER_API_KEY را در .env.local اضافه کنید.',
+      'کلید API سرویس Gemini تنظیم نشده است؛ متغیر GEMINI_API_KEY را در .env.local اضافه کنید.',
       OPENROUTER_PROVIDER,
     );
   }
@@ -426,6 +434,8 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
   let sawQuota = false;
   let sawBusy = false;
   let sawTimeout = false;
+  let sawSeriousError = false;
+  let sawInvalidConcept = false;
   let lastError: string | undefined;
   let callsMade = 0;
 
@@ -434,6 +444,15 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
   for (let modelIdx = 0; modelIdx < modelChain.length; modelIdx++) {
     const model = modelChain[modelIdx];
     const isFallbackModel = modelIdx > 0;
+
+    // محدودیت سوئیچ به fallback: فقط در صورت تحلیل طولانی، مفهوم نامفهوم، شلوغی، مشکل جدی
+    if (isFallbackModel) {
+      const shouldTryFallback = sawTimeout || sawBusy || sawSeriousError || sawInvalidConcept;
+      if (!shouldTryFallback) {
+        console.warn(`[openrouter:vision] سوئیچ به مدل ${model} ممنوع است؛ شرایط لازم وجود ندارد.`);
+        break;
+      }
+    }
 
     const keys = openRouterKeyPool.order();
     for (let keyIdx = 0; keyIdx < keys.length; keyIdx++) {
@@ -514,11 +533,17 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
         }
 
         // JSON invalid: اگر روی مدل اول هستیم و fallback داریم، تلاش با fallback
+        // فقط در صورتی که مفهوم نامفهوم باشد (شرط سوئیچ به fallback)
+        openRouterKeyPool.reportSuccess(keyState.value);
+        sawInvalidConcept = true;
+        sawSeriousError = true; // مفهوم نامفهوم به عنوان مشکل جدی در نظر گرفته می‌شود
+        lastError = 'خروجی مدل بینایی JSON معتبر نبود.';
+        console.warn(`[openrouter:vision] مدل «${model}» خروجی غیر-JSON داد؛ تلاش بعدی.`);
         if (!isFallbackModel && modelChain.length > 1) {
           console.warn(`[openrouter:vision] مدل «${model}» JSON نامعتبر داد؛ سوئیچ به fallback «${modelChain[1]}» به دلیل احتمال تصویر شلوغ/کم‌کیفیت.`);
-          // ادامه حلقه بیرونی به مدل بعدی (fallback) می‌رود
           break;
         }
+        continue;
 
         openRouterKeyPool.reportSuccess(keyState.value);
         lastError = 'خروجی مدل بینایی JSON معتبر نبود.';
@@ -537,6 +562,10 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
       if (!isFallbackModel && (kind === 'busy' || kind === 'quota' || /image|vision|quality|low|blur/i.test(outcome.errorMessage || ''))) {
         console.warn(`[openrouter:vision] مدل «${model}» ناموفق بود (${kind}); سوئیچ خودکار به fallback پرقدرت «${VISION_FALLBACK_MODEL}» برای تصویر شلوغ/کم‌کیفیت.`);
         break; // برو مدل بعدی (fallback)
+      }
+
+      if (outcome.status === 500 || outcome.status === 502 || outcome.status === 503 || outcome.status === 504) {
+        sawSeriousError = true;
       }
 
       if (outcome.status === 404 || /model.*(not found|does not exist|decommissioned)/i.test(outcome.errorMessage || '')) {
@@ -574,7 +603,7 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
   if (sawQuota) {
     const waitMs = openRouterKeyPool.nextAvailableInMs();
     throw new QuotaExhaustedError(
-      `${buildQuotaMessage('تحلیل تصویر', waitMs)} اگر عجله داری، همین درخواست را متنی بنویس — از سرویس DeepSeek استفاده می‌کند.`,
+      `${buildQuotaMessage('تحلیل تصویر', waitMs)} اگر عجله داری، همین درخواست را متنی بنویس — از سرویس gemini-2.5-flash استفاده می‌کند.`,
       OPENROUTER_PROVIDER,
       waitMs,
     );
