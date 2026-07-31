@@ -1,16 +1,12 @@
 /**
- * lib/ai/groq.ts
- * ---------------------------------------------------------------------------
- * این فایل در معماری ۲۰۲۶ منسوخ شده است.
- * تمام درخواست‌ها مستقیماً با Gemini انجام می‌شود.
- * برای سازگاری با importهای قدیمی، همه چیز به gemini.ts نگاشت می‌شود.
+ * lib/ai/groq.ts — منسوخ شده، فقط برای سازگاری
+ * همه چیز به gemini.ts نگاشت می‌شود
  */
 
-export * from './gemini';
-import { geminiKeyPool, GEMINI_PRIMARY_MODEL, getGeminiModelChain, generateGeminiJson } from './gemini';
-
-export const GROQ_PROVIDER = 'gemini';
-export const GROQ_MODEL = GEMINI_PRIMARY_MODEL;
-export const groqKeyPool = geminiKeyPool;
-export function getGroqModelChain() { return getGeminiModelChain(); }
-export const generateGroqJson = generateGeminiJson;
+export {
+  GEMINI_PROVIDER as GROQ_PROVIDER,
+  GEMINI_PRIMARY_MODEL as GROQ_MODEL,
+  geminiKeyPool as groqKeyPool,
+  getGeminiModelChain as getGroqModelChain,
+  generateGeminiJson as generateGroqJson,
+} from './gemini';

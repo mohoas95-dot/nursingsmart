@@ -8,7 +8,7 @@
  *     کاملاً حذف شده‌اند.
  *   - فقط Gemini Direct API:
  *       primary: gemini-2.5-flash
- *       fallback: gemini-3.5-flash (فقط در شرایط جدی: زمان طولانی، مفهوم نامفهوم، سرور شلوغ)
+ *       fallback: gemini-3.5-flash (فقط در شرایط جدی)
  *   - پایداری: ۵ کلید API با چرخش خودکار بدون معطلی
  *   - نمایش مدت انتظار بازگشایی در صورت اتمام همه کلیدها
  *   - سیستم اعتبار ۱۰۰ دلاری حذف شده است.
@@ -48,9 +48,7 @@ export {
   type GeminiVisionResult,
 } from './gemini';
 
-// برای سازگاری با importهای قدیمی که از './groq' یا './openrouter' استفاده می‌کردند
-// آن‌ها را به gemini نگاشت می‌کنیم تا کد قدیمی نشکند، ولی دیگر OpenRouter وجود ندارد.
-
+// برای سازگاری با importهای قدیمی
 import {
   GEMINI_PROVIDER as _PROVIDER,
   GEMINI_PRIMARY_MODEL as _PRIMARY,
@@ -150,9 +148,10 @@ export function getGroqModelChain() {
   return _chain();
 }
 
-// Wrappers قدیمی Gemini Vision (direct)
-export type GeminiVisionResult = { response: { text: string }; model: string; keyLabel: string };
-export async function generateGeminiVision(params: {
+// Wrapper قدیمی برای signature قدیمی Gemini Vision (contents/config) — برای سازگاری
+// نام متفاوت انتخاب شده تا با generateGeminiVision اصلی تداخل نداشته باشد
+export type GeminiVisionLegacyResult = { response: { text: string }; model: string; keyLabel: string };
+export async function generateGeminiVisionLegacy(params: {
   contents: Array<{
     role: string;
     parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>;
@@ -162,7 +161,7 @@ export async function generateGeminiVision(params: {
     responseMimeType?: string;
     responseSchema?: unknown;
   };
-}): Promise<GeminiVisionResult> {
+}): Promise<GeminiVisionLegacyResult> {
   const firstContent = params.contents?.[0];
   const textPart = firstContent?.parts?.find(p => typeof p.text === 'string')?.text || '';
   const imagePart = firstContent?.parts?.find(p => p.inlineData?.data)?.inlineData;
@@ -181,6 +180,11 @@ export async function generateGeminiVision(params: {
     keyLabel: result.keyLabel,
   };
 }
+
+// برای سازگاری با import { generateGeminiVision } از نسخه قدیمی gemini-vision.ts که signature قدیمی داشت
+// اگر کسی هنوز آن signature را صدا بزند، این wrapper کار می‌کند
+export const geminiKeyPoolAlias = _pool;
+export const GEMINI_PROVIDER_LEGACY = _PROVIDER;
 
 // حذف کامل سیستم اعتبار — استاب خالی برای جلوگیری از شکست import
 export const INITIAL_CREDIT_USD = 0;
