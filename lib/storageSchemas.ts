@@ -138,10 +138,14 @@ const SystemEventLogSchema = z.object({
   id: z.string().min(1).max(80),
   // رویدادهای مهاجرت‌شده از changeLogs قدیمی زمان دقیق ندارند و رشتهٔ خالی می‌گیرند.
   at: z.string().max(40),
-  category: z.enum([
-    'solver', 'schedule', 'alert', 'lock', 'requests',
-    'personnel', 'settings', 'calendar', 'ai', 'storage',
-  ]),
+  // دستهٔ منسوخ 'ai' فقط برای خواندن اسناد قدیمی پذیرفته می‌شود و بی‌درنگ به
+  // 'schedule' نگاشت می‌شود؛ هیچ رویداد جدیدی با این دسته نوشته نمی‌شود.
+  category: z
+    .enum([
+      'solver', 'schedule', 'alert', 'lock', 'requests',
+      'personnel', 'settings', 'calendar', 'ai', 'storage',
+    ])
+    .transform(category => (category === 'ai' ? ('schedule' as const) : category)),
   severity: z.enum(['info', 'success', 'warning', 'error']),
   title: z.string().min(1).max(300),
   detail: z.string().max(1500).optional(),

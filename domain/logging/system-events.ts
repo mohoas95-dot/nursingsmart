@@ -40,7 +40,6 @@ export const SYSTEM_EVENT_CATEGORIES = [
   'personnel',
   'settings',
   'calendar',
-  'ai',
   'storage',
 ] as const;
 
