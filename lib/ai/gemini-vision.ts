@@ -218,7 +218,10 @@ export async function generateGeminiVision(
         }
 
         const kind = classifyFailure(status, message);
-        if (kind === "quota") sawQuota = true;
+        // daily_quota هم یک خطای سهمیه است، نه «شلوغی سرور». اگر آن را
+        // جدا حساب نکنیم، رسیدن به سقف فراخوانیِ این درخواست به اشتباه 503
+        // و پیام «سرور شلوغ است» برمی‌گرداند (با اینکه پاسخ واقعی Gemini 429 است).
+        if (kind === "quota" || kind === "daily_quota") sawQuota = true;
         geminiKeyPool.reportFailure(keyState.value, kind, parseRetryAfterMs(null, message));
         console.warn(
           `[gemini] مدل «${model}» با کلید ${keyState.label} ناموفق بود (${kind}); ${
