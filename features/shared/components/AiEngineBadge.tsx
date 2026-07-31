@@ -7,7 +7,7 @@ import React from 'react';
  *
  * طبق درخواست کارفرما:
  *   - تمامی نوشته‌های مربوط به هوش‌های قبلی (Groq, DeepSeek, OpenAI...) حذف شده.
- *   - فقط Gemini Direct نمایش داده می‌شود: primary gemini-2.5-flash با fallback gemini-3.5-flash
+ *   - فقط Gemini Direct نمایش داده می‌شود: primary gemini-1.5-flash با fallback gemini-1.5-flash
  *   - برای حفظ حریم UI، badge بسیار ساده و بدون جزئیات فنی زیاد.
  *   - اگر کارفرما بخواهد هیچ نوشته‌ای از AI در UI نباشد، می‌تواند این کامپوننت را
  *     کلا render نکند؛ اما در حالت پیش‌فرض یک نشان کوچک و تمیز از Gemini نشان می‌دهد.

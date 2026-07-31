@@ -19,7 +19,7 @@ import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-co
  * مسیر گفت‌وگوی متنی چت‌باکس — موتور جدید: Gemini Direct
  *
  * معماری ۲۰۲۶:
- *   - فقط Gemini: primary gemini-2.5-flash, fallback gemini-3.5-flash
+ *   - فقط Gemini: primary gemini-1.5-flash, fallback gemini-1.5-flash
  *   - ۵ کلید API با چرخش خودکار بی‌درنگ
  *   - سوئیچ به fallback فقط در صورت: زمان بسیار طولانی، مفهوم نامفهوم، سرور شلوغ، مشکل جدی
  *   - در صورت اتمام همه کلیدها، مدت زمان انتظار به کاربر نشان داده می‌شود

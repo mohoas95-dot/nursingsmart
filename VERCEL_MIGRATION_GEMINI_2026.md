@@ -18,9 +18,9 @@
 
 ### 2. استقرار Gemini 2.5 Flash با فال‌بک Gemini 3.5 Flash
 - **فایل جدید اصلی**: `lib/ai/gemini.ts`
-  - `GEMINI_PRIMARY_MODEL = gemini-2.5-flash` (پیش‌فرض, قابل override با `GEMINI_PRIMARY_MODEL`)
-  - `GEMINI_FALLBACK_MODEL = gemini-3.5-flash` (موجود در کاتالوگ گوگل از May 2026)
-  - تابع `getGeminiModelChain()` → `['gemini-2.5-flash', 'gemini-3.5-flash']`
+  - `GEMINI_PRIMARY_MODEL = gemini-1.5-flash` (پیش‌فرض, قابل override با `GEMINI_PRIMARY_MODEL`)
+  - `GEMINI_FALLBACK_MODEL = gemini-1.5-flash` (موجود در کاتالوگ گوگل از May 2026)
+  - تابع `getGeminiModelChain()` → `['gemini-1.5-flash', 'gemini-1.5-flash']`
   - هر دو قابلیت متنی و تصویری با همین دو مدل انجام می‌شود (Gemini multimodal)
 
 - **معماری درخواست**: 
@@ -35,7 +35,7 @@
 - سرور شلوغ (`503`, `overloaded`, `high demand` → `sawBusy`)
 - مشکلات جدی (404 model not found, 500, ...)
 
-**قانون طلایی:** ابتدا هر ۵ کلید روی مدل اصلی `gemini-2.5-flash` امتحان می‌شود. اگر هیچ‌کدام موفق نشد و حداقل یکی از شرایط بالا رخ داده بود، آنگاه هر ۵ کلید روی `gemini-3.5-flash` امتحان می‌شود. سوئیچ سریع بدون امتحان کلیدها ممنوع.
+**قانون طلایی:** ابتدا هر ۵ کلید روی مدل اصلی `gemini-1.5-flash` امتحان می‌شود. اگر هیچ‌کدام موفق نشد و حداقل یکی از شرایط بالا رخ داده بود، آنگاه هر ۵ کلید روی `gemini-1.5-flash` امتحان می‌شود. سوئیچ سریع بدون امتحان کلیدها ممنوع.
 
 کد در `generateGeminiJson` و `generateGeminiVision`:
 ```ts
@@ -135,8 +135,8 @@ GEMINI_API_KEY_5=AIzaSy...
 GEMINI_API_KEYS=AIzaSy...1,AIzaSy...2,AIzaSy...3,AIzaSy...4,AIzaSy...5
 
 # مدل‌ها — اختیاری، پیش‌فرض‌ها درست هستند:
-GEMINI_PRIMARY_MODEL=gemini-2.5-flash
-GEMINI_FALLBACK_MODEL=gemini-3.5-flash
+GEMINI_PRIMARY_MODEL=gemini-1.5-flash
+GEMINI_FALLBACK_MODEL=gemini-1.5-flash
 
 # تنظیمات اختیاری تایم‌اوت (اختیاری):
 GEMINI_CALL_TIMEOUT_MS=28000
@@ -150,7 +150,7 @@ GEMINI_TEMPERATURE=0.4
 - `DATABASE_URL`، `AUTH_*` و سایر متغیرهای غیر-AI را دست نزنید — باقی بمانند.
 - پس از افزودن کلیدهای جدید Gemini، حتماً **Redeploy** کنید (Vercel → Deployments → Redeploy) تا `geminiKeyPool` کلیدهای جدید را بخواند.
 - سلامت سیستم را از `GET /api/ai/health` چک کنید:
-  - باید `configured: 5`, `availableNow: 5`, `primaryModel: gemini-2.5-flash`, `fallbackModel: gemini-3.5-flash` باشد.
+  - باید `configured: 5`, `availableNow: 5`, `primaryModel: gemini-1.5-flash`, `fallbackModel: gemini-1.5-flash` باشد.
   - اگر `configured: 0` دیدید، یعنی هیچ کلید GEMINI_* تنظیم نشده.
 - مسیر `/api/ai/credit` حالا `410` برمی‌گرداند — طبیعی است، چون حذف شده. اگر مانیتورینگ دارید که به آن ping می‌زند، آن چک را حذف کنید.
 - فایل `lib/ai/credit.ts` و `AiCreditPanel` همچنان وجود دارند ولی stub هستند تا build نشکند؛ نیازی به حذف فیزیکی از Vercel نیست.
@@ -179,7 +179,7 @@ GEMINI_TEMPERATURE=0.4
 2. ۵ کلید GEMINI_API_KEY_* را اضافه کن
 3. Redeploy بزن
 4. `/api/ai/health` را باز کن — باید ۵ کلید سالم نشان دهد
-5. یک پیام متنی در چت‌باکس بفرست — باید با gemini-2.5-flash پاسخ دهد
+5. یک پیام متنی در چت‌باکس بفرست — باید با gemini-1.5-flash پاسخ دهد
 6. یک عکس دست‌نوشته فارسی بفرست — باید با همان مدل تحلیل شود
 7. برای تست quota: یک کلید را عمداً خراب وارد کن، پیام بفرست — باید بی‌درنگ به کلید بعدی برود و کاربر خطای quota نبیند
 8. برای تست اتمام همه کلیدها: همه کلیدها را موقتاً به سقف بزن (یا کلید نامعتبر بگذار) — باید در چت‌باکس پیام `حدود X ثانیه دیگر` نشان داده شود

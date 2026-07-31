@@ -6,8 +6,8 @@
  * الزامات جدید کارفرما (نسخه ۲۰۲۶):
  *   1. فقط Gemini — همهٔ مدل‌های قبلی (Groq, DeepSeek, GPT-4o-mini, OpenRouter)
  *      کاملاً حذف شده‌اند.
- *   2. مدل اصلی: gemini-2.5-flash
- *      مدل fallback: gemini-3.5-flash (فقط در شرایط جدی)
+ *   2. مدل اصلی و جایگزین پایدار: gemini-1.5-flash
+ *      (fallback می‌تواند با مدل اصلی یکسان باشد تا از مدل‌های آزمایشی/ناموجود استفاده نشود)
  *   3. شرایط سوئیچ به fallback:
  *      - زمان تحلیل بسیار طولانی (timeout)
  *      - مفاهیم استخراج‌شده نامفهوم (JSON نامعتبر / بی‌معنی)
@@ -37,16 +37,16 @@ import { extractJsonObject } from './json';
 
 export const GEMINI_PROVIDER = 'gemini' as const;
 
-// مدل اصلی — طبق درخواست کارفرما: gemini-2.5-flash
-// مدل fallback — طبق درخواست: gemini-3.5-flash (موجود در Catalog گوگل از May 2026)
+// مدل‌های پایدار عمومی Gemini. fallback عمداً همین مدل است تا نام مدل ناموجود
+// باعث خطای 503/404 نشود؛ در صورت نیاز از محیط قابل override است.
 export const GEMINI_PRIMARY_MODEL: string =
   (process.env.GEMINI_PRIMARY_MODEL ||
     process.env.GEMINI_TEXT_MODEL ||
     process.env.GEMINI_MODEL ||
-    'gemini-2.5-flash') as string;
+    'gemini-1.5-flash') as string;
 
 export const GEMINI_FALLBACK_MODEL: string =
-  (process.env.GEMINI_FALLBACK_MODEL || 'gemini-3.5-flash') as string;
+  (process.env.GEMINI_FALLBACK_MODEL || 'gemini-1.5-flash') as string;
 
 export function getGeminiModelChain(): string[] {
   // حفظ ترتیب: اول اصلی، بعد fallback — بدون تکرار
@@ -190,6 +190,39 @@ interface GeminiCallOutcome {
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * خطاهای 503/High Demand به کلید API مربوط نیستند. پیش از کنار گذاشتن کلید،
+ * همان درخواست را با backoff نمایی کوتاه دوباره می‌فرستیم: ۱ ثانیه، سپس ۲ ثانیه.
+ */
+const BUSY_RETRY_DELAYS_MS = [1_000, 2_000];
+
+async function callGeminiWithBusyRetry(
+  apiKey: string,
+  model: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<GeminiCallOutcome> {
+  let outcome: GeminiCallOutcome | undefined;
+
+  for (let attempt = 0; attempt <= BUSY_RETRY_DELAYS_MS.length; attempt++) {
+    outcome = await callGeminiOnce(apiKey, model, body, timeoutMs);
+    if (outcome.ok || classifyFailure(outcome.status, outcome.errorMessage || '') !== 'busy') {
+      return outcome;
+    }
+    if (attempt === BUSY_RETRY_DELAYS_MS.length) break;
+
+    // اگر Gemini retry-after کوتاه‌تری داد، آن را رعایت می‌کنیم؛ بازه را ۱ تا ۲ ثانیه نگه می‌داریم.
+    const delay = Math.min(
+      2_000,
+      Math.max(1_000, outcome.retryAfterMs ?? BUSY_RETRY_DELAYS_MS[attempt]),
+    );
+    console.warn(`[gemini] پاسخ موقتاً شلوغ است؛ تلاش مجدد ${attempt + 1} از ${BUSY_RETRY_DELAYS_MS.length} پس از ${delay}ms.`);
+    await sleep(delay);
+  }
+
+  return outcome!;
+}
 
 // ---------------------------------------------------------------------------
 // ساخت بدنه درخواست Gemini
@@ -365,7 +398,7 @@ export async function generateGeminiJson<T = Record<string, unknown>>(
   let lastStatus: number | undefined;
   let callsMade = 0;
 
-  // فاز اول: فقط مدل اصلی (gemini-2.5-flash) با هر ۵ کلید
+  // فاز اول: فقط مدل اصلی (gemini-1.5-flash) با هر ۵ کلید
   const primaryModel = GEMINI_PRIMARY_MODEL;
   const fallbackModel = GEMINI_FALLBACK_MODEL;
 
@@ -388,7 +421,7 @@ export async function generateGeminiJson<T = Record<string, unknown>>(
       const body = buildGeminiRequestBody(options.systemPrompt, contents as any, options.maxTokens);
 
       const callStart = Date.now();
-      const outcome = await callGeminiOnce(
+      const outcome = await callGeminiWithBusyRetry(
         keyState.value,
         primaryModel,
         body as any,
@@ -459,10 +492,6 @@ export async function generateGeminiJson<T = Record<string, unknown>>(
         `[gemini:text] مدل «${primaryModel}» با کلید ${keyState.label} ناموفق بود (${kind}); ${keyIdx + 1 < keys.length ? 'چرخش بی‌درنگ به کلید بعدی' : 'پایان کلیدهای مدل اصلی'}.`,
       );
 
-      // برای busy کمی صبر کوتاه، اما بدون معطلی زیاد (تا سریع به کلید بعدی برویم)
-      if (kind === 'busy' && remainingBudget() > 5_000) {
-        await sleep(Math.min(400, Math.max(0, remainingBudget() - 4_000)));
-      }
     }
   }
 
@@ -504,7 +533,7 @@ export async function generateGeminiJson<T = Record<string, unknown>>(
     throw new ModelBusyError(undefined, GEMINI_PROVIDER);
   }
 
-  // --- فاز دوم: fallback (gemini-3.5-flash) — فقط پس از احراز شرایط جدی ---
+  // --- فاز دوم: fallback (gemini-1.5-flash) — فقط پس از احراز شرایط جدی ---
   console.warn(
     `[gemini:text] شرایط سوئیچ به fallback احراز شد (busy=${sawBusy} timeout=${sawTimeout} unclear=${sawUnclear} status=${lastStatus}). شروع تلاش با مدل fallback «${fallbackModel}» روی ${geminiKeyPool.size()} کلید.`,
   );
@@ -523,7 +552,7 @@ export async function generateGeminiJson<T = Record<string, unknown>>(
       const contents = toGeminiContents(options.messages);
       const body = buildGeminiRequestBody(options.systemPrompt, contents as any, options.maxTokens);
 
-      const outcome = await callGeminiOnce(
+      const outcome = await callGeminiWithBusyRetry(
         keyState.value,
         fallbackModel,
         body as any,
@@ -635,7 +664,7 @@ export async function generateGeminiVision<T = Record<string, unknown>>(
     return buildGeminiRequestBody(systemPrompt, contents, maxTokens);
   };
 
-  // --- فاز اصلی: gemini-2.5-flash با هر ۵ کلید ---
+  // --- فاز اصلی: gemini-1.5-flash با هر ۵ کلید ---
   for (let keyIdx = 0; keyIdx < geminiKeyPool.order().length; keyIdx++) {
     const keyState = geminiKeyPool.order()[keyIdx];
     if (callsMade >= MAX_CALLS_PER_REQUEST) break;
@@ -645,7 +674,7 @@ export async function generateGeminiVision<T = Record<string, unknown>>(
     const body = buildVisionBody(options.systemPrompt, options.userText, options.imageBase64, options.mimeType, options.maxTokens);
 
     const callStart = Date.now();
-    const outcome = await callGeminiOnce(
+    const outcome = await callGeminiWithBusyRetry(
       keyState.value,
       primaryModel,
       body as any,
@@ -707,9 +736,6 @@ export async function generateGeminiVision<T = Record<string, unknown>>(
     geminiKeyPool.reportFailure(keyState.value, kind, outcome.retryAfterMs);
     console.warn(`[gemini:vision] مدل «${primaryModel}» با کلید ${keyState.label} ناموفق بود (${kind}).`);
 
-    if (kind === 'busy' && remainingBudget() > 5_000) {
-      await sleep(Math.min(500, Math.max(0, remainingBudget() - 4_000)));
-    }
   }
 
   const availableNow = geminiKeyPool.availableCount();
@@ -739,7 +765,7 @@ export async function generateGeminiVision<T = Record<string, unknown>>(
     `[gemini:vision] سوئیچ به fallback «${fallbackModel}» (busy=${sawBusy} timeout=${sawTimeout} unclear=${sawUnclear})`,
   );
 
-  // --- فاز fallback: gemini-3.5-flash ---
+  // --- فاز fallback: gemini-1.5-flash ---
   for (let keyIdx = 0; keyIdx < geminiKeyPool.order().length; keyIdx++) {
     const keyState = geminiKeyPool.order()[keyIdx];
     if (callsMade >= MAX_CALLS_PER_REQUEST) break;
@@ -754,7 +780,7 @@ export async function generateGeminiVision<T = Record<string, unknown>>(
       options.maxTokens,
     );
 
-    const outcome = await callGeminiOnce(
+    const outcome = await callGeminiWithBusyRetry(
       keyState.value,
       fallbackModel,
       body as any,

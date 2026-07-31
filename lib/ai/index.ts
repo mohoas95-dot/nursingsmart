@@ -7,8 +7,8 @@
  *   - تمامی هوش‌های قبلی (Groq, DeepSeek, GPT-4o-mini, OpenRouter, Bluesminds)
  *     کاملاً حذف شده‌اند.
  *   - فقط Gemini Direct API:
- *       primary: gemini-2.5-flash
- *       fallback: gemini-3.5-flash (فقط در شرایط جدی)
+ *       primary: gemini-1.5-flash
+ *       fallback: gemini-1.5-flash (فقط در شرایط جدی)
  *   - پایداری: ۵ کلید API با چرخش خودکار بدون معطلی
  *   - نمایش مدت انتظار بازگشایی در صورت اتمام همه کلیدها
  *   - سیستم اعتبار ۱۰۰ دلاری حذف شده است.

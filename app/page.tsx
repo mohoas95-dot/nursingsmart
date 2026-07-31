@@ -236,7 +236,7 @@ class ConcurrencyConflictError extends Error {
 // ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت
 // معماری ۲۰۲۶ بر پایه Gemini Direct:
 //   • متن و تصویر هر دو → /api/ai/chat-requests و /api/ai/parse-image-request
-//   • مدل اصلی: gemini-2.5-flash با fallback gemini-3.5-flash فقط در شرایط جدی
+//   • مدل اصلی: gemini-1.5-flash با fallback gemini-1.5-flash فقط در شرایط جدی
 //     (زمان بسیار طولانی، مفهوم نامفهوم، سرور شلوغ، مشکل جدی)
 //   • ۵ کلید API با چرخش بی‌درنگ؛ اگر یکی به سقف خورد، بلا‌فاصله کلید بعدی
 //   • اگر هر ۵ کلید تمام شد، مدت انتظار بازگشایی به کاربر در چت‌باکس نمایش داده می‌شود
@@ -305,7 +305,7 @@ async function postAiWithRetry(
   );
 }
 
-/** پیام متنی → Gemini Direct (gemini-2.5-flash primary) */
+/** پیام متنی → Gemini Direct (gemini-1.5-flash primary) */
 async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,

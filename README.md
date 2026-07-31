@@ -40,7 +40,7 @@ PostgreSQL/Prisma setup, national-ID login, session security, first-login passwo
 | ورودی کاربر | سرویس | مدل پیش‌فرض | مسیر API | کلیدها |
 |---|---|---|---|---|
 | پیام **متنی** | Groq | `openai/gpt-oss-120b` | `POST /api/ai/chat-requests` | `GROQ_API_KEY`, `GROQ_API_KEY_2`, `GROQ_API_KEY_3` |
-| **تصویر** (OCR فارسی) | Google Gemini | `gemini-2.5-flash` | `POST /api/ai/parse-image-request` | `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `GEMINI_API_KEY_3` |
+| **تصویر** (OCR فارسی) | Google Gemini | `gemini-1.5-flash` | `POST /api/ai/parse-image-request` | `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `GEMINI_API_KEY_3` |
 
 > **چرا GPT-OSS 120B و نه Llama؟** سه دلیل: لحن فارسی به‌مراتب گرم‌تر و طبیعی‌تر،
 > سرعت تقریباً دو برابر (~۵۰۰ در برابر ~۲۸۰ توکن بر ثانیه)، و مهم‌تر از همه
@@ -129,8 +129,8 @@ GET /api/ai/health
 | `GROQ_REASONING_EFFORT` | `low` | عمق تفکر مدل: `low`/`medium`/`high` |
 | `GROQ_CALL_TIMEOUT_MS` | `20000` | تایم‌اوت هر فراخوانی Groq |
 | `GROQ_TOTAL_BUDGET_MS` | `42000` | سقف کل زمان متن (کمتر از `maxDuration=60`) |
-| `GEMINI_VISION_MODEL` | `gemini-2.5-flash` | مدل بینایی اصلی |
-| `GEMINI_VISION_FALLBACK_MODELS` | `gemini-2.5-flash-lite,gemini-2.0-flash` | زنجیرهٔ جایگزین تصویر |
+| `GEMINI_VISION_MODEL` | `gemini-1.5-flash` | مدل بینایی اصلی |
+| `GEMINI_VISION_FALLBACK_MODELS` | `gemini-1.5-flash-lite,gemini-2.0-flash` | زنجیرهٔ جایگزین تصویر |
 | `GEMINI_CALL_TIMEOUT_MS` | `24000` | تایم‌اوت هر فراخوانی Gemini |
 | `GEMINI_TOTAL_BUDGET_MS` | `48000` | سقف کل زمان تصویر |
 | `AI_KEY_QUOTA_COOLDOWN_MS` | `30000` | قرنطینهٔ پیش‌فرض سهمیهٔ دقیقه‌ای (اگر `retry-after` نباشد) |
