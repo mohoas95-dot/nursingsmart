@@ -37,4 +37,4 @@ export const CRITICAL_THRESHOLD_USD = 0;
 export const MAX_CREDIT_LOGS = 0;
 export const MODEL_PRICING: Record<string, any> = {};
 export const OPENROUTER_BASE_URL = 'https://generativelanguage.googleapis.com';
-export const OPENROUTER_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+export const OPENROUTER_ENDPOINT = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';

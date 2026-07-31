@@ -62,7 +62,7 @@ import {
 // استاب‌های سازگار با نام‌های قدیمی — همه به Gemini نگاشت می‌شوند
 export const OPENROUTER_PROVIDER = _PROVIDER;
 export const OPENROUTER_BASE_URL = 'https://generativelanguage.googleapis.com';
-export const OPENROUTER_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${_PRIMARY}:generateContent`;
+export const OPENROUTER_ENDPOINT = `https://generativelanguage.googleapis.com/v1/models/${_PRIMARY}:generateContent`;
 export const TEXT_MODEL_FALLBACK_ALIAS = _FALLBACK;
 export const VISION_MODEL_ALIAS = _PRIMARY;
 

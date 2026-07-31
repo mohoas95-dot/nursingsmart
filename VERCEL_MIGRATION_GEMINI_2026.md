@@ -24,7 +24,7 @@
   - هر دو قابلیت متنی و تصویری با همین دو مدل انجام می‌شود (Gemini multimodal)
 
 - **معماری درخواست**: 
-  - Endpoint: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key=API_KEY`
+  - Endpoint: `https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key=API_KEY`
   - `systemInstruction` + `contents` + `generationConfig: { responseMimeType: 'application/json' }`
   - Vision: `inlineData: { mimeType, data: base64 }`
 
