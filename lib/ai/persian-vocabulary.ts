@@ -92,6 +92,7 @@ A) «روز» (weekday) vs «تاریخ» (day-number) — most important distin
    «تاریخ‌های فرد»/«تاریخ فرد» = 1,3,5,7… → scope="odd"
    «تاریخ‌های زوج»/«تاریخ زوج» = 2,4,6,8… → scope="even"
    جمعه NEVER belongs to weekly_even/weekly_odd. Bare «روزهای فرد» = weekday (weekly_odd), not day numbers.
+   SPECIFIC WEEKDAYS («پنجشنبه‌ها»، «شنبه‌ها»، «دوشنبه‌ها» و غیره) NEVER use weekly_odd or weekly_even. You MUST extract all matching date numbers of that month from calendar context and use scope="custom_days" with selectedDays=[...].
 
 B) SHIFT NAMES when speaking: M=«صبح» E=«عصر» N=«شب» ME=«لانگ» EN=«عصر-شب» MN=«شب-صبح» OFF=«آف» L=«مرخصی»
    MEN = «شیفت ۲۴» always. ❌ NEVER say «تمام روز»/«کل روز»/«۲۴ ساعته». ✅ «شیفت ۲۴ برای ۱۳اُم»
