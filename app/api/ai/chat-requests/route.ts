@@ -1,31 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  generateGroqJson,
-  GROQ_PROVIDER,
+  generateOpenRouterJson,
+  OPENROUTER_PROVIDER,
+  TEXT_MODEL,
   httpStatusForAiError,
   isRetryableAiError,
-  type GroqMessage,
+  type OpenRouterMessage,
 } from "@/lib/ai";
 import {
-  GROQ_JSON_CONTRACT,
+  OPENROUTER_JSON_CONTRACT,
   normalizeShiftRequestList,
 } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
+import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * مسیر گفت‌وگوی متنی چت‌باکس — موتور: Groq (GPT-OSS 120B).
+ * مسیر گفت‌وگوی متنی چت‌باکس — موتور جدید: OpenRouter / deepseek/deepseek-chat
  *
- * سیاست معماری:
- *   این مسیر فقط و فقط پیام‌های «متنی» را پردازش می‌کند. هیچ تصویری اینجا
- *   پذیرفته نمی‌شود؛ تصاویر به /api/ai/parse-image-request (Gemini) می‌روند.
- *   بنابراین سهمیهٔ Groq هرگز صرف OCR نمی‌شود و بالعکس.
- *
- * پایداری:
- *   lib/ai/groq.ts خودش بین ۳ کلید و زنجیرهٔ مدل می‌چرخد و بودجهٔ زمانی
- *   داخلی (۴۲ ثانیه) کمتر از maxDuration است، پس این مسیر همیشه یک پاسخ
- *   JSON تمیز برمی‌گرداند و چت‌باکس هرگز معلق نمی‌ماند.
+ * سیاست معماری جدید (طبق الزامات):
+ *   - این مسیر فقط پیام‌های متنی را پردازش می‌کند (Text Analysis)
+ *   - مدل: deepseek/deepseek-chat (یا deepseek-v3 بر اساس endpoint)
+ *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
+ *   - تصاویر به /api/ai/parse-image-request می‌روند (مدل بینایی متفاوت)
+ *   - ردیابی مصرف توکن و کسر از اعتبار ۱۰۰ دلاری به‌صورت خودکار انجام می‌شود
  */
+
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -40,7 +40,7 @@ const SYSTEM_PROMPT = `
 تو «دستیار شیفت» هستی؛ همکار مهربان و باتجربهٔ پرستارها در یک بیمارستان ایرانی.
 فارسی، خودمانی و گرم حرف بزن — مثل همکاری که کنارش نشسته، نه مثل فرم اداری.
 
-TONE (the user explicitly complained the old assistant felt cold and robotic):
+TONE (کاربر قبلاً شکایت کرده بود دستیار قبلی سرد و رباتیک بود):
 - Warm, human, everyday spoken Persian. Never translated-sounding or formal.
 - Use the nurse's first name when given («سلام مریم جان»، «چشم علی جان»).
 - If they mention something tiring or personal, acknowledge it in ONE short warm sentence first
@@ -76,11 +76,11 @@ ${PERSIAN_VOCABULARY_LESSON}
 GOOD REPLIES (match this warmth and vocabulary):
 - «سلام مریم جان 🌸 حتماً — آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم ثبت کردم، شیفت ۲۴ هم برای ۲۰اُم. تصمیم نهایی با سرپرستاره ولی درخواستت رسماً ثبت می‌شه.»
 - «آخی، پشت سر هم شب‌کاری واقعاً سخته 😮‍💨 باشه، برای روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه) شیفت شب رو گذاشتم.»
-${GROQ_JSON_CONTRACT}
+${OPENROUTER_JSON_CONTRACT}
 ${CALENDAR_FORMAT_LEGEND}
 `;
 
-interface GroqChatPayload {
+interface TextChatPayload {
   status?: unknown;
   reply?: unknown;
   summary?: unknown;
@@ -96,13 +96,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "بدنهٔ درخواست نامعتبر است." }, { status: 400 });
     }
 
-    const messages = Array.isArray(body.messages) ? (body.messages as IncomingChatMessage[]) : [];
-    const year = Number(body.year);
-    const month = Number(body.month);
-    const personnel = body.personnel || {};
-    const calendarDays = Array.isArray(body.calendarDays) ? body.calendarDays : [];
-    const existingRequests = Array.isArray(body.existingRequests) ? body.existingRequests : [];
-    const scheduleHistory = Array.isArray(body.scheduleHistory) ? body.scheduleHistory : [];
+    const messages = Array.isArray((body as any).messages) ? ((body as any).messages as IncomingChatMessage[]) : [];
+    const year = Number((body as any).year);
+    const month = Number((body as any).month);
+    const personnel = (body as any).personnel || {};
+    const calendarDays = Array.isArray((body as any).calendarDays) ? (body as any).calendarDays : [];
+    const existingRequests = Array.isArray((body as any).existingRequests) ? (body as any).existingRequests : [];
+    const scheduleHistory = Array.isArray((body as any).scheduleHistory) ? (body as any).scheduleHistory : [];
 
     const lastUserMessage = [...messages]
       .reverse()
@@ -117,9 +117,6 @@ export async function POST(req: NextRequest) {
 
     const totalDays = calendarDays.length || 31;
 
-    // زمینه به‌صورت فشرده ساخته می‌شود، نه JSON خام.
-    // این کار مصرف توکن هر درخواست را حدود ۸۸٪ کم می‌کند و مهم‌ترین دلیلِ
-    // نخوردن به سقف «توکن در دقیقهٔ» پلن رایگان است. (lib/ai/compact-context.ts)
     const compactContext = buildCompactContext({
       year,
       month,
@@ -130,23 +127,21 @@ export async function POST(req: NextRequest) {
       scheduleHistory,
     });
 
-    // فقط چند پیام آخر گفت‌وگو؛ هر پیام هم کوتاه می‌شود تا یک پیام طولانی
-    // به‌تنهایی کل بودجهٔ توکن را نبلعد.
-    const conversation: GroqMessage[] = messages.slice(-6).map(message => ({
+    const conversation: OpenRouterMessage[] = messages.slice(-6).map(message => ({
       role: message.role === "assistant" ? "assistant" : "user",
       content: String(message.content || "").slice(0, 700),
     }));
 
-    // زمینه به آخرین پیام کاربر چسبانده می‌شود تا آن جفت پیام مصنوعی
-    // (user زمینه + assistant «دریافت شد») حذف شود؛ آن دو خودشان توکن می‌سوزاندند.
-    const groqMessages: GroqMessage[] = [
-      { role: "user", content: `CONTEXT:\n${compactContext}` },
+    const openRouterMessages: OpenRouterMessage[] = [
+      { role: "user", content: `CONTEXT:\\n${compactContext}` },
       ...conversation,
     ];
 
-    const { data, model, keyLabel } = await generateGroqJson<GroqChatPayload>({
+    // درخواست متنی با مدل DeepSeek از طریق OpenRouter — ردیابی اعتبار خودکار
+    const { data, model, keyLabel, usage } = await generateOpenRouterJson<TextChatPayload>({
       systemPrompt: SYSTEM_PROMPT,
-      messages: groqMessages,
+      messages: openRouterMessages,
+      requestType: 'text',
     });
 
     const status = typeof data.status === "string" && ["ready", "clarification", "chat"].includes(data.status)
@@ -163,6 +158,9 @@ export async function POST(req: NextRequest) {
       warnings.push(`${droppedCount} مورد ناقص از نتیجه حذف شد؛ لطفاً همان مورد را دقیق‌تر بنویس.`);
     }
 
+    // اطلاعات اعتبار برای نمایش در لاگ سرپرستار
+    const creditInfo = getCreditDisplayInfo();
+
     return NextResponse.json({
       status,
       reply:
@@ -175,8 +173,25 @@ export async function POST(req: NextRequest) {
         ? data.questions.filter((item: unknown): item is string => typeof item === "string")
         : [],
       requests: normalizedRequests,
-      // متادیتای شفافیت: کدام موتور/مدل پاسخ داد (در UI به‌صورت تگ نشان داده می‌شود).
-      engine: { provider: GROQ_PROVIDER, model, key: keyLabel },
+      engine: {
+        provider: OPENROUTER_PROVIDER,
+        model,
+        key: keyLabel,
+        modelType: 'text',
+        modelDisplayName: 'DeepSeek Chat',
+      },
+      usage: {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cost: usage.cost,
+        remainingCredit: usage.remainingCredit,
+      },
+      credit: {
+        remaining: creditInfo.remaining,
+        initial: creditInfo.initial,
+        status: creditInfo.status,
+        percentRemaining: creditInfo.percentRemaining,
+      },
     });
   } catch (error) {
     const status = httpStatusForAiError(error);
@@ -185,12 +200,14 @@ export async function POST(req: NextRequest) {
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: GROQ_PROVIDER,
+          provider: OPENROUTER_PROVIDER,
+          modelType: 'text',
+          model: TEXT_MODEL,
         },
         { status },
       );
     }
-    console.error("Error in Groq request chat:", error);
+    console.error("Error in OpenRouter text chat:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در گفت‌وگوی هوشمند" },
       { status: 500 },

@@ -1,20 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  GROQ_PROVIDER,
-  generateGroqJson,
+  OPENROUTER_PROVIDER,
+  TEXT_MODEL,
+  generateOpenRouterJson,
   httpStatusForAiError,
   isRetryableAiError,
 } from "@/lib/ai";
 import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
+import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور: Groq.
+ * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور جدید: OpenRouter / deepseek/deepseek-chat
  *
- * این مسیر برای فرم‌های «متن آزاد» استفاده می‌شود که فقط یک آرایهٔ درخواست
- * می‌خواهند و نیازی به پاسخ محاوره‌ای ندارند. مثل مسیر چت، ورودی تصویری
- * نمی‌پذیرد و هیچ کلید Gemini مصرف نمی‌کند.
+ * این مسیر برای فرم‌های «متن آزاد» استفاده می‌شود که فقط یک آرایه درخواست
+ * می‌خواهند و نیازی به پاسخ محاوره‌ای ندارند.
+ * طبق معماری جدید:
+ *   - فقط درخواست‌های متنی (Text Analysis) با مدل deepseek/deepseek-chat
+ *   - کلید از OPENROUTER_API_KEY
+ *   - ردیابی اعتبار ۱۰۰ دلاری
  */
+
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -41,7 +47,7 @@ export async function POST(req: NextRequest) {
       : 31;
 
     const systemPrompt = `
-You are an expert bilingual AI assistant for a Persian hospital nursing scheduling system.
+You are an expert bilingual AI assistant for a Persian hospital nursing scheduling system (NursePlan).
 Read a conversational scheduling request from a nurse (Persian or English) and parse it into an array of structured request objects.
 
 CONTEXT:
@@ -93,16 +99,35 @@ OUTPUT CONTRACT — return EXACTLY one JSON object (no markdown, no prose):
 Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
 `;
 
-    const { data, model, keyLabel } = await generateGroqJson<{ requests?: unknown }>({
+    const { data, model, keyLabel, usage } = await generateOpenRouterJson<{ requests?: unknown }>({
       systemPrompt,
       messages: [{ role: "user", content: text.slice(0, 4000) }],
+      requestType: 'text',
     });
 
     const { requests } = normalizeShiftRequestList(data.requests, totalDays);
+    const creditInfo = getCreditDisplayInfo();
 
     return NextResponse.json({
       requests,
-      engine: { provider: GROQ_PROVIDER, model, key: keyLabel },
+      engine: {
+        provider: OPENROUTER_PROVIDER,
+        model,
+        key: keyLabel,
+        modelType: 'text',
+        modelDisplayName: 'DeepSeek Chat',
+      },
+      usage: {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cost: usage.cost,
+        remainingCredit: usage.remainingCredit,
+      },
+      credit: {
+        remaining: creditInfo.remaining,
+        initial: creditInfo.initial,
+        status: creditInfo.status,
+      },
     });
   } catch (error) {
     const status = httpStatusForAiError(error);
@@ -111,12 +136,14 @@ Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: GROQ_PROVIDER,
+          provider: OPENROUTER_PROVIDER,
+          modelType: 'text',
+          model: TEXT_MODEL,
         },
         { status },
       );
     }
-    console.error("Error parsing smart requests via Groq:", error);
+    console.error("Error parsing smart requests via OpenRouter:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش هوش مصنوعی" },
       { status: 500 },

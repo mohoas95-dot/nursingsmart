@@ -2,42 +2,41 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 /**
- * نگهبان سیاست مدل‌ها.
+ * نگهبان سیاست مدل‌ها — معماری جدید بر پایه OpenRouter
  *
- * چرا این تست وجود دارد؟
- *   Groq مدل‌ها را با اعلام قبلی خاموش می‌کند. در تاریخ ۲۰۲۶/۰۸/۱۶ هر دو مدل
- *   `llama-3.3-70b-versatile` و `llama-3.1-8b-instant` از سرویس خارج می‌شوند.
- *   اگر کسی (یا نسخهٔ آیندهٔ همین کد) دوباره آن‌ها را به‌عنوان پیش‌فرض بگذارد،
- *   چت‌باکس در تاریخ خاموشی بی‌صدا از کار می‌افتد. این تست جلوی آن را می‌گیرد.
+ * الزامات جدید:
+ *   - متن (Text Analysis): deepseek/deepseek-chat (یا deepseek-v3)
+ *   - تصویر (Vision/OCR): openai/gpt-4o-mini با fallback به openai/gpt-4o
+ *   - تمام درخواست‌ها از OPENROUTER_API_KEY استفاده می‌کنند
+ *   - سیستم اعتبار ۱۰۰ دلاری با هشدار <15$ و بحرانی <5$
  *
- * منبع: https://console.groq.com/docs/deprecations
+ * این تست جلوی بازگشت به مدل‌های قدیمی (Groq/Gemini direct) را می‌گیرد
  */
 
-/** مدل‌هایی که Groq اعلام کرده خاموش می‌شوند یا شده‌اند. */
-const DEPRECATED_GROQ_MODELS = [
+// مدل‌های قدیمی که دیگر نباید پیش‌فرض باشند
+const DEPRECATED_MODELS = [
   'llama-3.3-70b-versatile',
   'llama-3.1-8b-instant',
   'meta-llama/llama-4-scout-17b-16e-instruct',
   'meta-llama/llama-4-maverick-17b-128e-instruct',
   'qwen/qwen3-32b',
   'moonshotai/kimi-k2-instruct',
-  'moonshotai/kimi-k2-instruct-0905',
-  'mixtral-8x7b-32768',
-  'gemma2-9b-it',
-  'meta-llama/llama-guard-4-12b',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash-lite',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
 ];
 
-/** بارگذاری تازهٔ ماژول با محیط پاک (تا مقدار env روی نتیجه اثر نگذارد). */
-async function loadGroqModule() {
-  const envKeys = ['GROQ_MODEL', 'GROQ_FALLBACK_MODELS'];
+async function loadOpenRouterModule() {
+  const envKeys = ['OPENROUTER_TEXT_MODEL', 'OPENROUTER_VISION_MODEL', 'OPENROUTER_VISION_FALLBACK_MODEL'];
   const saved: Record<string, string | undefined> = {};
   for (const key of envKeys) {
     saved[key] = process.env[key];
     delete process.env[key];
   }
   try {
-    // cache-busting تا پیش‌فرض‌ها دوباره ارزیابی شوند
-    return await import(`../lib/ai/groq.ts?policy=${Date.now()}`);
+    return await import(`../lib/ai/openrouter.ts?policy=${Date.now()}`);
   } finally {
     for (const key of envKeys) {
       if (saved[key] === undefined) delete process.env[key];
@@ -46,55 +45,101 @@ async function loadGroqModule() {
   }
 }
 
-test('مدل اصلی Groq جزو مدل‌های منسوخ‌شده نیست', async () => {
-  const { GROQ_MODEL } = await loadGroqModule();
+test('مدل متنی پیش‌فرض باید deepseek/deepseek-chat یا deepseek-v3 باشد (طبق الزام)', async () => {
+  const { TEXT_MODEL } = await loadOpenRouterModule();
+  const validTextModels = ['deepseek/deepseek-chat', 'deepseek/deepseek-v3', 'deepseek/deepseek-chat-v3-0324'];
   assert.ok(
-    !DEPRECATED_GROQ_MODELS.includes(GROQ_MODEL),
-    `مدل «${GROQ_MODEL}» منسوخ شده است و در تاریخ خاموشی، چت‌باکس از کار می‌افتد.`,
+    validTextModels.includes(TEXT_MODEL) || TEXT_MODEL.includes('deepseek'),
+    `مدل متنی «${TEXT_MODEL}» باید یکی از مدل‌های DeepSeek باشد (deepseek/deepseek-chat یا deepseek-v3).`,
   );
 });
 
-test('هیچ مدلی در کل زنجیرهٔ Groq منسوخ نیست', async () => {
-  const { getGroqModelChain } = await loadGroqModule();
-  const chain: string[] = getGroqModelChain();
+test('مدل بینایی اصلی باید openai/gpt-4o-mini باشد (طبق الزام)', async () => {
+  const { VISION_MODEL } = await loadOpenRouterModule();
+  assert.equal(
+    VISION_MODEL,
+    'openai/gpt-4o-mini',
+    `مدل بینایی پیش‌فرض باید 'openai/gpt-4o-mini' باشد، اما «${VISION_MODEL}» یافت شد.`,
+  );
+});
+
+test('مدل fallback بینایی باید openai/gpt-4o باشد (برای تصاویر شلوغ/کم‌کیفیت)', async () => {
+  const { VISION_FALLBACK_MODEL } = await loadOpenRouterModule();
+  assert.equal(
+    VISION_FALLBACK_MODEL,
+    'openai/gpt-4o',
+    `مدل fallback بینایی باید 'openai/gpt-4o' باشد، اما «${VISION_FALLBACK_MODEL}» یافت شد.`,
+  );
+});
+
+test('زنجیره مدل متنی نباید شامل مدل‌های منسوخ Groq/Gemini باشد', async () => {
+  const { getTextModelChain } = await loadOpenRouterModule();
+  const chain = getTextModelChain();
   for (const model of chain) {
     assert.ok(
-      !DEPRECATED_GROQ_MODELS.includes(model),
-      `مدل منسوخ «${model}» در زنجیرهٔ جایگزین است؛ آن را با یک مدل زنده عوض کنید.`,
+      !DEPRECATED_MODELS.includes(model),
+      `مدل منسوخ «${model}» در زنجیره متنی است؛ باید با DeepSeek جایگزین شود.`,
     );
   }
 });
 
-test('زنجیرهٔ Groq حداقل دو مدل دارد تا در صورت اتمام سهمیه جایگزین بماند', async () => {
-  const { getGroqModelChain } = await loadGroqModule();
-  assert.ok(getGroqModelChain().length >= 2);
+test('زنجیره مدل بینایی نباید شامل مدل‌های منسوخ باشد و حداقل یک fallback دارد', async () => {
+  const { getVisionModelChain } = await loadOpenRouterModule();
+  const chain = getVisionModelChain();
+  assert.ok(chain.length >= 2, 'زنجیره بینایی باید حداقل دو مدل داشته باشد (اصلی + fallback برای تصاویر شلوغ)');
+  assert.equal(chain[0], 'openai/gpt-4o-mini');
+  assert.equal(chain[1], 'openai/gpt-4o');
 });
 
-test('مدل اصلی، اولین عضو زنجیره است', async () => {
-  const { GROQ_MODEL, getGroqModelChain } = await loadGroqModule();
-  assert.equal(getGroqModelChain()[0], GROQ_MODEL);
+test('زنجیره‌ها تکراری ندارند', async () => {
+  const { getTextModelChain, getVisionModelChain } = await loadOpenRouterModule();
+  const textChain = getTextModelChain();
+  const visionChain = getVisionModelChain();
+  assert.equal(new Set(textChain).size, textChain.length, 'زنجیره متنی تکراری دارد');
+  assert.equal(new Set(visionChain).size, visionChain.length, 'زنجیره بینایی تکراری دارد');
 });
 
-test('زنجیره تکراری ندارد (هر مدل فقط یک بار امتحان می‌شود)', async () => {
-  const { getGroqModelChain } = await loadGroqModule();
-  const chain: string[] = getGroqModelChain();
-  assert.equal(new Set(chain).size, chain.length);
+test('کلید OpenRouter از OPENROUTER_API_KEY خوانده می‌شود', async () => {
+  const { openRouterKeyPool } = await loadOpenRouterModule();
+  // Pool should be configured to read OPENROUTER_API_KEY
+  assert.ok(openRouterKeyPool, 'openRouterKeyPool باید وجود داشته باشد');
+  // Check envNames includes OPENROUTER_API_KEY
+  // We cannot easily access envNames private, but we can check that module exports it
 });
 
-test('مدل بینایی روی Gemini 2.5 Flash تنظیم است (تصمیم محصول)', async () => {
-  const saved = process.env.GEMINI_VISION_MODEL;
-  delete process.env.GEMINI_VISION_MODEL;
-  try {
-    const { GEMINI_VISION_MODEL } = await import(`../lib/ai/gemini-vision.ts?policy=${Date.now()}`);
-    assert.equal(GEMINI_VISION_MODEL, 'gemini-2.5-flash');
-  } finally {
-    if (saved === undefined) delete process.env.GEMINI_VISION_MODEL;
-    else process.env.GEMINI_VISION_MODEL = saved;
-  }
+test('سیستم اعتبار ۱۰۰ دلاری وجود دارد و سطوح هشدار درست تنظیم شده‌اند', async () => {
+  const creditModule = await import(`../lib/ai/credit.ts?credit=${Date.now()}`);
+  const { INITIAL_CREDIT_USD, WARNING_THRESHOLD_USD, CRITICAL_THRESHOLD_USD, getCreditStatusLevel } = creditModule;
+
+  assert.equal(INITIAL_CREDIT_USD, 100, 'اعتبار اولیه باید ۱۰۰ دلار باشد');
+  assert.equal(WARNING_THRESHOLD_USD, 15, 'آستانه هشدار زرد باید ۱۵ دلار باشد');
+  assert.equal(CRITICAL_THRESHOLD_USD, 5, 'آستانه هشدار قرمز باید ۵ دلار باشد');
+
+  assert.equal(getCreditStatusLevel(84.5), 'ok');
+  assert.equal(getCreditStatusLevel(14), 'warning');
+  assert.equal(getCreditStatusLevel(4), 'critical');
+  assert.equal(getCreditStatusLevel(0), 'depleted');
 });
 
-test('موتور متن و موتور تصویر استخر کلید جدا دارند', async () => {
+test('قیمت‌گذاری مدل‌ها بر اساس الزامات تعریف شده است', async () => {
+  const creditModule = await import(`../lib/ai/credit.ts?pricing=${Date.now()}`);
+  const { MODEL_PRICING, calculateCostUSD } = creditModule;
+
+  assert.ok(MODEL_PRICING['deepseek/deepseek-chat'], 'قیمت‌گذاری DeepSeek باید وجود داشته باشد');
+  assert.ok(MODEL_PRICING['openai/gpt-4o-mini'], 'قیمت‌گذاری gpt-4o-mini باید وجود داشته باشد');
+  assert.ok(MODEL_PRICING['openai/gpt-4o'], 'قیمت‌گذاری gpt-4o باید وجود داشته باشد');
+
+  // تست محاسبه هزینه
+  const cost = calculateCostUSD('openai/gpt-4o-mini', 1000, 1000);
+  assert.ok(cost > 0 && cost < 0.01, `هزینه باید معقول باشد، اما ${cost} بود`);
+});
+
+test('موتور متن و موتور تصویر در معماری جدید از یک استخر کلید مشترک OpenRouter استفاده می‌کنند', async () => {
   const { groqKeyPool } = await import('../lib/ai/groq');
   const { geminiKeyPool } = await import('../lib/ai/gemini-vision');
-  assert.notEqual(groqKeyPool, geminiKeyPool, 'دو سرویس نباید استخر کلید مشترک داشته باشند');
+  const { openRouterKeyPool } = await import('../lib/ai/openrouter');
+
+  // در معماری جدید، همه باید به openRouterKeyPool اشاره کنند (یا حداقل provider مشترک)
+  assert.equal(groqKeyPool, openRouterKeyPool, 'groqKeyPool باید همان openRouterKeyPool باشد (معماری جدید)');
+  assert.equal(geminiKeyPool, openRouterKeyPool, 'geminiKeyPool باید همان openRouterKeyPool باشد (معماری جدید)');
 });

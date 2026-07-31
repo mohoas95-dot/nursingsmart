@@ -1,28 +1,68 @@
 /**
  * lib/ai/index.ts
  * ---------------------------------------------------------------------------
- * نقطهٔ ورود واحد لایهٔ هوش مصنوعی چت‌باکس.
+ * نقطه ورود واحد لایه هوش مصنوعی — معماری جدید بر پایه OpenRouter
  *
- * تقسیم کار (سیاست ثابت سیستم):
- *   ┌──────────────┬──────────────────────────┬────────────────────────────┐
- *   │ ورودی کاربر  │ سرویس                    │ کلیدها                     │
- *   ├──────────────┼──────────────────────────┼────────────────────────────┤
- *   │ متن          │ Groq — GPT-OSS 120B      │ GROQ_API_KEY[_2,_3]        │
- *   │ تصویر        │ Gemini — 2.5 Flash       │ GEMINI_API_KEY[_2,_3]      │
- *   └──────────────┴──────────────────────────┴────────────────────────────┘
+ * تقسیم هوشمند کار (طبق الزامات جدید):
+ *   ┌──────────────────┬─────────────────────────────┬─────────────────────────────┐
+ *   │ ورودی کاربر       │ مدل OpenRouter              │ قیمت‌گذاری                   │
+ *   ├──────────────────┼─────────────────────────────┼─────────────────────────────┤
+ *   │ متن (Text)       │ deepseek/deepseek-chat      │ $0.27 / $1.10 per 1M tokens │
+ *   │ تصویر (Vision)   │ openai/gpt-4o-mini          │ $0.15 / $0.60 per 1M tokens │
+ *   │ fallback تصویر   │ openai/gpt-4o               │ $2.50 / $10 per 1M tokens   │
+ *   └──────────────────┴─────────────────────────────┴─────────────────────────────┘
  *
- * این دو مسیر هیچ منبع مشترکی ندارند: نه کلید، نه شمارندهٔ سهمیه، نه cooldown.
- * پس اتمام سهمیهٔ یکی هرگز باعث از کار افتادن دیگری نمی‌شود.
+ * همه درخواست‌ها از یک استخر کلید مشترک (OPENROUTER_API_KEY) استفاده می‌کنند
+ * و سیستم مدیریت اعتبار ۱۰۰ دلاری به‌صورت خودکار مصرف را ردیابی و کسر می‌کند.
  */
 
-export * from "./errors";
-export * from "./json";
+export * from './errors';
+export * from './json';
 export {
   ApiKeyPool,
   classifyFailure,
   parseRetryAfterMs,
   type KeyFailureKind,
-} from "./key-pool";
+} from './key-pool';
+
+// هسته جدید OpenRouter
+export {
+  OPENROUTER_PROVIDER,
+  OPENROUTER_ENDPOINT,
+  TEXT_MODEL,
+  TEXT_MODEL_FALLBACK,
+  VISION_MODEL,
+  VISION_FALLBACK_MODEL,
+  openRouterKeyPool,
+  getTextModelChain,
+  getVisionModelChain,
+  generateOpenRouterJson,
+  generateOpenRouterVision,
+  getCreditState,
+  getCreditDisplayInfo,
+  deductCredit,
+  calculateCostUSD,
+  type OpenRouterMessage,
+  type OpenRouterJsonOptions,
+  type OpenRouterJsonResult,
+  type OpenRouterVisionOptions,
+  type OpenRouterVisionResult,
+  type CreditState,
+  type CreditDisplayInfo,
+  type CreditStatusLevel,
+} from './openrouter';
+
+export {
+  INITIAL_CREDIT_USD,
+  WARNING_THRESHOLD_USD,
+  CRITICAL_THRESHOLD_USD,
+  MODEL_PRICING,
+  getCreditStatusLevel,
+  resetCredit,
+  addCredit,
+} from './credit';
+
+// سازگاری با کد قدیمی — این‌ها حالا wrapper روی OpenRouter هستند
 export {
   GROQ_PROVIDER,
   GROQ_MODEL,
@@ -32,7 +72,8 @@ export {
   type GroqMessage,
   type GroqJsonOptions,
   type GroqJsonResult,
-} from "./groq";
+} from './groq';
+
 export {
   GEMINI_PROVIDER,
   GEMINI_VISION_MODEL,
@@ -40,4 +81,4 @@ export {
   getGeminiVisionModelChain,
   geminiKeyPool,
   type GeminiVisionResult,
-} from "./gemini-vision";
+} from './gemini-vision';

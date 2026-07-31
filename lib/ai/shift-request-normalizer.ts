@@ -167,8 +167,9 @@ export function normalizeShiftRequestList(
 }
 
 /**
- * توضیح متنی قرارداد JSON برای مدل‌های Groq.
- * (Gemini از responseSchema بومی استفاده می‌کند؛ Llama به یک شرح دقیق نیاز دارد.)
+ * توضیح متنی قرارداد JSON برای مدل‌های متنی OpenRouter (DeepSeek).
+ * DeepSeek هم مانند Groq نیاز به شرح دقیق JSON دارد — خروجی باید دقیقاً یک شیء JSON باشد.
+ * Vision models (gpt-4o-mini / gpt-4o) هم همین قرارداد را می‌پذیرند وقتی response_format json_object باشد.
  */
 export const GROQ_JSON_CONTRACT = `
 OUTPUT — exactly one JSON object, no markdown, no prose outside it:
@@ -178,5 +179,22 @@ OUTPUT — exactly one JSON object, no markdown, no prose outside it:
  "startDate":"","endDate":"","selectedDays":[],"description":"<Persian>"}]}
 Rules: selectedDays REQUIRED when scope="custom_days", Latin digits only (1,2,3 — never ۱,۲,۳).
 startDate/endDate only for scope="range". patternSteps only for requestType="pattern".
+Never emit "undefined"/"null"/"?" as a value — omit the whole item instead.
+`;
+
+/** نام جدید برای معماری OpenRouter — همان قرارداد ولی با نام به‌روز */
+export const OPENROUTER_JSON_CONTRACT = GROQ_JSON_CONTRACT;
+export const DEEPSEEK_JSON_CONTRACT = GROQ_JSON_CONTRACT;
+export const TEXT_JSON_CONTRACT = GROQ_JSON_CONTRACT;
+
+/** قرارداد JSON برای مدل‌های بینایی (Vision / OCR) — شامل وضعیت illegible برای تصاویر ناخوانا */
+export const VISION_JSON_CONTRACT = `
+OUTPUT — exactly one JSON object, no markdown, no prose outside it:
+{"status":"ready|clarification|illegible","reply":"<Persian>","warnings":[],
+ "requests":[{"requestType":"shift|OFF|leave|pattern|avoid_shift","preferredShift":"M|E|N|ME|EN|MN|MEN|OFF|L",
+ "patternSteps":[],"isEssential":false,"offHardness":"hard|soft","scope":"all|even|odd|weekly_even|weekly_odd|custom_days|range",
+ "startDate":"","endDate":"","selectedDays":[],"description":"<Persian>"}]}
+Rules: selectedDays REQUIRED when scope="custom_days", Latin digits only (1,2,3 — never ۱,۲,۳).
+If image is blurry/crowded or text is unreadable, return status="illegible" with empty requests and a warning in Persian.
 Never emit "undefined"/"null"/"?" as a value — omit the whole item instead.
 `;
