@@ -307,6 +307,25 @@ function toGeminiContents(messages: GeminiChatMessage[]): Array<{ role: 'user' |
 // فراخوانی یک‌بار Gemini با یک کلید و یک مدل خاص
 // ---------------------------------------------------------------------------
 
+/**
+ * ساخت هدرهای احراز هویت Gemini.
+ *
+ * ⚠️ کلیدهای جدید Google AI Studio با پیشوند «AQ.» (Auth Keys) صادر می‌شوند و
+ * گوگل ارسال آن‌ها به‌صورت پارامتر query (`?key=...`) را رد می‌کند (401/invalid).
+ * بنابراین احراز هویت همیشه از طریق هدر HTTP انجام می‌شود:
+ *   - کلیدهای جدید (AQ.…)  →  `Authorization: Bearer <key>`
+ *   - کلیدهای کلاسیک (AIza…) →  `x-goog-api-key: <key>`
+ * برای اطمینان، در حالت کلاسیک هم فقط هدر استفاده می‌شود و کلید هرگز در URL نمی‌آید.
+ */
+export function buildGeminiAuthHeaders(apiKey: string): Record<string, string> {
+  const key = String(apiKey ?? '').trim();
+  if (!key) return {};
+  if (/^AQ\./i.test(key)) {
+    return { Authorization: `Bearer ${key}` };
+  }
+  return { 'x-goog-api-key': key };
+}
+
 async function callGeminiOnce(
   apiKey: string,
   model: string,
@@ -319,7 +338,7 @@ async function callGeminiOnce(
   const safeModel = normalizeGeminiModelName(model);
   const endpoint = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(
     safeModel,
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  )}:generateContent`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -329,6 +348,7 @@ async function callGeminiOnce(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...buildGeminiAuthHeaders(apiKey),
       },
       signal: controller.signal,
       body: JSON.stringify(body),
