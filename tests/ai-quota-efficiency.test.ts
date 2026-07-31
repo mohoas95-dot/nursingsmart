@@ -77,6 +77,19 @@ test('سقف روزانه (daily_quota) قرنطینهٔ به‌مراتب بل�
   }
 });
 
+test('retryDelay کوتاه، قرنطینهٔ daily_quota را به چند ثانیه تبدیل نمی‌کند', () => {
+  const pool = poolWith('k1');
+  try {
+    pool.reportFailure('k1', 'daily_quota', 4_000);
+    assert.ok(
+      pool.snapshot()[0].cooldownSeconds > 300,
+      'خطای TPD/RPD نباید با retryDelay چهارثانیه‌ای فوراً دوباره امتحان شود.',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test('پیشنهاد غیرمنطقیِ بزرگ سرویس به سقف محدود می‌شود', () => {
   const pool = poolWith('k1');
   try {

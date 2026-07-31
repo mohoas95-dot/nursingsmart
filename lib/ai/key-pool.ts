@@ -124,6 +124,11 @@ function cooldownFor(kind: KeyFailureKind): number {
  *   - retry-after نبود   → مقدار پیش‌فرض همان نوع خطا
  */
 function resolveCooldown(kind: KeyFailureKind, retryAfterMs?: number): number {
+  // «retryDelay» کوتاهِ Gemini برای خطایی که صراحتاً TPD/RPD/daily است،
+  // به معنی بازشدن سقف روزانه نیست. در این حالت باید کلید را قرنطینهٔ بلند
+  // کنیم؛ وگرنه هر چند ثانیه دوباره همان کلیدِ تمام‌شده مصرف و لاگ را پر می‌کند.
+  if (kind === "daily_quota") return cooldownFor(kind);
+
   if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
     // ۲۵۰ms حاشیه تا دقیقاً لبهٔ پنجرهٔ سرویس نخوریم
     const suggested = retryAfterMs + 250;
