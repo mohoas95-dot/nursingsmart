@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getCreditDisplayInfo,
-  getCreditState,
-  resetCredit,
-  addCredit,
-  getCreditStatusLevel,
+  applyCreditAction,
+  WARNING_THRESHOLD_USD,
+  CRITICAL_THRESHOLD_USD,
 } from "@/lib/ai/credit";
 
 /**
@@ -15,6 +14,7 @@ import {
  * - Credit: $84.50 / $100
  * - هشدار زرد < $15
  * - هشدار قرمز < $5
+ * - لاگ آخرین درخواست‌ها (مدل، توکن ورودی/خروجی، هزینه به دلار)
  */
 
 export const runtime = "nodejs";
@@ -47,9 +47,10 @@ export async function GET() {
         requestCount: creditInfo.requestCount,
         byModel: creditInfo.byModel,
         lastRequest: creditInfo.lastRequest,
+        logs: creditInfo.logs,
         thresholds: {
-          warning: 15,
-          critical: 5,
+          warning: WARNING_THRESHOLD_USD,
+          critical: CRITICAL_THRESHOLD_USD,
         },
         messages: {
           warning: `⚠️ اعتبار API به پایان خود نزدیک است (باقی‌مانده: $${creditInfo.remaining.toFixed(2)}). لطفاً جهت جلوگیری از قطعی سرویس نسبت به شارژ اقدام کنید.`,
@@ -66,8 +67,16 @@ export async function GET() {
 
 /**
  * POST /api/ai/credit
- * برای شارژ اعتبار یا ریست — فقط برای تست و مدیریت
- * body: { action: "add" | "reset", amount?: number }
+ * مدیریت اعتبار — شارژ مجدد / افزودن / ریست
+ *
+ * بدنهٔ موردنظر دکمهٔ «شارژ مجدد ۱۰۰ دلار»:
+ *   { "action": "recharge", "amount": 100 }
+ *
+ * رفتار:
+ *   - recharge: اعتبار باقی‌مانده را دوباره به `amount` (پیش‌فرض ۱۰۰) بازمی‌گرداند
+ *     و وضعیت بنرهای هشدار زرد/قرمز را به «عادی» ریست می‌کند.
+ *   - add: مبلغی به اعتبار فعلی اضافه می‌کند (برای سازگاری).
+ *   - reset: کل state را به `amount` ریست می‌کند (برای تست).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -76,32 +85,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "بدنه نامعتبر" }, { status: 400 });
     }
 
-    const action = (body as any).action as string;
-    const amount = Number((body as any).amount);
+    const action = String((body as { action?: unknown }).action || "").trim();
+    const amount = (body as { amount?: unknown }).amount;
 
-    if (action === "reset") {
-      const newAmount = Number.isFinite(amount) && amount > 0 ? amount : 100;
-      const state = resetCredit(newAmount);
-      return NextResponse.json({
-        ok: true,
-        message: `اعتبار به $${newAmount.toFixed(2)} ریست شد.`,
-        credit: getCreditDisplayInfo(),
-      });
+    const result = applyCreditAction(action, amount);
+
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.statusCode });
     }
 
-    if (action === "add") {
-      if (!Number.isFinite(amount) || amount <= 0) {
-        return NextResponse.json({ error: "مبلغ شارژ معتبر نیست." }, { status: 400 });
-      }
-      const state = addCredit(amount);
-      return NextResponse.json({
-        ok: true,
-        message: `$${amount.toFixed(2)} به اعتبار اضافه شد.`,
-        credit: getCreditDisplayInfo(),
-      });
-    }
-
-    return NextResponse.json({ error: "action نامعتبر (add | reset)" }, { status: 400 });
+    return NextResponse.json({
+      ok: true,
+      message: result.message,
+      credit: result.credit,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     console.error("Error in credit API:", error);
     return NextResponse.json({ error: "خطای داخلی" }, { status: 500 });

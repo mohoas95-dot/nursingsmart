@@ -589,5 +589,15 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
 // سازگاری و Exportهای مرتبط با اعتبار
 // ---------------------------------------------------------------------------
 
-export { getCreditState, getCreditDisplayInfo, deductCredit, calculateCostUSD } from './credit';
-export type { CreditState, CreditDisplayInfo, CreditStatusLevel } from './credit';
+export {
+  getCreditState,
+  getCreditDisplayInfo,
+  deductCredit,
+  calculateCostUSD,
+  rechargeCredit,
+  resetCredit,
+  addCredit,
+  applyCreditAction,
+  MAX_CREDIT_LOGS,
+} from './credit';
+export type { CreditState, CreditDisplayInfo, CreditStatusLevel, CreditLogEntry, CreditActionResult } from './credit';

@@ -5971,7 +5971,7 @@ export default function Home() {
             </div>
             {aiCreditBanner.status === 'critical' && (
               <p className="mt-1 text-[11px] font-bold text-white/90 leading-5">
-                سرویس هوش مصنوعی (چت متنی DeepSeek و OCR تصویری GPT-4o-mini) در آستانه قطعی است. لطفاً از طریق پنل OpenRouter اقدام به شارژ کنید تا از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
+                سرویس هوش مصنوعی (چت متنی DeepSeek و OCR تصویری GPT-4o-mini) در آستانه قطعی است. از دکمه «شارژ مجدد ۱۰۰ دلار» در بخش «گزارشات و لاگ» استفاده کنید تا اعتبار به حالت عادی بازگردد و از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
               </p>
             )}
           </div>
@@ -7824,6 +7824,10 @@ export default function Home() {
                   monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
                   userRole={role}
                   showCreditPanel={true}
+                  onCreditRecharged={() => {
+                    // پس از شارژ مجدد موفق، بنرهای هشدار زرد/قرمز بالای داشبورد به حالت عادی ریست می‌شوند
+                    setAiCreditBanner(null);
+                  }}
                 />
               )}
 
