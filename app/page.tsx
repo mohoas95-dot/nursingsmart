@@ -7,7 +7,12 @@ import { ResetRequestList } from './components/auth/ResetRequestList';
 import { useResetRequestCount } from './components/auth/useResetRequestCount';
 import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
 import { AiEngineBadge } from '../features/shared/components/AiEngineBadge';
-import { readImageFileAsDataUrl, IMAGE_UNREADABLE_MESSAGE } from '../lib/image-file';
+import {
+  readImageFileAsDataUrl,
+  IMAGE_UNREADABLE_MESSAGE,
+  prepareImageForVisionUpload,
+  type PreparedVisionImage,
+} from '../lib/image-file';
 import {
   formatDayList,
   getShiftLabel,
@@ -188,7 +193,15 @@ type RequestChatMessage = {
   /** عنوان کوتاه برای تصویر (نام فایل یا متن اختیاری کاربر) */
   imageCaption?: string;
 };
-type ChatProposedShiftRequest = ShiftRequest & { description?: string };
+type ChatProposedShiftRequest = ShiftRequest & {
+  description?: string;
+  /**
+   * یعنی «روزها (اعداد) خوانده شد ولی نوع شیفت [نامفهوم] ماند» — مخصوص OCR تصاویر.
+   * این آیتم‌ها در کادر نتیجه با برچسب «نیازمند اصلاح» نمایش داده می‌شوند و تا
+   * مشخص‌شدن نوع شیفت از «قسمت ویرایش»، تأیید و ثبت نهایی مسدود می‌ماند.
+   */
+  needsClarification?: boolean;
+};
 
 const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
   id: QuickRequestTemplateId;
@@ -197,7 +210,7 @@ const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
   accentClass: string;
 }> = [
   { id: 'en', title: 'EN', subtitle: 'عصر و شب', accentClass: 'from-indigo-500 to-violet-600' },
-  { id: 'men', title: 'MEN', subtitle: 'شیفت ۲۴', accentClass: 'from-sky-500 to-cyan-600' },
+  { id: 'men', title: 'MEN', subtitle: '۲۴', accentClass: 'from-sky-500 to-cyan-600' },
   { id: 'long_off', title: 'لانگ آف', subtitle: 'ME یک‌روزدرمیان', accentClass: 'from-teal-500 to-emerald-600' },
   { id: 'off', title: 'OFF 😴', subtitle: 'آف با انتخاب روز', accentClass: 'from-slate-600 to-slate-800' },
   { id: 'leave', title: 'مرخصی 🏖', subtitle: 'انتخاب روزهای مرخصی', accentClass: 'from-amber-500 to-orange-600' },
@@ -237,7 +250,7 @@ class ConcurrencyConflictError extends Error {
 // روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
 //
 // معماری جدید بر پایه OpenRouter (طبق الزامات بازطراحی):
-//   • متن  → /api/ai/chat-requests        (OpenRouter / deepseek/deepseek-chat)
+//   • متن  → /api/ai/chat-requests        (OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o)
 //   • تصویر → /api/ai/parse-image-request  (OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o)
 //   • اعتبار ۱۰۰ دلاری با ردیابی توکن و هشدار <15$ زرد و <5$ قرمز در UI سرپرستار
 // چرخش بین کلیدهای OpenRouter در سمت سرور انجام می‌شود؛ اعتبار به‌صورت خودکار کسر می‌گردد.
@@ -305,7 +318,7 @@ async function postAiWithRetry(
   );
 }
 
-/** پیام متنی → OpenRouter / DeepSeek */
+/** پیام متنی → OpenRouter / GPT-4o-mini (fallback gpt-4o) */
 async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
@@ -2167,7 +2180,9 @@ export default function Home() {
   // به‌صورت مستقیم عوض کرد. این state جدا از ویرایشگر درخواست‌های ثبت‌شده است.
   const [chatEditingIndex, setChatEditingIndex] = useState<number | null>(null);
   // snapshot روز→شیفت برای آیتم در حال ویرایش (مثل state ویرایشگر اصلی)
-  const [chatEditingDays, setChatEditingDays] = useState<Record<number, NonNullable<ShiftRequest['preferredShift']>>>({});
+  // روزهای در دست ویرایش؛ مقدار '' یعنی «روز حفظ شده ولی نوع شیفتش هنوز مشخص نشده»
+  // (الگوی needsClarification در OCR: اعداد خوانده شدند ولی کلمهٔ شیفت [نامفهوم] ماند).
+  const [chatEditingDays, setChatEditingDays] = useState<Record<number, NonNullable<ShiftRequest['preferredShift']> | ''>>({});
   const [chatEditingActiveDay, setChatEditingActiveDay] = useState<number | null>(null);
 
   // ====== بزرگ‌نمایی تصویر پیوست‌شده در چت ======
@@ -2183,7 +2198,9 @@ export default function Home() {
   const [isHandwrittenReading, setIsHandwrittenReading] = useState<boolean>(false);
   // محتوای خوانده‌شدهٔ عکس (Data URL) که هنگام انتخاب فایل ذخیره می‌شود تا موقع
   // ارسال دیگر به ارجاع فایل — که ممکن است بیات شده باشد — نیازی نباشد.
-  const handwrittenDataUrlRef = React.useRef<string | null>(null);
+  // تصویر آماده‌شده برای Vision API: حداکثر ۲۰۴۸px و کیفیت JPEG ≥ ۰٫۸۵
+  // (بدون ریزایز شدید) — نگه‌داشتن mimeType واقعی پس از ری‌انکد هم مهم است.
+  const handwrittenDataUrlRef = React.useRef<PreparedVisionImage | null>(null);
   const [handwrittenParseError, setHandwrittenParseError] = useState<string | null>(null);
   const handwrittenFileInputRef = React.useRef<HTMLInputElement | null>(null);
   // نگهداری آخرین ObjectURL در ref تا در زمان unmount قطعی آزاد شود
@@ -2319,7 +2336,7 @@ export default function Home() {
     { code: 'ME', label: 'صبح-عصر (ME)', className: 'bg-teal-100 text-teal-800 border-teal-300' },
     { code: 'EN', label: 'عصر-شب (EN)', className: 'bg-violet-100 text-violet-800 border-violet-300' },
     { code: 'MN', label: 'شب-صبح (MN)', className: 'bg-cyan-100 text-cyan-800 border-cyan-300' },
-    { code: 'MEN', label: '۲۴ ساعته (MEN)', className: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300' },
+    { code: 'MEN', label: '۲۴ (MEN)', className: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300' },
     { code: 'OFF', label: 'آف 😴', className: 'bg-slate-200 text-slate-800 border-slate-400' },
     { code: 'L', label: 'مرخصی 🏖', className: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
   ];
@@ -2353,10 +2370,15 @@ export default function Home() {
 
   // خلاصهٔ فارسی یک درخواست. واژگان از lib/ai/persian-vocabulary می‌آید تا
   // دقیقاً همان چیزی باشد که هوش مصنوعی هم در چت می‌گوید:
-  //   • MEN همیشه «شیفت ۲۴» است، نه «تمام روز»
+  //   • MEN همیشه «۲۴» است، نه «شیفت ۲۴» و نه «تمام روز»
   //   • روزها به شکل «۵اُم، ۷اُم» نوشته می‌شوند، نه «روزهای 5، 7»
   //   • «تاریخ زوج/فرد» (شمارهٔ روز ماه) از «روز زوج/فرد» (روز هفته) جدا است
   const getRequestSummaryText = (r: ShiftRequest): string => {
+    // الگوی needsClarification (OCR): اعداد روزها خوانده شده ولی کلمهٔ شیفت [نامفهوم] مانده —
+    // خلاصه باید همین را شفاف بگوید تا کاربر از «قسمت ویرایش» نوع شیفت را مشخص کند.
+    if ((r.requestType === 'shift' || r.requestType === 'avoid_shift') && !r.preferredShift) {
+      return `❓ تاریخ‌های ${formatDayList(r.selectedDays)} — نوع شیفت [نامفهوم]؛ از «ویرایش» مشخص کن`;
+    }
     const shiftLabel = r.preferredShift === 'OFF'
       ? 'آف قطعی'
       : getShiftLabel(r.preferredShift);
@@ -3783,6 +3805,7 @@ export default function Home() {
           endDate: item.endDate,
           selectedDays: item.selectedDays,
           description: item.description,
+          needsClarification: !!item.needsClarification || undefined,
           createdAt: now,
           updatedAt: now,
         }));
@@ -3876,11 +3899,14 @@ export default function Home() {
     setHandwrittenImageFile(file);
     setHandwrittenImagePreview(URL.createObjectURL(file));
 
-    // زودخوانی: محتوا را همین حالا در حافظه می‌گیریم تا موقع ارسال به فایل نیاز نباشد.
+    // زودخوانی + آماده‌سازی برای Vision API: محتوا را همین حالا در حافظه می‌گیریم
+    // تا موقع ارسال به فایل نیاز نباشد، و هم‌زمان تصویر را برای OCR نرمال می‌کنیم —
+    // حداکثر ۲۰۴۸px و کیفیت JPEG ≥ ۰٫۸۵. تصاویر کوچک‌تر بدون هیچ ری‌انکدی
+    // (با بایت‌های اصلی) ارسال می‌شوند تا کیفیتی از دست نرود.
     setIsHandwrittenReading(true);
     try {
-      const dataUrl = await readImageFileAsDataUrl(file);
-      handwrittenDataUrlRef.current = dataUrl;
+      const prepared = await prepareImageForVisionUpload(file);
+      handwrittenDataUrlRef.current = prepared;
     } catch (error) {
       handwrittenDataUrlRef.current = null;
       setHandwrittenParseError(error instanceof Error ? error.message : IMAGE_UNREADABLE_MESSAGE);
@@ -3942,16 +3968,21 @@ export default function Home() {
 
     let parsedDataUrl = '';
     try {
-      // اول از محتوای «زودخوانده‌شده» استفاده می‌کنیم (در لحظهٔ انتخاب فایل گرفته شد).
-      // فقط اگر به هر دلیلی موجود نبود، دوباره از روی خودِ فایل می‌خوانیم — این
-      // مسیر دوم همان جایی است که قبلاً NotReadableError می‌داد، و حالا خودش هم
-      // چندلایه و مقاوم است.
-      parsedDataUrl = handwrittenDataUrlRef.current || (await readImageFileAsDataUrl(handwrittenImageFile));
+      // اول از تصویر «زودخوانده‌شده و نرمال‌شده» استفاده می‌کنیم (در لحظهٔ انتخاب
+      // فایل: حداکثر ۲۰۴۸px و کیفیت JPEG ≥ ۰٫۸۵). فقط اگر به هر دلیلی موجود نبود،
+      // دوباره از روی خودِ فایل می‌خوانیم — این مسیر دوم همان جایی است که قبلاً
+      // NotReadableError می‌داد، و حالا خودش هم چندلایه و مقاوم است.
+      const prepared = handwrittenDataUrlRef.current;
+      parsedDataUrl = prepared?.dataUrl || (await readImageFileAsDataUrl(handwrittenImageFile));
+      // مهم: mimeType باید با دادهٔ واقعیِ داخل dataUrl هم‌خوان باشد — وقتی
+      // فرانت تصویر را به JPEG ری‌انکد کرده، mime اصلی فایل (مثلاً HEIC/PNG)
+      // ارسال شود، سرور data URL نادرست می‌سازد.
+      const effectiveMimeType = prepared?.mimeType || handwrittenImageFile.type || 'image/jpeg';
 
       // آماده‌سازی context (مشابه sendChatMessage ولی فقط context ضروری)
       const contextBody = {
         image: parsedDataUrl,
-        mimeType: handwrittenImageFile.type || 'image/jpeg',
+        mimeType: effectiveMimeType,
         note: optionalText,
         year: currentYear,
         month: currentMonth,
@@ -3984,8 +4015,9 @@ export default function Home() {
         scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
       };
 
-      // ارسال به موتور بینایی (Gemini 2.5 Flash). چرخش بین ۳ کلید Gemini در
-      // سمت سرور انجام می‌شود؛ اینجا فقط یک تلاش مجدد برای خطای گذرا داریم.
+      // ارسال به موتور بینایی (OpenRouter / GPT-4o با detail:"high"). چرخش
+      // کلیدها و fallback مدل در سمت سرور انجام می‌شود؛ اینجا فقط یک تلاش
+      // مجدد برای خطای گذرا داریم.
       const response = await postImageRequestWithRetry(contextBody);
 
       const data = await response.json().catch(() => ({} as any));
@@ -4037,6 +4069,7 @@ export default function Home() {
         endDate: item.endDate,
         selectedDays: item.selectedDays,
         description: item.description,
+        needsClarification: !!item.needsClarification || undefined,
         createdAt: now,
         updatedAt: now,
       }));
@@ -4046,6 +4079,10 @@ export default function Home() {
       const summary = mapped
         .map((r, i) => `${i + 1}. ${getRequestSummaryText(r)}`)
         .join(' | ');
+      const needsClarificationCount = mapped.filter(item => item.needsClarification).length;
+      const clarificationHint = needsClarificationCount > 0
+        ? `\n\n🔶 ${needsClarificationCount} مورد فقط روزهاش (اعداد) خوانده شد و نوع شیفتشان [نامفهوم] ماند — لطفاً با دکمهٔ «ویرایش» نوع شیفتشان را مشخص کن.`
+        : '';
       const warningSuffix = serverWarnings.length > 0
         ? `\n\n⚠️ نکتهٔ هوش مصنوعی: ${serverWarnings.join(' / ')}`
         : '';
@@ -4054,7 +4091,7 @@ export default function Home() {
         {
           id: `chat_img_extracted_${Date.now()}`,
           role: 'assistant',
-          content: `دست‌نوشته خوانده شد ✍️ ${mapped.length} درخواست تشخیص داده شد:\n${summary}\n\nاگر درست است، دکمهٔ «تأیید و ثبت نهایی» را بزن؛ اگر نه، در همین چت اصلاحش کن.${warningSuffix}`,
+          content: `دست‌نوشته خوانده شد ✍️ ${mapped.length} درخواست تشخیص داده شد:\n${summary}\n\nاگر درست است، دکمهٔ «تأیید و ثبت نهایی» را بزن؛ اگر نه، در همین چت اصلاحش کن.${warningSuffix}${clarificationHint}`,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -4082,6 +4119,20 @@ export default function Home() {
     if (chatProposedRequests.length === 0) return;
     if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
       alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+
+    // مسدودسازی موارد [نامفهوم]: روزها (اعداد) خوانده شده‌اند ولی نوع شیفت مشخص نیست —
+    // کاربر باید اول از «قسمت ویرایش» نوع شیفت هر مورد را انتخاب کند.
+    const unfinishedItems = chatProposedRequests.filter(
+      request =>
+        request.needsClarification ||
+        ((request.requestType === 'shift' || request.requestType === 'avoid_shift') && !request.preferredShift),
+    );
+    if (unfinishedItems.length > 0) {
+      alert(
+        `${unfinishedItems.length} مورد هنوز نوع شیفتشان مشخص نیست ([نامفهوم]).\nلطفاً با دکمهٔ «ویرایش» نوع شیفت هر مورد را انتخاب کن و بعد «تأیید و ثبت نهایی» را بزن.`,
+      );
       return;
     }
 
@@ -4132,10 +4183,14 @@ export default function Home() {
     const item = chatProposedRequests[index];
     if (!item) return;
     const days = resolveRequestDays(item);
-    const daysMap: Record<number, NonNullable<ShiftRequest['preferredShift']>> = {};
+    const daysMap: Record<number, NonNullable<ShiftRequest['preferredShift']> | ''> = {};
     days.forEach(day => {
       if (item.preferredShift) {
         daysMap[day] = item.preferredShift as NonNullable<ShiftRequest['preferredShift']>;
+      } else {
+        // الگوی needsClarification: روز (عدد خوانده‌شده) حفظ می‌شود ولی با مقدار ''
+        // یعنی «نوع شیفت هنوز مشخص نشده» تا کاربر همان‌جا انتخابش کند و عدد گم نشود.
+        daysMap[day] = '';
       }
     });
     setChatEditingIndex(index);
@@ -4176,19 +4231,41 @@ export default function Home() {
       return;
     }
 
+    // روزهای فاقد نوع شیفت (''): عددهای خوانده‌شدهٔ OCR که کاربر هنوز برایشان
+    // شیفت انتخاب نکرده — حذف نمی‌شوند؛ در یک آیتم باقی‌ماندهٔ needsClarification نگه داشته می‌شوند.
+    const unsetDays = newDays.filter(d => !chatEditingDays[d]);
+    const assignedDays = newDays.filter(d => !!chatEditingDays[d]);
+
     // اگر همهٔ روزها شیفت یکسانی دارند، preferredShift همان است؛ در غیر این صورت
     // آیتم به چند آیتم تک‌شیفتی (یکی برای هر شیفت متفاوت) شکسته می‌شود.
-    const distinctShifts = Array.from(new Set(newDays.map(d => chatEditingDays[d])));
+    // (assignedDays فقط روزهای با مقدار truthy را دارد، پس cast امن است.)
+    const distinctShifts = Array.from(
+      new Set(assignedDays.map(d => chatEditingDays[d] as NonNullable<ShiftRequest['preferredShift']>)),
+    );
     const updatedList = [...chatProposedRequests];
 
-    if (distinctShifts.length === 1) {
+    if (assignedDays.length === 0) {
+      // هیچ روزی هنوز نوع شیفت ندارد: آیتم همان needsClarification می‌ماند (فقط روزها به‌روز می‌شود)
+      updatedList[chatEditingIndex] = {
+        ...original,
+        preferredShift: undefined,
+        needsClarification: true,
+        scope: 'custom_days',
+        selectedDays: unsetDays,
+        startDate: undefined,
+        endDate: undefined,
+        patternSteps: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    } else if (distinctShifts.length === 1) {
       // همهٔ روزها یک شیفت: آیتم فعلی به‌روزرسانی می‌شود
       const newShift = distinctShifts[0];
       updatedList[chatEditingIndex] = {
         ...original,
         preferredShift: newShift,
+        needsClarification: undefined,
         scope: 'custom_days',
-        selectedDays: newDays,
+        selectedDays: assignedDays,
         startDate: undefined,
         endDate: undefined,
         patternSteps: undefined,
@@ -4200,8 +4277,8 @@ export default function Home() {
     } else {
       // شیفت‌های متفاوت: آیتم فعلی به چند آیتم تقسیم می‌شود
       const groupedByShift: Record<string, number[]> = {};
-      newDays.forEach(day => {
-        const shift = chatEditingDays[day];
+      assignedDays.forEach(day => {
+        const shift = chatEditingDays[day] as NonNullable<ShiftRequest['preferredShift']>;
         if (!groupedByShift[shift]) groupedByShift[shift] = [];
         groupedByShift[shift].push(day);
       });
@@ -4210,6 +4287,7 @@ export default function Home() {
         ...original,
         id: `chat_draft_edited_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         preferredShift: shift as NonNullable<ShiftRequest['preferredShift']>,
+        needsClarification: undefined,
         scope: 'custom_days',
         selectedDays: daysList,
         startDate: undefined,
@@ -4226,15 +4304,35 @@ export default function Home() {
       updatedList.splice(chatEditingIndex, 1, ...newItems);
     }
 
+    // روزهایی که هنوز نوع شیفت ندارند به‌عنوان آیتم جداگانهٔ «نیازمند اصلاح» باقی می‌مانند
+    if (unsetDays.length > 0 && assignedDays.length > 0) {
+      updatedList.splice(chatEditingIndex + (distinctShifts.length > 1 ? distinctShifts.length : 1), 0, {
+        ...original,
+        id: `chat_draft_clarify_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        preferredShift: undefined,
+        needsClarification: true,
+        scope: 'custom_days',
+        selectedDays: unsetDays,
+        startDate: undefined,
+        endDate: undefined,
+        patternSteps: undefined,
+        description: 'روزها خوانده شد؛ نوع شیفت [نامفهوم] است — از «ویرایش» مشخص کن',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     setChatProposedRequests(updatedList);
     setRequestChatMessages(current => [
       ...current,
       {
         id: `chat_edit_done_${Date.now()}`,
         role: 'assistant',
-        content: distinctShifts.length === 1
-          ? 'ویرایش آیتم اعمال شد ✏️'
-          : 'به دلیل تفاوت شیفت روزها، آیتم به چند مورد جداگانه تقسیم شد ✏️',
+        content: unsetDays.length > 0 && assignedDays.length > 0
+          ? `ویرایش اعمال شد ✏️ ${unsetDays.length} روز هنوز نوع شیفت ندارند و به‌عنوان «نیازمند اصلاح» باقی ماندند.`
+          : distinctShifts.length === 1
+            ? 'ویرایش آیتم اعمال شد ✏️'
+            : 'به دلیل تفاوت شیفت روزها، آیتم به چند مورد جداگانه تقسیم شد ✏️',
         timestamp: new Date().toISOString(),
       },
     ]);
@@ -5971,7 +6069,7 @@ export default function Home() {
             </div>
             {aiCreditBanner.status === 'critical' && (
               <p className="mt-1 text-[11px] font-bold text-white/90 leading-5">
-                سرویس هوش مصنوعی (چت متنی DeepSeek و OCR تصویری GPT-4o-mini) در آستانه قطعی است. لطفاً از طریق پنل OpenRouter اقدام به شارژ کنید تا از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
+                سرویس هوش مصنوعی (چت متنی و OCR تصویری GPT-4o-mini با fallback به GPT-4o) در آستانه قطعی است. لطفاً از طریق پنل OpenRouter اقدام به شارژ کنید تا از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
               </p>
             )}
           </div>
@@ -6688,7 +6786,7 @@ export default function Home() {
                                         <option value="ME">عصر-صبح (ME)</option>
                                         <option value="EN">شب-عصر (EN)</option>
                                         <option value="MN">شب-صبح (MN)</option>
-                                        <option value="MEN">شیفت ۲۴ (MEN)</option>
+                                        <option value="MEN">۲۴ (MEN)</option>
                                         <option value="L">مرخصی</option>
                                       </select>
                                     ) : (
@@ -6720,7 +6818,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">شب</span> شب (N)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> شیفت ۲۴ (MEN)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> ۲۴ (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
                 </div>
@@ -7476,20 +7574,31 @@ export default function Home() {
 
                     {chatProposedRequests.length > 0 ? (
                       <div className={isChatFullscreen ? 'space-y-2' : 'space-y-3 animate-fadeIn'}>
-                        <div className={`rounded-2xl border border-emerald-200 bg-emerald-50 ${isChatFullscreen ? 'p-2 flex items-center gap-2' : 'p-3'}`}>
-                          <div className={`font-black text-emerald-800 ${isChatFullscreen ? 'text-[11px]' : 'text-sm'}`}>منظور شما این است؟</div>
-                          <div className={`font-bold text-emerald-700 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px] mt-1'}`}>اگر درست است تأیید کن؛ اگر نه، اصلاحش را همین پایین در چت بنویس.</div>
-                        </div>
+                        {(() => {
+                          const clarifyCount = chatProposedRequests.filter(item => item.needsClarification).length;
+                          return clarifyCount > 0 ? (
+                            <div className={`rounded-2xl border border-amber-300 bg-amber-50 ${isChatFullscreen ? 'p-2 flex items-center gap-2' : 'p-3'}`}>
+                              <div className={`font-black text-amber-800 ${isChatFullscreen ? 'text-[11px]' : 'text-sm'}`}>🔶 {clarifyCount} مورد نیازمند مشخص‌کردن نوع شیفت</div>
+                              <div className={`font-bold text-amber-700 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px] mt-1'}`}>روزها (اعداد) از روی تصویر خوانده شده‌اند ولی نوع شیفتشان [نامفهوم] مانده؛ با دکمهٔ «ویرایش» نوع شیفت هرکدام را انتخاب کن، بعد تأیید کن.</div>
+                            </div>
+                          ) : (
+                            <div className={`rounded-2xl border border-emerald-200 bg-emerald-50 ${isChatFullscreen ? 'p-2 flex items-center gap-2' : 'p-3'}`}>
+                              <div className={`font-black text-emerald-800 ${isChatFullscreen ? 'text-[11px]' : 'text-sm'}`}>منظور شما این است؟</div>
+                              <div className={`font-bold text-emerald-700 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px] mt-1'}`}>اگر درست است تأیید کن؛ اگر نه، اصلاحش را همین پایین در چت بنویس.</div>
+                            </div>
+                          );
+                        })()}
 
                         <div className={`space-y-1.5 overflow-y-auto pr-1 scrollbar-thin ${isChatFullscreen ? 'max-h-28' : 'max-h-[255px]'}`}>
                           {chatProposedRequests.map((request, index) => (
-                            <div key={request.id} className={`rounded-2xl border border-slate-200 bg-slate-50/70 ${isChatFullscreen ? 'p-2 text-[11px] space-y-1' : 'p-3 text-xs space-y-2'}`}>
+                            <div key={request.id} className={`rounded-2xl border ${request.needsClarification ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-slate-50/70'} ${isChatFullscreen ? 'p-2 text-[11px] space-y-1' : 'p-3 text-xs space-y-2'}`}>
                               <div className="flex items-start justify-between gap-2">
                                 <span className={`font-black text-slate-800 ${isChatFullscreen ? 'leading-5' : 'leading-6'}`}>{getRequestSummaryText(request)}</span>
                                 <span className={`shrink-0 rounded-full bg-white border border-slate-200 font-mono text-slate-500 ${isChatFullscreen ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]'}`}>#{index + 1}</span>
                               </div>
                               {request.description && <p className={`font-bold text-slate-500 ${isChatFullscreen ? 'text-[9px] leading-4' : 'text-[10px] leading-5'}`}>{request.description}</p>}
                               <div className="flex flex-wrap gap-1.5 items-center">
+                                {request.needsClarification && <span className="rounded-full bg-amber-100 border border-amber-300 px-2 py-0.5 text-[9px] font-black text-amber-800">❓ نوع شیفت [نامفهوم] — نیازمند اصلاح</span>}
                                 {request.isEssential && <span className="rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[9px] font-black text-red-700">ضروری</span>}
                                 {(role === 'admin' || role === 'headnurse') && request.offHardness === 'hard' && <span className="rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[9px] font-black text-rose-700">Hard OFF</span>}
                                 {(role === 'admin' || role === 'headnurse') && request.offHardness === 'soft' && <span className="rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-700">Soft OFF</span>}
@@ -7501,7 +7610,7 @@ export default function Home() {
                                   className={`shrink-0 rounded-full bg-white border border-slate-200 text-sky-600 hover:bg-sky-50 hover:border-sky-300 transition-colors cursor-pointer flex items-center gap-1 ${isChatFullscreen ? 'px-1.5 py-px text-[9px]' : 'px-2 py-0.5 text-[10px]'}`}
                                 >
                                   <Edit className={isChatFullscreen ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
-                                  ویرایش
+                                  {request.needsClarification ? 'مشخص کردن شیفت' : 'ویرایش'}
                                 </button>
                                 <button
                                   type="button"
@@ -9064,7 +9173,7 @@ export default function Home() {
                         <option value="ME">عصر-صبح (ME)</option>
                         <option value="EN">شب-عصر (EN)</option>
                         <option value="MN">شب-صبح (MN)</option>
-                        <option value="MEN">شیفت ۲۴ (MEN)</option>
+                        <option value="MEN">۲۴ (MEN)</option>
                       </select>
                     </div>
                   )}
@@ -9471,14 +9580,17 @@ export default function Home() {
                               ? 'bg-violet-600 text-white border-violet-700 shadow-md scale-105'
                               : assigned
                                 ? `${meta?.className || 'bg-violet-100 text-violet-800 border-violet-300'} shadow-xs`
-                                : dayInfo.isHoliday
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-violet-300 hover:bg-violet-50'
+                                : assigned === ''
+                                  // روز خوانده‌شده از تصویر که نوع شیفتش [نامفهوم] مانده — راهنمای چشمگیری برای انتخاب
+                                  ? 'bg-amber-100 text-amber-800 border-amber-400 hover:bg-amber-200 shadow-xs'
+                                  : dayInfo.isHoliday
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-violet-300 hover:bg-violet-50'
                           }`}
                           title={dayInfo.holidayTitle || (calendarOccasions[dayInfo.day] || []).join('، ')}
                         >
                           <span className="font-mono text-xs font-extrabold">{dayInfo.day}</span>
-                          <span className="text-[8px] opacity-80">{assigned || WEEKDAYS[dayInfo.dayOfWeek][0]}</span>
+                          <span className="text-[8px] opacity-80">{assigned || (assigned === '' ? '؟' : WEEKDAYS[dayInfo.dayOfWeek][0])}</span>
                         </button>
 
                         {isActive && (
@@ -9532,7 +9644,7 @@ export default function Home() {
 
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600">
                   <span>روزهای تنظیم‌شده: <b className="text-violet-700 font-mono">{dayList.length}</b></span>
-                  <span className="text-slate-400">اگر صفر شود، این آیتم از کادر حذف می‌شود.</span>
+                  <span className="text-slate-400">{dayList.some(d => !chatEditingDays[d]) ? `${dayList.filter(d => !chatEditingDays[d]).length} روز هنوز نوع شیفت ندارد (کهربایی‌رنگ) — آیتم «نیازمند اصلاح» باقی می‌ماند.` : 'اگر صفر شود، این آیتم از کادر حذف می‌شود.'}</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

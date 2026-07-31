@@ -19,20 +19,21 @@ import {
 } from '../lib/image-file';
 
 // ============================================================================
-// «شیفت ۲۴» به‌جای «تمام روز»  (ایراد شمارهٔ ۳)
+// «۲۴» به‌جای «شیفت ۲۴»  (سیاست جدید نام‌گذاری)
 // ============================================================================
 
-test('MEN همیشه «شیفت ۲۴» نامیده می‌شود، نه «تمام روز»', () => {
+test('MEN همیشه فقط «۲۴» نامیده می‌شود، نه «شیفت ۲۴» و نه «تمام روز»', () => {
   const label = getShiftLabel('MEN');
-  assert.ok(label.includes('شیفت ۲۴'), `انتظار «شیفت ۲۴» بود ولی «${label}» آمد`);
+  assert.ok(label.includes('۲۴'), `انتظار «۲۴» بود ولی «${label}» آمد`);
+  assert.ok(!label.includes('شیفت ۲۴'), `برچسب MEN نباید «شیفت ۲۴» داشته باشد: ${label}`);
   assert.ok(!label.includes('تمام روز'));
   assert.ok(!label.includes('کل روز'));
   assert.ok(!label.includes('ترکیبی'));
 });
 
-test('هیچ برچسب شیفتی عبارت «تمام روز» یا «کل روز» ندارد', () => {
+test('هیچ برچسب شیفتی عبارت «شیفت ۲۴»، «تمام روز» یا «کل روز» ندارد', () => {
   for (const [code, label] of Object.entries(SHIFT_LABELS)) {
-    assert.ok(!/تمام روز|کل روز/.test(label), `برچسب ${code} نباید «تمام روز» داشته باشد: ${label}`);
+    assert.ok(!/شیفت ۲۴|تمام روز|کل روز/.test(label), `برچسب ${code} نباید «شیفت ۲۴/تمام روز» داشته باشد: ${label}`);
   }
 });
 
@@ -146,9 +147,10 @@ test('درس واژگانی هر چهار نگاشت فرد/زوج را صریح
   assert.ok(/«روزهای زوج»[^\n]*weekly_even/.test(PERSIAN_VOCABULARY_LESSON));
 });
 
-test('درس واژگانی «شیفت ۲۴» را الزامی و «تمام روز» را ممنوع می‌کند', () => {
-  assert.ok(PERSIAN_VOCABULARY_LESSON.includes('«شیفت ۲۴»'));
-  assert.ok(PERSIAN_VOCABULARY_LESSON.includes('NEVER say «تمام روز»'));
+test('درس واژگانی «۲۴» را الزامی و «شیفت ۲۴» و «تمام روز» را ممنوع می‌کند', () => {
+  assert.ok(PERSIAN_VOCABULARY_LESSON.includes('MEN = «۲۴»'));
+  assert.ok(PERSIAN_VOCABULARY_LESSON.includes('NEVER say «شیفت ۲۴»'));
+  assert.ok(PERSIAN_VOCABULARY_LESSON.includes('«تمام روز»'));
 });
 
 test('درس واژگانی قالب «اُم» را الزامی می‌کند ولی JSON را لاتین نگه می‌دارد', () => {

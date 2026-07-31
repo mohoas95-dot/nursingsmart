@@ -11,12 +11,12 @@ import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور جدید: OpenRouter / deepseek/deepseek-chat
+ * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور جدید: OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o
  *
  * این مسیر برای فرم‌های «متن آزاد» استفاده می‌شود که فقط یک آرایه درخواست
  * می‌خواهند و نیازی به پاسخ محاوره‌ای ندارند.
  * طبق معماری جدید:
- *   - فقط درخواست‌های متنی (Text Analysis) با مدل deepseek/deepseek-chat
+ *   - فقط درخواست‌های متنی (Text Analysis) با مدل openai/gpt-4o-mini (fallback: gpt-4o — مشابه مسیر Vision)
  *   - کلید از OPENROUTER_API_KEY
  *   - ردیابی اعتبار ۱۰۰ دلاری
  */
@@ -115,7 +115,7 @@ Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
         model,
         key: keyLabel,
         modelType: 'text',
-        modelDisplayName: 'DeepSeek Chat',
+        modelDisplayName: model && model.includes('gpt-4o-mini') ? 'GPT-4o-mini' : 'GPT-4o',
       },
       usage: {
         inputTokens: usage.inputTokens,

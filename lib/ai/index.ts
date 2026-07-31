@@ -3,13 +3,13 @@
  * ---------------------------------------------------------------------------
  * نقطه ورود واحد لایه هوش مصنوعی — معماری جدید بر پایه OpenRouter
  *
- * تقسیم هوشمند کار (طبق الزامات جدید):
+ * تقسیم هوشمند کار (طبق الزامات جدید — همهٔ مسیرها GPT):
  *   ┌──────────────────┬─────────────────────────────┬─────────────────────────────┐
  *   │ ورودی کاربر       │ مدل Bluesminds             │ قیمت‌گذاری                   │
  *   ├──────────────────┼─────────────────────────────┼─────────────────────────────┤
- *   │ متن (Text)       │ deepseek-chat               │ $0.27 / $1.10 per 1M tokens │
+ *   │ متن (Text)       │ gpt-4o-mini                 │ $0.15 / $0.60 per 1M tokens │
  *   │ تصویر (Vision)   │ gpt-4o-mini                 │ $0.15 / $0.60 per 1M tokens │
- *   │ fallback تصویر   │ gpt-4o                      │ $2.50 / $10 per 1M tokens   │
+ *   │ fallback هر دو    │ gpt-4o                      │ $2.50 / $10 per 1M tokens   │
  *   └──────────────────┴─────────────────────────────┴─────────────────────────────┘
  *
  * همه درخواست‌ها از یک استخر کلید مشترک (OPENROUTER_API_KEY) استفاده می‌کنند
@@ -34,6 +34,7 @@ export {
   TEXT_MODEL_FALLBACK,
   VISION_MODEL,
   VISION_FALLBACK_MODEL,
+  VISION_IMAGE_DETAIL,
   openRouterKeyPool,
   getTextModelChain,
   getVisionModelChain,
@@ -48,6 +49,7 @@ export {
   type OpenRouterJsonResult,
   type OpenRouterVisionOptions,
   type OpenRouterVisionResult,
+  type VisionImageDetail,
   type CreditState,
   type CreditDisplayInfo,
   type CreditStatusLevel,

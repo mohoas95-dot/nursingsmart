@@ -116,7 +116,7 @@ export async function GET() {
   }
 
   payload.hints.push(
-    "معماری جدید: متن → DeepSeek Chat (deepseek-chat) و تصویر → GPT-4o-mini با fallback به GPT-4o از طریق Bluesminds API",
+    "معماری جدید: متن و تصویر هر دو → GPT-4o-mini با fallback به GPT-4o از طریق Bluesminds API (تصویر با detail:high برای OCR جدول‌ها)",
   );
 
   return NextResponse.json(payload, {

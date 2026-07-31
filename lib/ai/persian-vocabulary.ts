@@ -34,7 +34,7 @@ export function formatDayList(days: readonly number[] | undefined): string {
   return [...days].sort((a, b) => a - b).map(formatDayOrdinal).join("، ");
 }
 
-/** برچسب فارسی هر کد شیفت — «MEN» همیشه «شیفت ۲۴» است، نه «تمام روز». */
+/** برچسب فارسی هر کد شیفت — «MEN» همیشه «۲۴» است، نه «شیفت ۲۴» و نه «تمام روز». */
 export const SHIFT_LABELS: Readonly<Record<string, string>> = {
   M: "صبح (M)",
   E: "عصر (E)",
@@ -42,7 +42,7 @@ export const SHIFT_LABELS: Readonly<Record<string, string>> = {
   ME: "لانگ / صبح-عصر (ME)",
   EN: "عصر-شب (EN)",
   MN: "شب-صبح (MN)",
-  MEN: "شیفت ۲۴ (MEN)",
+  MEN: "۲۴ (MEN)",
   OFF: "آف",
   L: "مرخصی",
 };
@@ -94,7 +94,7 @@ A) «روز» (weekday) vs «تاریخ» (day-number) — most important distin
    جمعه NEVER belongs to weekly_even/weekly_odd. Bare «روزهای فرد» = weekday (weekly_odd), not day numbers.
 
 B) SHIFT NAMES when speaking: M=«صبح» E=«عصر» N=«شب» ME=«لانگ» EN=«عصر-شب» MN=«شب-صبح» OFF=«آف» L=«مرخصی»
-   MEN = «شیفت ۲۴» always. ❌ NEVER say «تمام روز»/«کل روز»/«۲۴ ساعته». ✅ «شیفت ۲۴ برای ۱۳اُم»
+   MEN = «۲۴» always — فقط عدد «۲۴». ❌ NEVER say «شیفت ۲۴»/«شیفت ۲۴ ساعته»/«تمام روز»/«کل روز»/«۲۴ ساعته». ✅ «۲۴ برای ۱۳اُم»
 
 C) DATES in prose: use «۵اُم»، «تاریخ‌های ۵اُم، ۷اُم و ۹اُم» with Persian digits.
    ❌ «روز 5»، «روزهای ۵، ۷». But inside JSON "selectedDays" use Latin integers: [5,7,9].

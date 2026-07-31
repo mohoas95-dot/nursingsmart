@@ -11,10 +11,9 @@
  *   - هشدار زرد < 15 دلار و قرمز < 5 دلار در UI سرپرستار
  *
  * قیمت‌گذاری (بر اساس Bluesminds / دلار به ازای هر ۱M توکن):
- *   - deepseek-chat (یا deepseek/deepseek-chat) : input $0.27 / output $1.10
- *   - deepseek-v3 (یا deepseek/deepseek-v3)      : همان قیمت deepseek-chat
- *   - gpt-4o-mini (یا openai/gpt-4o-mini)       : input $0.15 / output $0.60
- *   - gpt-4o (یا openai/gpt-4o)                  : input $2.50 / output $10.00
+ *   - gpt-4o-mini (متن و تصویر)                 : input $0.15 / output $0.60
+ *   - gpt-4o (fallback هر دو مسیر)               : input $2.50 / output $10.00
+ *   - deepseek-chat / deepseek-v3 (قدیمی)       : فقط برای خوانش صحیح لاگ‌های تاریخی نگه داشته شده
  *
  * قیمت‌ها از env قابل override هستند جهت انعطاف.
  */

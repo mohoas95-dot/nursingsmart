@@ -16,13 +16,13 @@ import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-co
 import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * مسیر گفت‌وگوی متنی چت‌باکس — موتور جدید: OpenRouter / deepseek/deepseek-chat
+ * مسیر گفت‌وگوی متنی چت‌باکس — موتور جدید: OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o
  *
  * سیاست معماری جدید (طبق الزامات):
  *   - این مسیر فقط پیام‌های متنی را پردازش می‌کند (Text Analysis)
- *   - مدل: deepseek/deepseek-chat (یا deepseek-v3 بر اساس endpoint)
+ *   - مدل: openai/gpt-4o-mini با fallback به openai/gpt-4o (دقیقاً مانند مسیر Vision)
  *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
- *   - تصاویر به /api/ai/parse-image-request می‌روند (مدل بینایی متفاوت)
+ *   - تصاویر به /api/ai/parse-image-request می‌روند (همان زنجیره مدل GPT)
  *   - ردیابی مصرف توکن و کسر از اعتبار ۱۰۰ دلاری به‌صورت خودکار انجام می‌شود
  */
 
@@ -42,7 +42,10 @@ const SYSTEM_PROMPT = `
 
 TONE (کاربر قبلاً شکایت کرده بود دستیار قبلی سرد و رباتیک بود):
 - Warm, human, everyday spoken Persian. Never translated-sounding or formal.
-- Use the nurse's first name when given («سلام مریم جان»، «چشم علی جان»).
+- NO GREETINGS (قانون اکید): از سلام و احوال‌پرسی («سلام»، «چطوری؟»، «روز بخیر»، «وقت بخیر»،
+  «امیدوارم حالت خوب باشه» و مانند آن) کاملاً خودداری کن و پاسخ را مستقیم با نتیجه شروع کن.
+  فقط اگر خودِ کاربر اول سلام کرد، حداکثر با نیم‌جملهٔ خیلی کوتاه جواب سلام بده و بلافاصله سراغ کار برو.
+- Use the nurse's first name when given («مریم جان»، «علی جان») — بدون سلام.
 - If they mention something tiring or personal, acknowledge it in ONE short warm sentence first
   («آخی، شب‌کاری پشت سر هم واقعاً کمرشکنه 😮‍💨»، «خسته نباشی واقعاً 🙏»).
 - One or two light emojis max (🙂 🌸 💪 😴 ✅). Vary your openings — never a template.
@@ -73,8 +76,8 @@ FIELDS:
 SYNC RULE (critical): write reply/summary FROM the final requests array — it is the only source of truth.
 Mention every item, one short clause each. Never mention anything not in the array.
 ${PERSIAN_VOCABULARY_LESSON}
-GOOD REPLIES (match this warmth and vocabulary):
-- «سلام مریم جان 🌸 حتماً — آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم ثبت کردم، شیفت ۲۴ هم برای ۲۰اُم. تصمیم نهایی با سرپرستاره ولی درخواستت رسماً ثبت می‌شه.»
+GOOD REPLIES (match this warmth and vocabulary — دقت: بدون هیچ سلام و مقدمه‌ای):
+- «حتماً مریم جان 🌸 آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم ثبت کردم، ۲۴ هم برای ۲۰اُم. تصمیم نهایی با سرپرستاره ولی درخواستت رسماً ثبت می‌شه.»
 - «آخی، پشت سر هم شب‌کاری واقعاً سخته 😮‍💨 باشه، برای روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه) شیفت شب رو گذاشتم.»
 ${OPENROUTER_JSON_CONTRACT}
 ${CALENDAR_FORMAT_LEGEND}
@@ -137,7 +140,7 @@ export async function POST(req: NextRequest) {
       ...conversation,
     ];
 
-    // درخواست متنی با مدل DeepSeek از طریق OpenRouter — ردیابی اعتبار خودکار
+    // درخواست متنی با مدل GPT-4o-mini از طریق OpenRouter — ردیابی اعتبار خودکار
     const { data, model, keyLabel, usage } = await generateOpenRouterJson<TextChatPayload>({
       systemPrompt: SYSTEM_PROMPT,
       messages: openRouterMessages,
@@ -178,7 +181,7 @@ export async function POST(req: NextRequest) {
         model,
         key: keyLabel,
         modelType: 'text',
-        modelDisplayName: 'DeepSeek Chat',
+        modelDisplayName: model && model.includes('gpt-4o-mini') ? 'GPT-4o-mini' : 'GPT-4o',
       },
       usage: {
         inputTokens: usage.inputTokens,

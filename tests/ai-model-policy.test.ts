@@ -5,12 +5,12 @@ import test from 'node:test';
  * نگهبان سیاست مدل‌ها — معماری جدید بر پایه Bluesminds
  *
  * الزامات جدید:
- *   - متن (Text Analysis): deepseek-chat (یا deepseek-v3)
+ *   - متن (Text Analysis): gpt-4o-mini با fallback به gpt-4o (دقیقاً مانند مسیر تصویری)
  *   - تصویر (Vision/OCR): gpt-4o-mini با fallback به gpt-4o
  *   - تمام درخواست‌ها از OPENROUTER_API_KEY استفاده می‌کنند
  *   - سیستم اعتبار ۱۰۰ دلاری با هشدار <15$ و بحرانی <5$
  *
- * این تست جلوی بازگشت به مدل‌های قدیمی (Groq/Gemini direct) را می‌گیرد
+ * این تست جلوی بازگشت به مدل‌های قدیمی (Groq/Gemini direct/DeepSeek) را می‌گیرد
  */
 
 // مدل‌های قدیمی که دیگر نباید پیش‌فرض باشند
@@ -26,10 +26,15 @@ const DEPRECATED_MODELS = [
   'gemini-2.5-flash-lite',
   'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
+  'deepseek-chat',
+  'deepseek-v3',
+  'deepseek/deepseek-chat',
+  'deepseek/deepseek-v3',
+  'deepseek/deepseek-chat-v3-0324',
 ];
 
 async function loadOpenRouterModule() {
-  const envKeys = ['OPENROUTER_TEXT_MODEL', 'OPENROUTER_VISION_MODEL', 'OPENROUTER_VISION_FALLBACK_MODEL'];
+  const envKeys = ['OPENROUTER_TEXT_MODEL', 'OPENROUTER_TEXT_FALLBACK_MODEL', 'OPENROUTER_DEEPSEEK_MODEL', 'OPENROUTER_VISION_MODEL', 'OPENROUTER_VISION_FALLBACK_MODEL'];
   const saved: Record<string, string | undefined> = {};
   for (const key of envKeys) {
     saved[key] = process.env[key];
@@ -45,13 +50,32 @@ async function loadOpenRouterModule() {
   }
 }
 
-test('مدل متنی پیش‌فرض باید deepseek-chat یا deepseek-v3 باشد (طبق الزام)', async () => {
+test('مدل متنی پیش‌فرض باید gpt-4o-mini باشد (دقیقاً مانند مسیر تصویری)', async () => {
   const { TEXT_MODEL } = await loadOpenRouterModule();
-  const validTextModels = ['deepseek-chat', 'deepseek-v3', 'deepseek/deepseek-chat', 'deepseek/deepseek-v3', 'deepseek/deepseek-chat-v3-0324'];
+  const validTextModels = ['gpt-4o-mini', 'openai/gpt-4o-mini'];
   assert.ok(
-    validTextModels.includes(TEXT_MODEL) || TEXT_MODEL.includes('deepseek'),
-    `مدل متنی «${TEXT_MODEL}» باید یکی از مدل‌های DeepSeek باشد (deepseek-chat یا deepseek-v3).`,
+    validTextModels.includes(TEXT_MODEL),
+    `مدل متنی «${TEXT_MODEL}» باید 'gpt-4o-mini' باشد (مشابه مسیر Vision).`,
   );
+});
+
+test('مدل fallback متنی باید gpt-4o باشد (مشابه مسیر تصویری)', async () => {
+  const { TEXT_MODEL_FALLBACK } = await loadOpenRouterModule();
+  const validFallbackModels = ['gpt-4o', 'openai/gpt-4o'];
+  assert.ok(
+    validFallbackModels.includes(TEXT_MODEL_FALLBACK),
+    `مدل fallback متنی باید 'gpt-4o' باشد، اما «${TEXT_MODEL_FALLBACK}» یافت شد.`,
+  );
+});
+
+test('زنجیره مدل متنی باید [gpt-4o-mini, gpt-4o] باشد (مشابه زنجیره بینایی)', async () => {
+  const { getTextModelChain } = await loadOpenRouterModule();
+  const chain = getTextModelChain();
+  assert.ok(chain.length >= 2, 'زنجیره متنی باید حداقل دو مدل داشته باشد (اصلی + fallback)');
+  const validPrimary = ['gpt-4o-mini', 'openai/gpt-4o-mini'];
+  const validFallback = ['gpt-4o', 'openai/gpt-4o'];
+  assert.ok(validPrimary.includes(chain[0]), `مدل اصلی متنی باید gpt-4o-mini باشد، اما ${chain[0]} بود`);
+  assert.ok(validFallback.includes(chain[1]), `مدل fallback متنی باید gpt-4o باشد، اما ${chain[1]} بود`);
 });
 
 test('مدل بینایی اصلی باید gpt-4o-mini باشد (طبق الزام)', async () => {
@@ -72,13 +96,13 @@ test('مدل fallback بینایی باید gpt-4o باشد (برای تصاوی
   );
 });
 
-test('زنجیره مدل متنی نباید شامل مدل‌های منسوخ Groq/Gemini باشد', async () => {
+test('زنجیره مدل متنی نباید شامل مدل‌های منسوخ Groq/Gemini/DeepSeek باشد', async () => {
   const { getTextModelChain } = await loadOpenRouterModule();
   const chain = getTextModelChain();
   for (const model of chain) {
     assert.ok(
       !DEPRECATED_MODELS.includes(model),
-      `مدل منسوخ «${model}» در زنجیره متنی است؛ باید با DeepSeek جایگزین شود.`,
+      `مدل منسوخ «${model}» در زنجیره متنی است؛ باید با GPT-4o-mini/GPT-4o جایگزین شود.`,
     );
   }
 });
@@ -127,7 +151,7 @@ test('قیمت‌گذاری مدل‌ها بر اساس الزامات تعری�
   const creditModule = await import(`../lib/ai/credit.ts?pricing=${Date.now()}`);
   const { MODEL_PRICING, calculateCostUSD } = creditModule;
 
-  assert.ok(MODEL_PRICING['deepseek-chat'] || MODEL_PRICING['deepseek/deepseek-chat'], 'قیمت‌گذاری DeepSeek باید وجود داشته باشد');
+  assert.ok(MODEL_PRICING['deepseek-chat'] || MODEL_PRICING['deepseek/deepseek-chat'], 'قیمت‌گذاری DeepSeek (برای لاگ‌های تاریخی) باید وجود داشته باشد');
   assert.ok(MODEL_PRICING['gpt-4o-mini'] || MODEL_PRICING['openai/gpt-4o-mini'], 'قیمت‌گذاری gpt-4o-mini باید وجود داشته باشد');
   assert.ok(MODEL_PRICING['gpt-4o'] || MODEL_PRICING['openai/gpt-4o'], 'قیمت‌گذاری gpt-4o باید وجود داشته باشد');
 

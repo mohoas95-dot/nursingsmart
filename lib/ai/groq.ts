@@ -4,7 +4,7 @@
  * نسخه بازطراحی‌شده بر اساس OpenRouter — سازگار با معماری جدید NursePlan
  *
  * طبق الزامات جدید:
- *   - تمام درخواست‌های متنی از طریق Bluesminds با مدل deepseek-chat
+ *   - تمام درخواست‌های متنی از طریق Bluesminds با مدل gpt-4o-mini (fallback: gpt-4o)
  *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
  *   - این فایل برای سازگاری با کد قدیمی نگه داشته شده و به‌صورت wrapper
  *     روی openrouter.ts عمل می‌کند

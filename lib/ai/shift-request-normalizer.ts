@@ -60,6 +60,12 @@ export interface NormalizedShiftRequest {
   endDate?: string;
   selectedDays?: number[];
   description?: string;
+  /**
+   * یعنی «روزها خوانده شده ولی نوع شیفت [نامفهوم] است» — مخصوص OCR تصاویر.
+   * این آیتم‌ها حذف نمی‌شوند تا عددهای خوانده‌شده حفظ شوند؛ کاربر باید
+   * در «قسمت ویرایش» نوع شیفت را مشخص کند و تا آن زمان ثبت نهایی مسدود است.
+   */
+  needsClarification?: boolean;
 }
 
 /** ارقام فارسی/عربی → لاتین (مدل‌ها گاهی «۱۲» برمی‌گردانند). */
@@ -89,12 +95,16 @@ export function normalizeShiftRequest(raw: unknown, totalDays: number): Normaliz
   if (!raw || typeof raw !== "object") return null;
   const item = raw as Record<string, unknown>;
 
+  const needsClarification = item.needsClarification === true;
+
   const requestType = typeof item.requestType === "string" && VALID_REQUEST_TYPES.has(item.requestType)
     ? item.requestType
     : null;
   if (!requestType) return null;
 
-  const scope = typeof item.scope === "string" && VALID_SCOPES.has(item.scope) ? item.scope : null;
+  // آیتم needsClarification ممکن است scope نداشته باشد؛ با selectedDays به custom_days ترمیم می‌شود.
+  let scope = typeof item.scope === "string" && VALID_SCOPES.has(item.scope) ? item.scope : null;
+  if (!scope && needsClarification) scope = "custom_days";
   if (!scope) return null;
 
   let preferredShift: string | undefined;
@@ -102,13 +112,19 @@ export function normalizeShiftRequest(raw: unknown, totalDays: number): Normaliz
     const candidate = item.preferredShift.trim().toUpperCase();
     if (VALID_SHIFTS.has(candidate)) preferredShift = candidate;
   }
-  if ((requestType === "shift" || requestType === "avoid_shift") && !preferredShift) {
-    return null; // شیفت نامشخص → آیتم بی‌معناست
+  if ((requestType === "shift" || requestType === "avoid_shift") && !preferredShift && !needsClarification) {
+    return null; // شیفت نامشخص → آیتم بی‌معناست (مگر اینکه الگوی «فقط عدد خوانده شده» باشد)
   }
 
   const selectedDays = normalizeDayList(item.selectedDays, totalDays);
   if (scope === "custom_days" && (!selectedDays || selectedDays.length === 0)) {
     return null;
+  }
+
+  // آیتم needsClarification بدون عدد خوانده‌شده فایده‌ای ندارد — همان قانونِ حذف.
+  if (needsClarification) {
+    if (!selectedDays || selectedDays.length === 0) return null;
+    scope = "custom_days";
   }
 
   const patternSteps = Array.isArray(item.patternSteps)
@@ -122,7 +138,9 @@ export function normalizeShiftRequest(raw: unknown, totalDays: number): Normaliz
 
   const description = typeof item.description === "string" && !isPlaceholder(item.description)
     ? item.description
-    : undefined;
+    : needsClarification
+      ? "روزها خوانده شد؛ نوع شیفت [نامفهوم] است — از «ویرایش» مشخص کن"
+      : undefined;
 
   const offHardnessRaw = typeof item.offHardness === "string" ? item.offHardness : undefined;
 
@@ -145,6 +163,7 @@ export function normalizeShiftRequest(raw: unknown, totalDays: number): Normaliz
       typeof item.endDate === "string" && !isPlaceholder(item.endDate) ? item.endDate : undefined,
     selectedDays: scope === "custom_days" ? selectedDays : undefined,
     description,
+    needsClarification: needsClarification || undefined,
   };
 }
 
@@ -167,8 +186,8 @@ export function normalizeShiftRequestList(
 }
 
 /**
- * توضیح متنی قرارداد JSON برای مدل‌های متنی OpenRouter (DeepSeek).
- * DeepSeek هم مانند Groq نیاز به شرح دقیق JSON دارد — خروجی باید دقیقاً یک شیء JSON باشد.
+ * توضیح متنی قرارداد JSON برای مدل‌های متنی OpenRouter (GPT-4o-mini / GPT-4o).
+ * مدل‌های GPT نیاز به شرح دقیق JSON دارند — خروجی باید دقیقاً یک شیء JSON باشد.
  * Vision models (gpt-4o-mini / gpt-4o) هم همین قرارداد را می‌پذیرند وقتی response_format json_object باشد.
  */
 export const GROQ_JSON_CONTRACT = `
@@ -193,8 +212,9 @@ OUTPUT — exactly one JSON object, no markdown, no prose outside it:
 {"status":"ready|clarification|illegible","reply":"<Persian>","warnings":[],
  "requests":[{"requestType":"shift|OFF|leave|pattern|avoid_shift","preferredShift":"M|E|N|ME|EN|MN|MEN|OFF|L",
  "patternSteps":[],"isEssential":false,"offHardness":"hard|soft","scope":"all|even|odd|weekly_even|weekly_odd|custom_days|range",
- "startDate":"","endDate":"","selectedDays":[],"description":"<Persian>"}]}
+ "startDate":"","endDate":"","selectedDays":[],"description":"<Persian>","needsClarification":false}]}
 Rules: selectedDays REQUIRED when scope="custom_days", Latin digits only (1,2,3 — never ۱,۲,۳).
+needsClarification=true فقط وقتی روزها (اعداد) خوانده شده ولی کلمهٔ شیفت [نامفهوم] است؛ در این حالت preferredShift را کاملاً حذف کن و selectedDays را پر نگه دار.
 If image is blurry/crowded or text is unreadable, return status="illegible" with empty requests and a warning in Persian.
 Never emit "undefined"/"null"/"?" as a value — omit the whole item instead.
 `;

@@ -9,7 +9,7 @@
  *        (پیش‌فرض: https://api.bluesminds.com/v1)
  *      - کلید از OPENROUTER_API_KEY خوانده می‌شود
  *   2. تفکیک هوشمند مدل‌ها:
- *      - متنی (Text Analysis): deepseek-chat (یا deepseek-v3)
+ *      - متنی (Text Analysis): gpt-4o-mini با fallback به gpt-4o (مشابه مسیر Vision)
  *      - تصویری (Vision/OCR): gpt-4o-mini با fallback به gpt-4o
  *   3. مدیریت اعتبار ۱۰۰ دلاری و ردیابی توکن‌ها
  *
@@ -57,11 +57,36 @@ export const OPENROUTER_BASE_URL: string = (
 export const OPENROUTER_ENDPOINT: string = `${OPENROUTER_BASE_URL}/chat/completions`;
 
 // مدل‌های هوشمند بر اساس نوع ورودی
-export const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.OPENROUTER_DEEPSEEK_MODEL || 'deepseek-chat';
-export const TEXT_MODEL_FALLBACK = process.env.OPENROUTER_TEXT_FALLBACK_MODEL || 'deepseek-v3';
+// مدل متنی مطابق سیاست جدید: دقیقاً مانند مسیر تصویری gpt-4o-mini با fallback به gpt-4o.
+// (متغیر قدیمی OPENROUTER_DEEPSEEK_MODEL فقط برای سازگاری با دیپلوی‌های قبلی خوانده می‌شود؛
+// اگر ست شده باشد بر پیش‌فرض GPT غلبه می‌کند — در Vercel آن را حذف کنید.)
+export const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.OPENROUTER_DEEPSEEK_MODEL || 'gpt-4o-mini';
+export const TEXT_MODEL_FALLBACK = process.env.OPENROUTER_TEXT_FALLBACK_MODEL || 'gpt-4o';
 
 export const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'gpt-4o-mini';
 export const VISION_FALLBACK_MODEL = process.env.OPENROUTER_VISION_FALLBACK_MODEL || 'gpt-4o';
+
+/**
+ * کیفیت اسکن تصویر برای Vision API (پارامتر `detail` در پی‌لود image_url).
+ *
+ * چرا «high»؟
+ *   مقدار پیش‌فرض «auto» به مدل اجازه می‌دهد تصویر را اسکیل‌داون کند (حالت low
+ *   یعنی فقط ۵۱۲×۵۱۲)، و در جدول‌های شلوغ شیفت پرستاری — با ۳۱ ستون روز و
+ *   متن ریز داخل سلول‌ها — همین اسکیل‌داون دلیل اصلی خوانش غلط اسامی و
+ *   کدهای شیفت است. با «high» تصویر تا ۲۰۴۸px با کاشی‌های ۵۱۲×۵۱۲ اسکن می‌شود.
+ *
+ * از متغیر محیطی OPENROUTER_VISION_IMAGE_DETAIL قابل override است ولی هر
+ * مقدار نامعتبری به «high» بازمی‌گردد.
+ */
+export type VisionImageDetail = 'low' | 'high' | 'auto';
+
+function resolveVisionImageDetail(): VisionImageDetail {
+  const raw = (process.env.OPENROUTER_VISION_IMAGE_DETAIL || '').trim().toLowerCase();
+  if (raw === 'low' || raw === 'high' || raw === 'auto') return raw;
+  return 'high';
+}
+
+export const VISION_IMAGE_DETAIL: VisionImageDetail = resolveVisionImageDetail();
 
 export function getTextModelChain(): string[] {
   return Array.from(new Set([TEXT_MODEL, TEXT_MODEL_FALLBACK]));
@@ -91,13 +116,25 @@ const TEMPERATURE = Number.isFinite(Number(process.env.OPENROUTER_TEMPERATURE))
   ? Number(process.env.OPENROUTER_TEMPERATURE)
   : 0.4;
 
+// دمای مسیر Vision پایین‌تر نگه داشته می‌شود: برای OCR جدول‌ها به «دقت و
+// تکرارپذیری» نیاز داریم نه خلاقیت. دمای بالا باعث حدس‌زدن سلول‌های ناخوانا
+// می‌شود؛ مقدار ۰٫۱ خروجی را قطعی و وفادار به تصویر نگه می‌دارد.
+const VISION_TEMPERATURE = Number.isFinite(Number(process.env.OPENROUTER_VISION_TEMPERATURE))
+  ? Number(process.env.OPENROUTER_VISION_TEMPERATURE)
+  : 0.1;
+
 // ---------------------------------------------------------------------------
 // انواع
 // ---------------------------------------------------------------------------
 
 export interface OpenRouterMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;
+  content:
+    | string
+    | Array<
+        | { type: 'text'; text: string }
+        | { type: 'image_url'; image_url: { url: string; detail?: VisionImageDetail } }
+      >;
 }
 
 export interface OpenRouterJsonOptions {
@@ -127,6 +164,11 @@ export interface OpenRouterVisionOptions {
   imageBase64: string;
   mimeType: string;
   maxTokens?: number;
+  /**
+   * کیفیت اسکن تصویر (پارامتر detail در ساختار image_url).
+   * برای جدول‌های شیفت همیشه «high»؛ پیش‌فرض: VISION_IMAGE_DETAIL
+   */
+  detail?: VisionImageDetail;
 }
 
 export interface OpenRouterVisionResult<T = Record<string, unknown>> {
@@ -269,7 +311,7 @@ async function callOpenRouterOnce(
 }
 
 // ---------------------------------------------------------------------------
-// درخواست متنی (Text Analysis) — مدل: deepseek-chat
+// درخواست متنی (Text Analysis) — مدل: gpt-4o-mini با fallback به gpt-4o
 // ---------------------------------------------------------------------------
 
 export async function generateOpenRouterJson<T = Record<string, unknown>>(
@@ -292,7 +334,7 @@ export async function generateOpenRouterJson<T = Record<string, unknown>>(
   let lastStatus: number | undefined;
   let callsMade = 0;
 
-  // زنجیره مدل متنی: deepseek-chat -> deepseek-v3 fallback
+  // زنجیره مدل متنی: gpt-4o-mini -> gpt-4o fallback (مشابه زنجیره بینایی)
   const modelChain = getTextModelChain();
 
   for (const model of modelChain) {
@@ -452,7 +494,17 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
       }
       callsMade++;
 
-      const userContent: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [
+      // ساختار پی‌لود تصویر طبق مستندات Vision API با detail:"high"
+      //   {
+      //     "type": "image_url",
+      //     "image_url": { "url": "data:image/jpeg;base64,...", "detail": "high" }
+      //   }
+      // بدون detail:"high" مقدار پیش‌فرض «auto» تصویر را اسکیل‌داون می‌کند و
+      // متن ریز سلول‌های جدول شیفت از دست می‌رود (علت اصلی خطاهای OCR).
+      const userContent: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image_url'; image_url: { url: string; detail: VisionImageDetail } }
+      > = [
         {
           type: 'text',
           text: options.userText,
@@ -461,6 +513,7 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
           type: 'image_url',
           image_url: {
             url: `data:${options.mimeType};base64,${options.imageBase64}`,
+            detail: options.detail ?? VISION_IMAGE_DETAIL,
           },
         },
       ];
@@ -477,6 +530,8 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
           messages,
           maxTokens: options.maxTokens ?? MAX_OUTPUT_TOKENS,
           responseFormat: { type: 'json_object' },
+          // دمای پایین برای OCR: خروجی قطعی و بدون حدس‌زدن خلاقانه
+          temperature: VISION_TEMPERATURE,
         },
         Math.min(PER_CALL_TIMEOUT_MS, Math.max(5_000, remaining() - 1_000)),
       );
@@ -574,7 +629,7 @@ export async function generateOpenRouterVision<T = Record<string, unknown>>(
   if (sawQuota) {
     const waitMs = openRouterKeyPool.nextAvailableInMs();
     throw new QuotaExhaustedError(
-      `${buildQuotaMessage('تحلیل تصویر', waitMs)} اگر عجله داری، همین درخواست را متنی بنویس — از سرویس DeepSeek استفاده می‌کند.`,
+      `${buildQuotaMessage('تحلیل تصویر', waitMs)} اگر عجله داری، همین درخواست را متنی بنویس — آن هم با GPT-4o-mini انجام می‌شود.`,
       OPENROUTER_PROVIDER,
       waitMs,
     );
