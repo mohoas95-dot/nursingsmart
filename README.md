@@ -15,7 +15,7 @@ View your app in AI Studio: https://ai.studio/apps/14c85672-779a-484a-b7a3-7efb6
 
 1. Install dependencies:
    `npm install`
-2. Set the AI keys in [.env.local](.env.local): `GROQ_API_KEY` (text chat) and `GEMINI_API_KEY` (image OCR). Add `_2`/`_3` variants for automatic quota failover — see [هوش مصنوعی چت‌باکس](#هوش-مصنوعی-چتباکس--معماری-دو-موتوره-groq--gemini).
+2. Set the AI keys in [.env.local](.env.local): `OPENROUTER_API_KEY` (Bluesminds key) and `OPENROUTER_BASE_URL` (defaults to `https://api.bluesminds.com/v1`). Legacy `GROQ_API_KEY`/`GEMINI_API_KEY` are kept for backward compatibility only — see [هوش مصنوعی چت‌باکس](#هوش-مصنوعی-چتباکس--معماری-دو-موتوره-groq--gemini).
 3. Copy `.env.example` to `.env.local`, configure PostgreSQL, and initialize authentication:
    `npm run db:generate && npm run db:migrate && npm run db:seed`
 4. Configure the environment-specific S3 variables described in [`docs/STORAGE_ARCHITECTURE.md`](docs/STORAGE_ARCHITECTURE.md).
@@ -119,7 +119,9 @@ GET /api/ai/health
 
 | متغیر | پیش‌فرض | توضیح |
 |---|---|---|
-| `GROQ_API_KEY` / `_2` / `_3` | — | سه کلید رایگان Groq (متن) |
+| `OPENROUTER_API_KEY` / `_2` / `_3` | — | کلید(های) OpenRouter / Bluesminds (متن و تصویر) |
+| `OPENROUTER_BASE_URL` | `https://api.bluesminds.com/v1` | Base URL اختصاصی Bluesminds؛ همهٔ درخواست‌های AI به این آدرس می‌روند |
+| `GROQ_API_KEY` / `_2` / `_3` | — | سه کلید رایگان Groq (متن) — فقط سازگاری قدیمی |
 | `GEMINI_API_KEY` / `_2` / `_3` | — | سه کلید رایگان Gemini (تصویر) |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | مدل متنی اصلی |
 | `GROQ_FALLBACK_MODELS` | `openai/gpt-oss-20b,qwen/qwen3.6-27b` | زنجیرهٔ جایگزین متن (با کاما) |

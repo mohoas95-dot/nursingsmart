@@ -4,8 +4,10 @@
  * موتور واحد هوش مصنوعی بر پایه OpenRouter (جایگزین Groq + Gemini direct)
  *
  * الزامات جدید:
- *   1. ارائه‌دهنده: تمام درخواست‌ها از طریق OpenRouter / Endpoint جدید
- *      کلید از OPENROUTER_API_KEY خوانده می‌شود
+ *   1. ارائه‌دهنده: تمام درخواست‌ها از طریق OpenRouter / Bluesminds ارسال می‌شوند.
+ *      - Base URL اختصاصی Bluesminds از OPENROUTER_BASE_URL خوانده می‌شود
+ *        (پیش‌فرض: https://api.bluesminds.com/v1)
+ *      - کلید از OPENROUTER_API_KEY خوانده می‌شود
  *   2. تفکیک هوشمند مدل‌ها:
  *      - متنی (Text Analysis): deepseek/deepseek-chat (یا deepseek-v3)
  *      - تصویری (Vision/OCR): openai/gpt-4o-mini با fallback به openai/gpt-4o
@@ -32,10 +34,27 @@ import { deductCredit, getCreditStatusLevel } from './credit';
 
 export const OPENROUTER_PROVIDER = 'openrouter';
 
-export const OPENROUTER_ENDPOINT =
-  (process.env.OPENROUTER_BASE_URL
-    ? `${process.env.OPENROUTER_BASE_URL.replace(/\/+$/, '')}/chat/completions`
-    : 'https://openrouter.ai/api/v1/chat/completions') as string;
+/**
+ * Base URL اختصاصی Bluesminds.
+ *
+ * از متغیر محیطی `OPENROUTER_BASE_URL` خوانده می‌شود؛ اگر تنظیم نشده باشد
+ * پیش‌فرض این پروژه (Bluesminds) استفاده می‌شود. این مقدار دقیقاً معادل
+ * پارامتر `baseURL` در SDK های OpenAI / OpenRouter است:
+ *
+ *   const client = new OpenAI({
+ *     apiKey: process.env.OPENROUTER_API_KEY,
+ *     baseURL: process.env.OPENROUTER_BASE_URL,   // → Bluesminds
+ *   });
+ *
+ * کلاینت این پروژه fetch-محور است و همین مقدار در ساخت endpoint استفاده می‌شود،
+ * بنابراین همهٔ درخواست‌های API به Bluesminds ارسال می‌شوند.
+ */
+export const OPENROUTER_BASE_URL: string = (
+  process.env.OPENROUTER_BASE_URL || 'https://api.bluesminds.com/v1'
+).replace(/\/+$/, '');
+
+// Endpoint نهایی درخواست‌های API — بر پایهٔ OPENROUTER_BASE_URL ساخته می‌شود
+export const OPENROUTER_ENDPOINT: string = `${OPENROUTER_BASE_URL}/chat/completions`;
 
 // مدل‌های هوشمند بر اساس نوع ورودی
 export const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || process.env.OPENROUTER_DEEPSEEK_MODEL || 'deepseek/deepseek-chat';

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   OPENROUTER_PROVIDER,
+  OPENROUTER_BASE_URL,
+  OPENROUTER_ENDPOINT,
   TEXT_MODEL,
   TEXT_MODEL_FALLBACK,
   VISION_MODEL,
@@ -37,7 +39,8 @@ export async function GET() {
     ok: openRouterKeyPool.size() > 0 && creditInfo.status !== 'depleted',
     checkedAt: new Date().toISOString(),
     provider: OPENROUTER_PROVIDER,
-    endpoint: "openrouter",
+    baseUrl: OPENROUTER_BASE_URL,
+    endpoint: OPENROUTER_ENDPOINT,
     text: {
       provider: OPENROUTER_PROVIDER,
       role: "تحلیل پیام‌های متنی چت‌باکس (Text Analysis)",
