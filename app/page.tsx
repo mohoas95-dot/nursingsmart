@@ -233,14 +233,14 @@ class ConcurrencyConflictError extends Error {
 
 
 // ---------------------------------------------------------------------------
-// ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت و تلاش مجدد خودکار
-// روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
-//
-// معماری جدید بر پایه OpenRouter (طبق الزامات بازطراحی):
-//   • متن  → /api/ai/chat-requests        (OpenRouter / deepseek/deepseek-chat)
-//   • تصویر → /api/ai/parse-image-request  (OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o)
-//   • اعتبار ۱۰۰ دلاری با ردیابی توکن و هشدار <15$ زرد و <5$ قرمز در UI سرپرستار
-// چرخش بین کلیدهای OpenRouter در سمت سرور انجام می‌شود؛ اعتبار به‌صورت خودکار کسر می‌گردد.
+// ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت
+// معماری ۲۰۲۶ بر پایه Gemini Direct:
+//   • متن و تصویر هر دو → /api/ai/chat-requests و /api/ai/parse-image-request
+//   • مدل اصلی: gemini-2.5-flash با fallback gemini-3.5-flash فقط در شرایط جدی
+//     (زمان بسیار طولانی، مفهوم نامفهوم، سرور شلوغ، مشکل جدی)
+//   • ۵ کلید API با چرخش بی‌درنگ؛ اگر یکی به سقف خورد، بلا‌فاصله کلید بعدی
+//   • اگر هر ۵ کلید تمام شد، مدت انتظار بازگشایی به کاربر در چت‌باکس نمایش داده می‌شود
+//   • سیستم اعتبار ۱۰۰ دلاری حذف شده است
 // ---------------------------------------------------------------------------
 const AI_TEXT_ENDPOINT = '/api/ai/chat-requests';
 const AI_IMAGE_ENDPOINT = '/api/ai/parse-image-request';
@@ -305,7 +305,7 @@ async function postAiWithRetry(
   );
 }
 
-/** پیام متنی → OpenRouter / DeepSeek */
+/** پیام متنی → Gemini Direct (gemini-2.5-flash primary) */
 async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
@@ -313,7 +313,7 @@ async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   });
 }
 
-/** تصویر → OpenRouter / GPT-4o-mini (fallback gpt-4o) */
+/** تصویر → Gemini Direct (همان مدل، با fallback 3.5 در شرایط جدی) */
 async function postImageRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_IMAGE_ENDPOINT, payload, {
     timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
@@ -786,42 +786,9 @@ export default function Home() {
   // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
-  // --- سیستم مدیریت اعتبار ۱۰۰ دلاری AI (OpenRouter) — برای سرپرستار/مدیر ---
-  const [aiCreditBanner, setAiCreditBanner] = React.useState<null | { remaining: number; status: 'warning' | 'critical' | 'depleted'; message: string; percent: number }>(null);
-  React.useEffect(() => {
-    if (role !== 'headnurse' && role !== 'admin') {
-      setAiCreditBanner(null);
-      return;
-    }
-    let cancelled = false;
-    const fetchCreditForBanner = async () => {
-      try {
-        const res = await fetch('/api/ai/credit', { cache: 'no-store' });
-        const data = await res.json();
-        if (cancelled) return;
-        const c = data.credit;
-        if (!c) return;
-        if (c.status === 'warning' || c.status === 'critical' || c.status === 'depleted') {
-          setAiCreditBanner({
-            remaining: c.remaining,
-            status: c.status === 'depleted' ? 'critical' : c.status,
-            message: c.warningMessage || c.messages?.warning || `اعتبار باقی‌مانده: $${c.remaining.toFixed(2)}`,
-            percent: c.percentRemaining,
-          });
-        } else {
-          setAiCreditBanner(null);
-        }
-      } catch {
-        // ignore
-      }
-    };
-    void fetchCreditForBanner();
-    const interval = setInterval(fetchCreditForBanner, 120_000); // هر ۲ دقیقه
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [role]);
+  // سیستم اعتبار ۱۰۰ دلاری حذف شده است — دیگر بنر هشدار اعتبار نداریم.
+  // هوش مصنوعی مستقیماً با Gemini کار می‌کند و مدیریت هزینه در کنسول گوگل است.
+
 
 
   useEffect(() => {
@@ -3984,8 +3951,8 @@ export default function Home() {
         scheduleHistory: buildRequestChatScheduleHistory(targetPersonnel.id),
       };
 
-      // ارسال به موتور بینایی (Gemini 2.5 Flash). چرخش بین ۳ کلید Gemini در
-      // سمت سرور انجام می‌شود؛ اینجا فقط یک تلاش مجدد برای خطای گذرا داریم.
+      // ارسال به موتور بینایی Gemini. چرخش بین ۵ کلید Gemini در
+      // سمت سرور انجام می‌شود؛ اینجا فقط یک تلاش برای خطای گذرا داریم.
       const response = await postImageRequestWithRetry(contextBody);
 
       const data = await response.json().catch(() => ({} as any));
@@ -5954,36 +5921,6 @@ export default function Home() {
       )}
 
       <main className="flex-1 flex flex-col h-full overflow-hidden">
-      {/* بنر هشدار اعتبار API — فقط برای سرپرستار/مدیر، وقتی <15$ زرد و <5$ قرمز */}
-      {aiCreditBanner && (
-        <div className={`mx-4 mt-3 rounded-2xl border-2 px-4 py-3 flex items-start gap-3 shadow-sm animate-fadeIn ${aiCreditBanner.status === 'critical' ? 'bg-rose-600 border-rose-700 text-white shadow-rose-200' : 'bg-amber-100 border-amber-300 text-amber-900'}`}>
-          <div className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${aiCreditBanner.status === 'critical' ? 'bg-white/20' : 'bg-amber-500 text-white'}`}>
-            <AlertTriangle className="w-5 h-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={`text-xs font-black ${aiCreditBanner.status === 'critical' ? 'text-white' : 'text-amber-900'}`}>
-                {aiCreditBanner.message}
-              </span>
-              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black font-mono ${aiCreditBanner.status === 'critical' ? 'bg-white/20 border-white/30 text-white' : 'bg-amber-50 border-amber-200 text-amber-800'}`} dir="ltr">
-                Credit: ${aiCreditBanner.remaining.toFixed(2)} / $100 — {aiCreditBanner.percent.toFixed(1)}% left
-              </span>
-            </div>
-            {aiCreditBanner.status === 'critical' && (
-              <p className="mt-1 text-[11px] font-bold text-white/90 leading-5">
-                سرویس هوش مصنوعی (چت متنی DeepSeek و OCR تصویری GPT-4o-mini) در آستانه قطعی است. از دکمه «شارژ مجدد ۱۰۰ دلار» در بخش «گزارشات و لاگ» استفاده کنید تا اعتبار به حالت عادی بازگردد و از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
-              </p>
-            )}
-          </div>
-          <button
-            onClick={() => setAiCreditBanner(null)}
-            className={`shrink-0 rounded-lg p-1.5 transition-colors ${aiCreditBanner.status === 'critical' ? 'hover:bg-white/20 text-white/80' : 'hover:bg-amber-200 text-amber-700'}`}
-            title="بستن"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
 
 
         <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0 print:hidden transition-all duration-300">
@@ -7222,7 +7159,7 @@ export default function Home() {
                       <h4 className="text-lg sm:text-xl font-black">هنوز درخواستتو ثبت نکردی؟ بیا تو چت 😉</h4>
                       <p className="text-[11px] sm:text-xs font-bold text-indigo-100 mt-1 leading-6">
                         فارسی، خودمونی یا رسمی بنویس؛ اگر چیزی مبهم باشد دستیار قبل از پیشنهاد نهایی سؤال می‌پرسد.
-                        متن‌ها با <span className="font-black text-white">Groq</span> و تصویرها با <span className="font-black text-white">Gemini</span> تحلیل می‌شوند.
+                        پیام‌های متنی و تصویری با هوش مصنوعی تحلیل می‌شوند.
                       </p>
                     </div>
                     <div className="flex items-center gap-2 self-start">
@@ -7306,7 +7243,7 @@ export default function Home() {
                       {isRequestChatProcessing && (
                         <div className="flex justify-start">
                           <div className={`bg-slate-100 border border-slate-200 text-slate-500 rounded-3xl rounded-bl-md font-black flex items-center gap-2 ${isChatFullscreen ? 'px-3 py-2 text-[11px]' : 'px-4 py-3 text-xs'}`}>
-                            <span className="w-3.5 h-3.5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" /> دارم با Groq دقیق بررسی می‌کنم...
+                            <span className="w-3.5 h-3.5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" /> در حال بررسی دقیق درخواست...
                           </div>
                         </div>
                       )}
@@ -7362,7 +7299,7 @@ export default function Home() {
                           ) : isHandwrittenParsing ? (
                             <div className={`text-indigo-700 font-bold flex items-center gap-1.5 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
                               <Loader2 className="w-3 h-3 animate-spin" />
-                              در حال خواندن متن داخل تصویر با Gemini 2.5 Flash...
+                              در حال خواندن متن داخل تصویر...
                             </div>
                           ) : handwrittenImagePreview ? (
                             <div className={`text-slate-500 font-bold leading-4 mt-0.5 ${isChatFullscreen ? 'text-[9px]' : 'text-[10px]'}`}>
@@ -7393,7 +7330,7 @@ export default function Home() {
                         type="button"
                         onClick={() => handwrittenFileInputRef.current?.click()}
                         disabled={isRequestChatProcessing || isHandwrittenParsing || !requestChatPersonnel}
-                        title="پیوست تصویر (تحلیل متن فارسی داخل عکس با Gemini 2.5 Flash)"
+                        title="پیوست تصویر برای تحلیل"
                         className="shrink-0 w-10 h-10 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shadow-sm transition-all hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-600 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center"
                         id="btn-attach-handwritten"
                       >
@@ -7817,17 +7754,12 @@ export default function Home() {
 
               </div>
 
-              {/* لاگ‌ها و اتفاقات + پنل اعتبار ۱۰۰ دلاری — فقط مدیر و سرپرستار؛ در پنل پرسنل نمایش داده نمی‌شود */}
+              {/* لاگ‌ها و اتفاقات — سیستم اعتبار ۱۰۰ دلاری حذف شده است */}
               {role !== 'personnel' && (
                 <EventLogPanel
                   events={eventLogs}
                   monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
                   userRole={role}
-                  showCreditPanel={true}
-                  onCreditRecharged={() => {
-                    // پس از شارژ مجدد موفق، بنرهای هشدار زرد/قرمز بالای داشبورد به حالت عادی ریست می‌شوند
-                    setAiCreditBanner(null);
-                  }}
                 />
               )}
 

@@ -1,30 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  OPENROUTER_PROVIDER,
-  VISION_MODEL,
-  VISION_FALLBACK_MODEL,
-  generateOpenRouterVision,
+  GEMINI_PROVIDER,
+  GEMINI_PRIMARY_MODEL,
+  GEMINI_FALLBACK_MODEL,
+  generateGeminiVision,
   httpStatusForAiError,
   isRetryableAiError,
 } from "@/lib/ai";
 import { normalizeShiftRequestList, VISION_JSON_CONTRACT } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
-import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * مسیر تحلیل «تصویر» چت‌باکس — موتور جدید: OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o
+ * مسیر تحلیل تصویر چت‌باکس — موتور جدید: Gemini Direct
+ * primary: gemini-2.5-flash, fallback: gemini-3.5-flash
  *
- * سیاست معماری جدید:
- *   - این مسیر تنها مسیری است که تصویر می‌پذیرد (Vision / OCR)
- *   - مدل اصلی: openai/gpt-4o-mini (سریع و کم‌هزینه)
- *   - fallback: openai/gpt-4o در صورت تصویر شلوغ/کم‌کیفیت یا خطای مدل اول
- *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
- *   - ردیابی مصرف توکن و کسر از اعتبار ۱۰۰ دلاری
- *
- * حریم خصوصی و حافظه:
- *   - تصویر به‌صورت base64 در بدنه JSON می‌آید و به‌شکل inline URL در حافظه به OpenRouter داده می‌شود
- *   - هیچ‌گاه روی دیسک نوشته نمی‌شود، در پایان تابع پاک‌سازی می‌شود
+ * حریم خصوصی:
+ *   - تصویر به‌صورت base64 در بدنه JSON می‌آید و inline به Gemini داده می‌شود
+ *   - هیچ‌گاه روی دیسک نوشته نمی‌شود
  */
 
 export const runtime = "nodejs";
@@ -49,9 +42,7 @@ function purgeBuffer(buffer: Uint8Array | null) {
   if (!buffer) return;
   try {
     buffer.fill(0);
-  } catch {
-    // best-effort
-  }
+  } catch {}
 }
 
 export async function POST(req: NextRequest) {
@@ -170,8 +161,6 @@ READING GUIDELINES:
   - "description" must be a short Persian recap, 5–15 words, suitable for showing back to the user.
   - "reply" must be a WARM, friendly, human Persian sentence telling the user what you read from the image —
     like a kind colleague, not a machine. Address them by first name if provided, and you may use one light emoji.
-    ✅ Good: «خوندمش مریم جان 🙂 آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم و شیفت ۲۴ رو برای ۲۰اُم برداشت کردم.»
-    ❌ Bad:  «تصویر پردازش شد. ۲ درخواست استخراج گردید.»
 ${PERSIAN_VOCABULARY_LESSON}
 
 NEVER RETURN UNDEFINED OR BLANK FIELDS (CRITICAL):
@@ -198,8 +187,7 @@ ${VISION_JSON_CONTRACT}
 
     const userText = `CONTEXT:\n${compactContext}\n\n${CALENDAR_FORMAT_LEGEND}\n\nRead the Persian text in the attached image and respond with the requested JSON object. If the image is blurry, crowded, low-quality, or handwritten is hard to read, do your best but mention uncertainty in warnings array. If completely illegible, return status="illegible".`;
 
-    // درخواست بینایی با مدل gpt-4o-mini و fallback خودکار به gpt-4o برای تصاویر شلوغ/کم‌کیفیت
-    const { data: parsed, model, keyLabel, usedFallback, usage } = await generateOpenRouterVision<{
+    const { data: parsed, model, keyLabel, usedFallback } = await generateGeminiVision<{
       status?: unknown;
       reply?: unknown;
       warnings?: unknown;
@@ -221,7 +209,7 @@ ${VISION_JSON_CONTRACT}
       : [];
 
     if (usedFallback) {
-      warnings.push(`تصویر با مدل پرقدرت‌تر تحلیل شد (fallback به ${VISION_FALLBACK_MODEL}) به دلیل شلوغی یا کیفیت پایین تصویر اصلی.`);
+      warnings.push(`تصویر با مدل پرقدرت‌تر تحلیل شد (fallback به ${GEMINI_FALLBACK_MODEL}) به دلیل مشکل جدی در مدل اصلی یا شلوغی سرور.`);
     }
 
     const { requests, droppedCount } = normalizeShiftRequestList(parsed.requests, totalDays);
@@ -229,34 +217,18 @@ ${VISION_JSON_CONTRACT}
       warnings.push(`${droppedCount} مورد ناخوانا یا ناقص از نتیجه حذف شد.`);
     }
 
-    const creditInfo = getCreditDisplayInfo();
-
     return NextResponse.json({
       status,
       reply: typeof parsed.reply === "string" ? parsed.reply : "",
       warnings,
       requests,
       engine: {
-        provider: OPENROUTER_PROVIDER,
+        provider: GEMINI_PROVIDER,
         model,
         key: keyLabel,
-        modelType: 'vision',
-        modelDisplayName: usedFallback ? 'GPT-4o (Fallback)' : 'GPT-4o-mini',
+        primaryModel: GEMINI_PRIMARY_MODEL,
+        fallbackModel: GEMINI_FALLBACK_MODEL,
         usedFallback,
-        primaryModel: VISION_MODEL,
-        fallbackModel: VISION_FALLBACK_MODEL,
-      },
-      usage: {
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cost: usage.cost,
-        remainingCredit: usage.remainingCredit,
-      },
-      credit: {
-        remaining: creditInfo.remaining,
-        initial: creditInfo.initial,
-        status: creditInfo.status,
-        percentRemaining: creditInfo.percentRemaining,
       },
     });
   } catch (error) {
@@ -266,15 +238,15 @@ ${VISION_JSON_CONTRACT}
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: OPENROUTER_PROVIDER,
-          modelType: 'vision',
-          model: VISION_MODEL,
-          fallbackModel: VISION_FALLBACK_MODEL,
+          provider: GEMINI_PROVIDER,
+          model: GEMINI_PRIMARY_MODEL,
+          fallbackModel: GEMINI_FALLBACK_MODEL,
+          retryAfterMs: (error as any)?.retryAfterMs,
         },
         { status },
       );
     }
-    console.error("Error parsing image request via OpenRouter:", error);
+    console.error("Error parsing image request via Gemini:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش تصویر" },
       { status: 500 },

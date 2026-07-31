@@ -1,29 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  generateOpenRouterJson,
-  OPENROUTER_PROVIDER,
-  TEXT_MODEL,
+  generateGeminiJson,
+  GEMINI_PROVIDER,
+  GEMINI_PRIMARY_MODEL,
+  GEMINI_FALLBACK_MODEL,
   httpStatusForAiError,
   isRetryableAiError,
-  type OpenRouterMessage,
 } from "@/lib/ai";
+import type { GeminiChatMessage } from "@/lib/ai/gemini";
 import {
   OPENROUTER_JSON_CONTRACT,
   normalizeShiftRequestList,
 } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
-import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * مسیر گفت‌وگوی متنی چت‌باکس — موتور جدید: OpenRouter / deepseek/deepseek-chat
+ * مسیر گفت‌وگوی متنی چت‌باکس — موتور جدید: Gemini Direct
  *
- * سیاست معماری جدید (طبق الزامات):
- *   - این مسیر فقط پیام‌های متنی را پردازش می‌کند (Text Analysis)
- *   - مدل: deepseek/deepseek-chat (یا deepseek-v3 بر اساس endpoint)
- *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
- *   - تصاویر به /api/ai/parse-image-request می‌روند (مدل بینایی متفاوت)
- *   - ردیابی مصرف توکن و کسر از اعتبار ۱۰۰ دلاری به‌صورت خودکار انجام می‌شود
+ * معماری ۲۰۲۶:
+ *   - فقط Gemini: primary gemini-2.5-flash, fallback gemini-3.5-flash
+ *   - ۵ کلید API با چرخش خودکار بی‌درنگ
+ *   - سوئیچ به fallback فقط در صورت: زمان بسیار طولانی، مفهوم نامفهوم، سرور شلوغ، مشکل جدی
+ *   - در صورت اتمام همه کلیدها، مدت زمان انتظار به کاربر نشان داده می‌شود
  */
 
 export const runtime = "nodejs";
@@ -40,8 +39,8 @@ const SYSTEM_PROMPT = `
 تو «دستیار شیفت» هستی؛ همکار مهربان و باتجربهٔ پرستارها در یک بیمارستان ایرانی.
 فارسی، خودمانی و گرم حرف بزن — مثل همکاری که کنارش نشسته، نه مثل فرم اداری.
 
-TONE (کاربر قبلاً شکایت کرده بود دستیار قبلی سرد و رباتیک بود):
-- Warm, human, everyday spoken Persian. Never translated-sounding or formal.
+TONE:
+- Warm, human, everyday spoken Persian.
 - Use the nurse's first name when given («سلام مریم جان»، «چشم علی جان»).
 - If they mention something tiring or personal, acknowledge it in ONE short warm sentence first
   («آخی، شب‌کاری پشت سر هم واقعاً کمرشکنه 😮‍💨»، «خسته نباشی واقعاً 🙏»).
@@ -73,7 +72,7 @@ FIELDS:
 SYNC RULE (critical): write reply/summary FROM the final requests array — it is the only source of truth.
 Mention every item, one short clause each. Never mention anything not in the array.
 ${PERSIAN_VOCABULARY_LESSON}
-GOOD REPLIES (match this warmth and vocabulary):
+GOOD REPLIES:
 - «سلام مریم جان 🌸 حتماً — آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم ثبت کردم، شیفت ۲۴ هم برای ۲۰اُم. تصمیم نهایی با سرپرستاره ولی درخواستت رسماً ثبت می‌شه.»
 - «آخی، پشت سر هم شب‌کاری واقعاً سخته 😮‍💨 باشه، برای روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه) شیفت شب رو گذاشتم.»
 ${OPENROUTER_JSON_CONTRACT}
@@ -127,21 +126,19 @@ export async function POST(req: NextRequest) {
       scheduleHistory,
     });
 
-    const conversation: OpenRouterMessage[] = messages.slice(-6).map(message => ({
+    const conversation: GeminiChatMessage[] = messages.slice(-6).map(message => ({
       role: message.role === "assistant" ? "assistant" : "user",
       content: String(message.content || "").slice(0, 700),
     }));
 
-    const openRouterMessages: OpenRouterMessage[] = [
-      { role: "user", content: `CONTEXT:\\n${compactContext}` },
+    const geminiMessages: GeminiChatMessage[] = [
+      { role: "user", content: `CONTEXT:\n${compactContext}` },
       ...conversation,
     ];
 
-    // درخواست متنی با مدل DeepSeek از طریق OpenRouter — ردیابی اعتبار خودکار
-    const { data, model, keyLabel, usage } = await generateOpenRouterJson<TextChatPayload>({
+    const { data, model, keyLabel } = await generateGeminiJson<TextChatPayload>({
       systemPrompt: SYSTEM_PROMPT,
-      messages: openRouterMessages,
-      requestType: 'text',
+      messages: geminiMessages,
     });
 
     const status = typeof data.status === "string" && ["ready", "clarification", "chat"].includes(data.status)
@@ -158,9 +155,6 @@ export async function POST(req: NextRequest) {
       warnings.push(`${droppedCount} مورد ناقص از نتیجه حذف شد؛ لطفاً همان مورد را دقیق‌تر بنویس.`);
     }
 
-    // اطلاعات اعتبار برای نمایش در لاگ سرپرستار
-    const creditInfo = getCreditDisplayInfo();
-
     return NextResponse.json({
       status,
       reply:
@@ -174,23 +168,11 @@ export async function POST(req: NextRequest) {
         : [],
       requests: normalizedRequests,
       engine: {
-        provider: OPENROUTER_PROVIDER,
+        provider: GEMINI_PROVIDER,
         model,
         key: keyLabel,
-        modelType: 'text',
-        modelDisplayName: 'DeepSeek Chat',
-      },
-      usage: {
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cost: usage.cost,
-        remainingCredit: usage.remainingCredit,
-      },
-      credit: {
-        remaining: creditInfo.remaining,
-        initial: creditInfo.initial,
-        status: creditInfo.status,
-        percentRemaining: creditInfo.percentRemaining,
+        primaryModel: GEMINI_PRIMARY_MODEL,
+        fallbackModel: GEMINI_FALLBACK_MODEL,
       },
     });
   } catch (error) {
@@ -200,14 +182,16 @@ export async function POST(req: NextRequest) {
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: OPENROUTER_PROVIDER,
-          modelType: 'text',
-          model: TEXT_MODEL,
+          provider: GEMINI_PROVIDER,
+          model: GEMINI_PRIMARY_MODEL,
+          fallbackModel: GEMINI_FALLBACK_MODEL,
+          // برای نمایش مدت زمان انتظار در چت‌باکس، retryAfterMs را هم برمی‌گردانیم
+          retryAfterMs: (error as any)?.retryAfterMs,
         },
         { status },
       );
     }
-    console.error("Error in OpenRouter text chat:", error);
+    console.error("Error in Gemini text chat:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در گفت‌وگوی هوشمند" },
       { status: 500 },
