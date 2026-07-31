@@ -310,17 +310,21 @@ function toGeminiContents(messages: GeminiChatMessage[]): Array<{ role: 'user' |
 /**
  * ساخت هدرهای احراز هویت Gemini.
  *
- * ⚠️ کلیدهای جدید Google AI Studio با پیشوند «AQ.» (Auth Keys) صادر می‌شوند و
- * گوگل ارسال آن‌ها به‌صورت پارامتر query (`?key=...`) را رد می‌کند (401/invalid).
- * بنابراین احراز هویت همیشه از طریق هدر HTTP انجام می‌شود:
- *   - کلیدهای جدید (AQ.…)  →  `Authorization: Bearer <key>`
- *   - کلیدهای کلاسیک (AIza…) →  `x-goog-api-key: <key>`
- * برای اطمینان، در حالت کلاسیک هم فقط هدر استفاده می‌شود و کلید هرگز در URL نمی‌آید.
+ * تمامی کلیدهای API صادرشده از Google AI Studio (هم کلیدهای کلاسیک با پیشوند «AIzaSy»
+ * و هم کلیدهای سری جدید با پیشوند «AQ.») باید از طریق هدر استاندارد HTTP گوگل یعنی
+ * `x-goog-api-key: <key>` ارسال شوند.
+ *
+ * ⚠️ هشدار مهم: ارسال کلیدهای API (از جمله کلیدهای «AQ.») با هدر `Authorization: Bearer <key>`
+ * باعث می‌شود سرور گوگل آن را به‌عنوان OAuth 2.0 Access Token بررسی کند و با خطای ۴۰۱ زیر رد شود:
+ * "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential."
+ *
+ * تنها در صورتی که توکن واقعی OAuth 2.0 (مثل توکن‌های شروع‌شونده با `ya29.`) ارسال شود،
+ * از هدر `Authorization: Bearer` استفاده می‌شود.
  */
 export function buildGeminiAuthHeaders(apiKey: string): Record<string, string> {
   const key = String(apiKey ?? '').trim();
   if (!key) return {};
-  if (/^AQ\./i.test(key)) {
+  if (/^ya29\./i.test(key)) {
     return { Authorization: `Bearer ${key}` };
   }
   return { 'x-goog-api-key': key };

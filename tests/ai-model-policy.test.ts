@@ -181,3 +181,26 @@ test('اندپوینت ساخته‌شده از مدل‌های نرمال‌ش�
     `پیشوند تکراری models/ نباید وجود داشته باشد: ${OPENROUTER_ENDPOINT}`,
   );
 });
+
+test('buildGeminiAuthHeaders تمامی کلیدهای API از جمله AQ. را با هدر x-goog-api-key ارسال می‌کند (جلوگیری از خطای 401)', async () => {
+  const { buildGeminiAuthHeaders } = await import(`../lib/ai/gemini.ts?auth=${Date.now()}`);
+
+  // کلید کلاسیک AIzaSy
+  const classicHeaders = buildGeminiAuthHeaders('AIzaSyClassicKey123');
+  assert.deepEqual(classicHeaders, { 'x-goog-api-key': 'AIzaSyClassicKey123' });
+
+  // کلید جدید AQ.
+  const newFormatHeaders = buildGeminiAuthHeaders('AQ.Ab8RN6LF24rBGzAfHx2e7GsvJ6MBuimKLqJS6qrsF2VzjeTf4w');
+  assert.deepEqual(
+    newFormatHeaders,
+    { 'x-goog-api-key': 'AQ.Ab8RN6LF24rBGzAfHx2e7GsvJ6MBuimKLqJS6qrsF2VzjeTf4w' },
+    'کلیدهای AQ. نباید با Authorization: Bearer ارسال شوند زیرا موجب خطای 401 Expected OAuth 2 access token می‌شود',
+  );
+
+  // توکن OAuth 2.0 واقعی (ya29.)
+  const oauthHeaders = buildGeminiAuthHeaders('ya29.a0ABC123456');
+  assert.deepEqual(oauthHeaders, { Authorization: 'Bearer ya29.a0ABC123456' });
+
+  // کلید خالی
+  assert.deepEqual(buildGeminiAuthHeaders(''), {});
+});
