@@ -196,12 +196,7 @@ ${VISION_JSON_CONTRACT}
       note: typeof note === "string" ? note : undefined,
     });
 
-    const userText =
-      "CONTEXT:\\n" +
-      compactContext +
-      "\\n\\n" +
-      CALENDAR_FORMAT_LEGEND +
-      "\\n\\nRead the Persian text in the attached image and respond with the requested JSON object. If the image is blurry, crowded, low-quality, or handwritten is hard to read, do your best but mention uncertainty in warnings array. If completely illegible, return status=\\"illegible\\".";
+    const userText = `CONTEXT:\n${compactContext}\n\n${CALENDAR_FORMAT_LEGEND}\n\nRead the Persian text in the attached image and respond with the requested JSON object. If the image is blurry, crowded, low-quality, or handwritten is hard to read, do your best but mention uncertainty in warnings array. If completely illegible, return status="illegible".`;
 
     // درخواست بینایی با مدل gpt-4o-mini و fallback خودکار به gpt-4o برای تصاویر شلوغ/کم‌کیفیت
     const { data: parsed, model, keyLabel, usedFallback, usage } = await generateOpenRouterVision<{
