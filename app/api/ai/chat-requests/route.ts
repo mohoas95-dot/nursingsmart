@@ -1,29 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  generateGroqJson,
-  GROQ_PROVIDER,
+  generatePuterJson,
+  PUTER_PROVIDER,
   httpStatusForAiError,
   isRetryableAiError,
-  type GroqMessage,
+  type PuterMessage,
 } from "@/lib/ai";
 import {
-  GROQ_JSON_CONTRACT,
+  AI_JSON_CONTRACT,
   normalizeShiftRequestList,
 } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
 
 /**
- * مسیر گفت‌وگوی متنی چت‌باکس — موتور: Groq (GPT-OSS 120B).
+ * مسیر گفت‌وگوی متنی چت‌باکس — موتور: Puter.js (endpoint سازگار با OpenAI
+ * روی api.puter.com، مدل پیش‌فرض gpt-5.4-nano).
  *
  * سیاست معماری:
- *   این مسیر فقط و فقط پیام‌های «متنی» را پردازش می‌کند. هیچ تصویری اینجا
- *   پذیرفته نمی‌شود؛ تصاویر به /api/ai/parse-image-request (Gemini) می‌روند.
- *   بنابراین سهمیهٔ Groq هرگز صرف OCR نمی‌شود و بالعکس.
+ *   این مسیر پیام‌های «متنی» را پردازش می‌کند. تصاویر به همان سرویس Puter اما
+ *   از مسیر /api/ai/parse-image-request می‌روند (زنجیرهٔ مدل vision-capable).
  *
  * پایداری:
- *   lib/ai/groq.ts خودش بین ۳ کلید و زنجیرهٔ مدل می‌چرخد و بودجهٔ زمانی
- *   داخلی (۴۲ ثانیه) کمتر از maxDuration است، پس این مسیر همیشه یک پاسخ
+ *   lib/ai/puter.ts خودش بین توکن‌های تنظیم‌شده و زنجیرهٔ مدل می‌چرخد و
+ *   بودجهٔ زمانی داخلی کمتر از maxDuration است، پس این مسیر همیشه یک پاسخ
  *   JSON تمیز برمی‌گرداند و چت‌باکس هرگز معلق نمی‌ماند.
  */
 export const runtime = "nodejs";
@@ -76,11 +76,11 @@ ${PERSIAN_VOCABULARY_LESSON}
 GOOD REPLIES (match this warmth and vocabulary):
 - «سلام مریم جان 🌸 حتماً — آف رو برای تاریخ‌های ۱۰اُم و ۱۲اُم ثبت کردم، شیفت ۲۴ هم برای ۲۰اُم. تصمیم نهایی با سرپرستاره ولی درخواستت رسماً ثبت می‌شه.»
 - «آخی، پشت سر هم شب‌کاری واقعاً سخته 😮‍💨 باشه، برای روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه) شیفت شب رو گذاشتم.»
-${GROQ_JSON_CONTRACT}
+${AI_JSON_CONTRACT}
 ${CALENDAR_FORMAT_LEGEND}
 `;
 
-interface GroqChatPayload {
+interface AiChatPayload {
   status?: unknown;
   reply?: unknown;
   summary?: unknown;
@@ -118,8 +118,7 @@ export async function POST(req: NextRequest) {
     const totalDays = calendarDays.length || 31;
 
     // زمینه به‌صورت فشرده ساخته می‌شود، نه JSON خام.
-    // این کار مصرف توکن هر درخواست را حدود ۸۸٪ کم می‌کند و مهم‌ترین دلیلِ
-    // نخوردن به سقف «توکن در دقیقهٔ» پلن رایگان است. (lib/ai/compact-context.ts)
+    // این کار مصرف توکن هر درخواست را حدود ۸۸٪ کم می‌کند. (lib/ai/compact-context.ts)
     const compactContext = buildCompactContext({
       year,
       month,
@@ -132,21 +131,21 @@ export async function POST(req: NextRequest) {
 
     // فقط چند پیام آخر گفت‌وگو؛ هر پیام هم کوتاه می‌شود تا یک پیام طولانی
     // به‌تنهایی کل بودجهٔ توکن را نبلعد.
-    const conversation: GroqMessage[] = messages.slice(-6).map(message => ({
+    const conversation: PuterMessage[] = messages.slice(-6).map(message => ({
       role: message.role === "assistant" ? "assistant" : "user",
       content: String(message.content || "").slice(0, 700),
     }));
 
     // زمینه به آخرین پیام کاربر چسبانده می‌شود تا آن جفت پیام مصنوعی
     // (user زمینه + assistant «دریافت شد») حذف شود؛ آن دو خودشان توکن می‌سوزاندند.
-    const groqMessages: GroqMessage[] = [
+    const puterMessages: PuterMessage[] = [
       { role: "user", content: `CONTEXT:\n${compactContext}` },
       ...conversation,
     ];
 
-    const { data, model, keyLabel } = await generateGroqJson<GroqChatPayload>({
+    const { data, model, keyLabel } = await generatePuterJson<AiChatPayload>({
       systemPrompt: SYSTEM_PROMPT,
-      messages: groqMessages,
+      messages: puterMessages,
     });
 
     const status = typeof data.status === "string" && ["ready", "clarification", "chat"].includes(data.status)
@@ -176,7 +175,7 @@ export async function POST(req: NextRequest) {
         : [],
       requests: normalizedRequests,
       // متادیتای شفافیت: کدام موتور/مدل پاسخ داد (در UI به‌صورت تگ نشان داده می‌شود).
-      engine: { provider: GROQ_PROVIDER, model, key: keyLabel },
+      engine: { provider: PUTER_PROVIDER, model, key: keyLabel },
     });
   } catch (error) {
     const status = httpStatusForAiError(error);
@@ -185,12 +184,12 @@ export async function POST(req: NextRequest) {
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: GROQ_PROVIDER,
+          provider: PUTER_PROVIDER,
         },
         { status },
       );
     }
-    console.error("Error in Groq request chat:", error);
+    console.error("Error in Puter request chat:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در گفت‌وگوی هوشمند" },
       { status: 500 },

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  GROQ_PROVIDER,
-  generateGroqJson,
+  PUTER_PROVIDER,
+  generatePuterJson,
   httpStatusForAiError,
   isRetryableAiError,
 } from "@/lib/ai";
@@ -9,11 +9,10 @@ import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 
 /**
- * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور: Groq.
+ * پارس یک‌مرحله‌ای متن درخواست (بدون گفت‌وگو) — موتور: Puter.js.
  *
  * این مسیر برای فرم‌های «متن آزاد» استفاده می‌شود که فقط یک آرایهٔ درخواست
- * می‌خواهند و نیازی به پاسخ محاوره‌ای ندارند. مثل مسیر چت، ورودی تصویری
- * نمی‌پذیرد و هیچ کلید Gemini مصرف نمی‌کند.
+ * می‌خواهند و نیازی به پاسخ محاوره‌ای ندارند.
  */
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -93,7 +92,7 @@ OUTPUT CONTRACT — return EXACTLY one JSON object (no markdown, no prose):
 Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
 `;
 
-    const { data, model, keyLabel } = await generateGroqJson<{ requests?: unknown }>({
+    const { data, model, keyLabel } = await generatePuterJson<{ requests?: unknown }>({
       systemPrompt,
       messages: [{ role: "user", content: text.slice(0, 4000) }],
     });
@@ -102,7 +101,7 @@ Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
 
     return NextResponse.json({
       requests,
-      engine: { provider: GROQ_PROVIDER, model, key: keyLabel },
+      engine: { provider: PUTER_PROVIDER, model, key: keyLabel },
     });
   } catch (error) {
     const status = httpStatusForAiError(error);
@@ -111,12 +110,12 @@ Use Latin digits inside selectedDays. Keep descriptions short and in Persian.
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: GROQ_PROVIDER,
+          provider: PUTER_PROVIDER,
         },
         { status },
       );
     }
-    console.error("Error parsing smart requests via Groq:", error);
+    console.error("Error parsing smart requests via Puter:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش هوش مصنوعی" },
       { status: 500 },

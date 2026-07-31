@@ -1,27 +1,22 @@
-import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  GEMINI_PROVIDER,
-  generateGeminiVision,
+  PUTER_PROVIDER,
+  generatePuterVisionJson,
   httpStatusForAiError,
   isRetryableAiError,
+  type PuterMessage,
 } from "@/lib/ai";
-import { extractJsonObject } from "@/lib/ai/json";
 import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
 
 /**
- * مسیر تحلیل «تصویر» چت‌باکس — موتور: Google Gemini 2.5 Flash.
- *
- * سیاست معماری:
- *   این مسیر تنها مسیری است که تصویر می‌پذیرد و تنها مسیری است که کلیدهای
- *   Gemini را مصرف می‌کند. پیام‌های متنی هرگز به اینجا نمی‌آیند (سهم Groq).
- *   نتیجه: کریدیت Gemini فقط صرف کاری می‌شود که واقعاً به بینایی نیاز دارد.
+ * مسیر تحلیل «تصویر» چت‌باکس — موتور: Puter.js (همان endpoint سازگار با
+ * OpenAI که برای متن استفاده می‌شود، با زنجیرهٔ مدل‌های vision-capable).
  *
  * حریم خصوصی و حافظه:
- *   - تصویر به‌صورت base64 در بدنهٔ JSON می‌آید و به‌شکل inlineData (در حافظه)
- *     به Gemini داده می‌شود؛ هیچ‌گاه روی دیسک نوشته نمی‌شود.
+ *   - تصویر به‌صورت base64 در بدنهٔ JSON می‌آید و به‌شکل data-URL (در حافظه)
+ *     در پیام ارسالی جای می‌گیرد؛ هیچ‌گاه روی دیسک نوشته نمی‌شود.
  *   - همهٔ ارجاع‌ها به بافر در پایان تابع پاک‌سازی (best-effort) می‌شوند.
  */
 export const runtime = "nodejs";
@@ -180,12 +175,18 @@ NEVER RETURN UNDEFINED OR BLANK FIELDS (CRITICAL):
   - It is FAR better to return 2 confident requests + 1 warning than 3 requests where one has
     "preferredShift": "undefined" or an empty selectedDays.
 
-OUTPUT RULES (CRITICAL):
-Respond ONLY with a JSON object matching the response schema. Do not write any prose outside the JSON.
+OUTPUT — exactly one JSON object, no markdown, no prose outside it:
+{"status":"ready|clarification|illegible","reply":"<Persian>","warnings":[],
+ "requests":[{"requestType":"shift|OFF|leave|pattern|avoid_shift","preferredShift":"M|E|N|ME|EN|MN|MEN|OFF|L",
+ "patternSteps":[],"isEssential":false,"offHardness":"hard|soft","scope":"all|even|odd|weekly_even|weekly_odd|custom_days|range",
+ "startDate":"","endDate":"","selectedDays":[],"description":"<Persian>"}]}
+Rules: selectedDays REQUIRED when scope="custom_days", Latin digits only (1,2,3 — never ۱,۲,۳).
+startDate/endDate only for scope="range". patternSteps only for requestType="pattern".
+Never emit "undefined"/"null"/"?" as a value — omit the whole item instead.
 `;
 
     // زمینهٔ فشرده (نه JSON خام) — تصویر خودش گران است، پس متن همراهش
-    // باید تا حد ممکن کم‌حجم باشد تا سهمیهٔ توکن هدر نرود.
+    // باید تا حد ممکن کم‌حجم باشد.
     const compactContext = buildCompactContext({
       year: Number(year),
       month: Number(month),
@@ -197,105 +198,54 @@ Respond ONLY with a JSON object matching the response schema. Do not write any p
       note: typeof note === "string" ? note : undefined,
     });
 
-    const { response, model, keyLabel } = await generateGeminiVision({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text:
-                "CONTEXT:\n" +
-                compactContext +
-                "\n\n" + CALENDAR_FORMAT_LEGEND +
-                "\n\nRead the Persian text in the attached image and respond with the requested JSON object.",
-            },
-            {
-              inlineData: {
-                mimeType: normalizedMime,
-                data: base64Payload,
-              },
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            status: { type: Type.STRING, enum: ["ready", "clarification", "illegible"] },
-            reply: { type: Type.STRING },
-            warnings: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            requests: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  requestType: {
-                    type: Type.STRING,
-                    enum: ["shift", "OFF", "leave", "pattern", "avoid_shift"],
-                  },
-                  preferredShift: {
-                    type: Type.STRING,
-                    enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"],
-                  },
-                  patternSteps: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING, enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"] },
-                  },
-                  isEssential: { type: Type.BOOLEAN },
-                  offHardness: { type: Type.STRING, enum: ["hard", "soft"] },
-                  scope: {
-                    type: Type.STRING,
-                    enum: ["all", "even", "odd", "weekly_even", "weekly_odd", "custom_days", "range"],
-                  },
-                  startDate: { type: Type.STRING },
-                  endDate: { type: Type.STRING },
-                  selectedDays: {
-                    type: Type.ARRAY,
-                    items: { type: Type.INTEGER },
-                  },
-                  description: { type: Type.STRING },
-                },
-                required: ["requestType", "scope"],
-              },
-            },
-          },
-          required: ["status", "requests"],
-        },
-      },
-    });
+    const dataUrl = `data:${normalizedMime};base64,${base64Payload}`;
 
-    const parsed = extractJsonObject<{
+    const messages: PuterMessage[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              "CONTEXT:\n" +
+              compactContext +
+              "\n\n" + CALENDAR_FORMAT_LEGEND +
+              "\n\nRead the Persian text in the attached image and respond with the requested JSON object.",
+          },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      },
+    ];
+
+    const { data, model, keyLabel } = await generatePuterVisionJson<{
       status?: unknown;
       reply?: unknown;
       warnings?: unknown;
       requests?: unknown;
-    }>(response.text) || {};
+    }>({
+      systemPrompt,
+      messages,
+    });
 
-    const status = typeof parsed.status === "string" && ["ready", "clarification", "illegible"].includes(parsed.status)
-      ? parsed.status
+    const status = typeof data.status === "string" && ["ready", "clarification", "illegible"].includes(data.status)
+      ? data.status
       : "ready";
 
-    const warnings = Array.isArray(parsed.warnings)
-      ? parsed.warnings.filter((item: unknown): item is string => typeof item === "string")
+    const warnings = Array.isArray(data.warnings)
+      ? data.warnings.filter((item: unknown): item is string => typeof item === "string")
       : [];
 
-    const { requests, droppedCount } = normalizeShiftRequestList(parsed.requests, totalDays);
+    const { requests, droppedCount } = normalizeShiftRequestList(data.requests, totalDays);
     if (droppedCount > 0) {
       warnings.push(`${droppedCount} مورد ناخوانا یا ناقص از نتیجه حذف شد.`);
     }
 
     return NextResponse.json({
       status,
-      reply: typeof parsed.reply === "string" ? parsed.reply : "",
+      reply: typeof data.reply === "string" ? data.reply : "",
       warnings,
       requests,
-      engine: { provider: GEMINI_PROVIDER, model, key: keyLabel },
+      engine: { provider: PUTER_PROVIDER, model, key: keyLabel },
     });
   } catch (error) {
     const status = httpStatusForAiError(error);
@@ -304,12 +254,12 @@ Respond ONLY with a JSON object matching the response schema. Do not write any p
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: GEMINI_PROVIDER,
+          provider: PUTER_PROVIDER,
         },
         { status },
       );
     }
-    console.error("Error parsing image request via Gemini:", error);
+    console.error("Error parsing image request via Puter:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش تصویر" },
       { status: 500 },

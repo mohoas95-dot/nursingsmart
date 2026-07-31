@@ -3,16 +3,12 @@
  * ---------------------------------------------------------------------------
  * نقطهٔ ورود واحد لایهٔ هوش مصنوعی چت‌باکس.
  *
- * تقسیم کار (سیاست ثابت سیستم):
- *   ┌──────────────┬──────────────────────────┬────────────────────────────┐
- *   │ ورودی کاربر  │ سرویس                    │ کلیدها                     │
- *   ├──────────────┼──────────────────────────┼────────────────────────────┤
- *   │ متن          │ Groq — GPT-OSS 120B      │ GROQ_API_KEY[_2,_3]        │
- *   │ تصویر        │ Gemini — 2.5 Flash       │ GEMINI_API_KEY[_2,_3]      │
- *   └──────────────┴──────────────────────────┴────────────────────────────┘
- *
- * این دو مسیر هیچ منبع مشترکی ندارند: نه کلید، نه شمارندهٔ سهمیه، نه cooldown.
- * پس اتمام سهمیهٔ یکی هرگز باعث از کار افتادن دیگری نمی‌شود.
+ * معماری فعلی (تک‌موتوره، مطابق تصمیم محصول):
+ *   هم پیام‌های متنی و هم تصاویر از طریق یک سرویس واحد پردازش می‌شوند:
+ *   Puter.js (endpoint سازگار با OpenAI روی api.puter.com). دیگر خبری از دو
+ *   سرویس جدا (Groq برای متن / Gemini برای تصویر) و دو استخر کلید مجزا نیست؛
+ *   هر دو مسیر از همان استخر توکن Puter و همان منطق چرخش/تایم‌اوت استفاده
+ *   می‌کنند، فقط با زنجیرهٔ مدل مناسب خودشان (متن یا vision).
  */
 
 export * from "./errors";
@@ -24,20 +20,16 @@ export {
   type KeyFailureKind,
 } from "./key-pool";
 export {
-  GROQ_PROVIDER,
-  GROQ_MODEL,
-  generateGroqJson,
-  getGroqModelChain,
-  groqKeyPool,
-  type GroqMessage,
-  type GroqJsonOptions,
-  type GroqJsonResult,
-} from "./groq";
-export {
-  GEMINI_PROVIDER,
-  GEMINI_VISION_MODEL,
-  generateGeminiVision,
-  getGeminiVisionModelChain,
-  geminiKeyPool,
-  type GeminiVisionResult,
-} from "./gemini-vision";
+  PUTER_PROVIDER,
+  PUTER_MODEL,
+  PUTER_VISION_MODEL,
+  generatePuterJson,
+  generatePuterVisionJson,
+  getPuterModelChain,
+  getPuterVisionModelChain,
+  puterKeyPool,
+  type PuterMessage,
+  type PuterContentPart,
+  type PuterJsonOptions,
+  type PuterJsonResult,
+} from "./puter";

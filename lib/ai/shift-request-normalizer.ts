@@ -170,7 +170,7 @@ export function normalizeShiftRequestList(
  * توضیح متنی قرارداد JSON برای مدل‌های Groq.
  * (Gemini از responseSchema بومی استفاده می‌کند؛ Llama به یک شرح دقیق نیاز دارد.)
  */
-export const GROQ_JSON_CONTRACT = `
+export const AI_JSON_CONTRACT = `
 OUTPUT — exactly one JSON object, no markdown, no prose outside it:
 {"status":"ready|clarification|chat","reply":"<Persian>","summary":"<Persian>","warnings":[],"questions":[],
  "requests":[{"requestType":"shift|OFF|leave|pattern|avoid_shift","preferredShift":"M|E|N|ME|EN|MN|MEN|OFF|L",
