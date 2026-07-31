@@ -24,7 +24,7 @@
   - هر دو قابلیت متنی و تصویری با همین دو مدل انجام می‌شود (Gemini multimodal)
 
 - **معماری درخواست**: 
-  - Endpoint: `https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key=API_KEY`
+  - Endpoint: `https://generativelanguage.googleapis.com/v1/models/{model}:generateContent` — احراز هویت فقط با هدر: `Authorization: Bearer <AQ.…>` برای کلیدهای جدید یا `x-goog-api-key: <AIza…>` برای کلیدهای کلاسیک (کلید هرگز در query URL ارسال نمی‌شود)
   - `systemInstruction` + `contents` + `generationConfig: { responseMimeType: 'application/json' }`
   - Vision: `inlineData: { mimeType, data: base64 }`
 
