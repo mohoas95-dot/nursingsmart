@@ -24,3 +24,7 @@ coverage/
 
 # پیش‌نمایش‌های تولیدشدهٔ برگهٔ چاپ (خروجی موقت، در مخزن نگه داشته نمی‌شوند)
 preview-print.*
+
+# State موقت سیستم اعتبار AI (خروجی runtime؛ در مخزن نگه داشته نمی‌شود)
+data/ai-credit.json
+.tmp/ai-credit.json

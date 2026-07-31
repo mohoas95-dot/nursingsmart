@@ -24,7 +24,35 @@ export const INITIAL_CREDIT_USD = Number(process.env.AI_INITIAL_CREDIT_USD) || 1
 export const WARNING_THRESHOLD_USD = Number(process.env.AI_CREDIT_WARNING_THRESHOLD) || 15;
 export const CRITICAL_THRESHOLD_USD = Number(process.env.AI_CREDIT_CRITICAL_THRESHOLD) || 5;
 
+/** سقف نگهداری لاگ درخواست‌ها در state — قدیمی‌ترها خودکار حذف می‌شوند. */
+export const MAX_CREDIT_LOGS = 200;
+
 export type CreditStatusLevel = 'ok' | 'warning' | 'critical' | 'depleted';
+
+/**
+ * یک ردیف لاگ مصرف/شارژ اعتبار.
+ * برای هر درخواست API، شامل: مدل استفاده‌شده، تعداد توکن ورودی/خروجی و هزینه کسرشده به دلار.
+ * برای شارژ مجدد، فیلدهای kind/amount پر می‌شوند.
+ */
+export interface CreditLogEntry {
+  /** زمان ISO ثبت لاگ */
+  at: string;
+  kind: 'request' | 'recharge';
+  /** مدل استفاده‌شده (برای kind=request) */
+  model?: string;
+  /** تعداد توکن ورودی (prompt_tokens) */
+  inputTokens?: number;
+  /** تعداد توکن خروجی (completion_tokens) */
+  outputTokens?: number;
+  /** هزینه کسرشده به دلار (برای kind=request) */
+  cost?: number;
+  /** مبلغ شارژ به دلار (برای kind=recharge) */
+  amount?: number;
+  /** اعتبار باقی‌مانده پس از این عملیات */
+  remaining: number;
+  /** آیا این درخواست با مدل fallback پردازش شده است؟ */
+  isFallback?: boolean;
+}
 
 export interface ModelPricing {
   inputPerMillion: number;
@@ -110,6 +138,8 @@ export interface CreditState {
     cost: number;
     at: string;
   };
+  /** لاگ آخرین درخواست‌ها/شارژها (جدیدترین‌ها در انتها) — سقف MAX_CREDIT_LOGS */
+  logs: CreditLogEntry[];
   // per-model breakdown
   byModel: Record<string, { inputTokens: number; outputTokens: number; cost: number; count: number }>;
 }
@@ -123,6 +153,7 @@ function getInitialState(): CreditState {
     totalOutputTokens: 0,
     requestCount: 0,
     lastUpdated: new Date().toISOString(),
+    logs: [],
     byModel: {},
   };
 }
@@ -191,6 +222,10 @@ function ensureInitialized() {
   initializedFromFile = true;
   const loaded = tryLoadFromFile();
   if (loaded) {
+    // مهاجرت state های قدیمی: اگر فیلد logs وجود نداشت، خالی مقداردهی می‌شود.
+    if (!Array.isArray((loaded as Partial<CreditState>).logs)) {
+      (loaded as Partial<CreditState>).logs = [];
+    }
     const current = getGlobalState();
     // Only adopt if loaded is newer or has more spent (avoid overwriting newer in-memory state with old file)
     // For simplicity: if file has less remaining than memory, adopt file (means costs were tracked)
@@ -261,6 +296,22 @@ export function deductCredit(usage: UsageInput): DeductResult {
   state.byModel[usage.model].cost += cost;
   state.byModel[usage.model].count += 1;
 
+  // لاگ هر درخواست: توکن ورودی، توکن خروجی، مدل استفاده‌شده و هزینه کسرشده به دلار
+  const logEntry: CreditLogEntry = {
+    at: state.lastUpdated,
+    kind: 'request',
+    model: usage.model,
+    inputTokens,
+    outputTokens,
+    cost,
+    remaining: state.remaining,
+    ...(usage.isFallback ? { isFallback: true } : {}),
+  };
+  state.logs.push(logEntry);
+  if (state.logs.length > MAX_CREDIT_LOGS) {
+    state.logs = state.logs.slice(-MAX_CREDIT_LOGS);
+  }
+
   setGlobalState(state);
   trySaveToFile(state);
 
@@ -286,7 +337,8 @@ export function deductCredit(usage: UsageInput): DeductResult {
 }
 
 /**
- * برای تست‌ها و ریست دستی (مثلاً شارژ مجدد)
+ * برای تست‌ها و ریست دستی — کل state را از صفر بازسازی می‌کند (بدون ثبت لاگ).
+ * برای شارژ مجدد واقعی از `rechargeCredit` استفاده کنید تا لاگ شارژ ثبت شود.
  */
 export function resetCredit(toInitial: number = INITIAL_CREDIT_USD): CreditState {
   const state = getInitialState();
@@ -297,12 +349,65 @@ export function resetCredit(toInitial: number = INITIAL_CREDIT_USD): CreditState
   return { ...state };
 }
 
+/**
+ * شارژ مجدد اعتبار (Recharge).
+ *
+ * اعتبار باقی‌مانده را دقیقاً به `amount` (پیش‌فرض ۱۰۰ دلار) بازمی‌گرداند.
+ * از آنجا که remaining پس از شارژ بالای هر دو آستانه (۱۵ و ۵ دلار) قرار می‌گیرد،
+ * وضعیت بنرهای هشدار زرد/قرمز به‌صورت خودکار به «عادی» (ok) برمی‌گردد.
+ *
+ * برخلاف `resetCredit`، آمار مصرف (totalSpent، byModel و …) حفظ می‌شود و فقط
+ * سقف اعتبار (initial) طوری تنظیم می‌شود که remaining = amount باشد.
+ */
+export function rechargeCredit(amount: number = INITIAL_CREDIT_USD): CreditState {
+  ensureInitialized();
+  const state = getGlobalState();
+
+  const target = Math.round(Math.max(0, Number.isFinite(Number(amount)) ? Number(amount) : INITIAL_CREDIT_USD) * 100) / 100;
+  const delta = Math.round((target - state.remaining) * 100) / 100;
+
+  if (delta !== 0) {
+    // ثابت نگه‌داشتن رابطهٔ remaining = initial - totalSpent
+    state.initial = Math.round((state.initial + delta) * 100) / 100;
+  }
+  state.remaining = target;
+  state.lastUpdated = new Date().toISOString();
+  state.logs.push({
+    at: state.lastUpdated,
+    kind: 'recharge',
+    amount: target,
+    remaining: target,
+  });
+  if (state.logs.length > MAX_CREDIT_LOGS) {
+    state.logs = state.logs.slice(-MAX_CREDIT_LOGS);
+  }
+
+  setGlobalState(state);
+  trySaveToFile(state);
+
+  const status = getCreditStatusLevel(state.remaining);
+  console.log(
+    `[ai-credit] 🔋 recharge -> remaining=$${state.remaining.toFixed(2)} / initial=$${state.initial.toFixed(2)} status=${status} (هشدارها به حالت عادی بازگشتند)`
+  );
+
+  return { ...state };
+}
+
 export function addCredit(amount: number): CreditState {
   ensureInitialized();
   const state = getGlobalState();
   state.initial += amount;
   state.remaining += amount;
   state.lastUpdated = new Date().toISOString();
+  state.logs.push({
+    at: state.lastUpdated,
+    kind: 'recharge',
+    amount,
+    remaining: state.remaining,
+  });
+  if (state.logs.length > MAX_CREDIT_LOGS) {
+    state.logs = state.logs.slice(-MAX_CREDIT_LOGS);
+  }
   setGlobalState(state);
   trySaveToFile(state);
   return { ...state };
@@ -323,6 +428,8 @@ export interface CreditDisplayInfo {
   requestCount: number;
   byModel: CreditState['byModel'];
   lastRequest?: CreditState['lastRequest'];
+  /** لاگ آخرین درخواست‌ها/شارژها — جدیدترین‌ها اول */
+  logs: CreditLogEntry[];
 }
 
 export function getCreditDisplayInfo(): CreditDisplayInfo {
@@ -349,5 +456,65 @@ export function getCreditDisplayInfo(): CreditDisplayInfo {
     requestCount: state.requestCount,
     byModel: state.byModel,
     lastRequest: state.lastRequest,
+    logs: state.logs.slice(-50).reverse(),
+  };
+}
+
+/**
+ * اجرای یک اکشن اعتبار (recharge | reset | add) به‌صورت خالص — برای Route و تست.
+ *
+ * بدنهٔ درخواست: { action: "recharge", amount: 100 }
+ */
+export interface CreditActionResult {
+  ok: boolean;
+  message?: string;
+  error?: string;
+  statusCode: number;
+  credit: CreditDisplayInfo;
+}
+
+export function applyCreditAction(action: string, amount: unknown): CreditActionResult {
+  const numericAmount = Number(amount);
+
+  if (action === 'recharge') {
+    const target = Number.isFinite(numericAmount) && numericAmount > 0 ? numericAmount : INITIAL_CREDIT_USD;
+    const state = rechargeCredit(target);
+    return {
+      ok: true,
+      statusCode: 200,
+      message: `اعتبار با موفقیت به $${state.remaining.toFixed(2)} شارژ مجدد شد؛ وضعیت هشدار به حالت عادی بازگشت.`,
+      credit: getCreditDisplayInfo(),
+    };
+  }
+
+  if (action === 'reset') {
+    const newAmount = Number.isFinite(numericAmount) && numericAmount > 0 ? numericAmount : INITIAL_CREDIT_USD;
+    resetCredit(newAmount);
+    return {
+      ok: true,
+      statusCode: 200,
+      message: `اعتبار به $${newAmount.toFixed(2)} ریست شد.`,
+      credit: getCreditDisplayInfo(),
+    };
+  }
+
+  if (action === 'add') {
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return { ok: false, error: 'مبلغ شارژ معتبر نیست.', statusCode: 400, credit: getCreditDisplayInfo() };
+    }
+    addCredit(numericAmount);
+    return {
+      ok: true,
+      statusCode: 200,
+      message: `$${numericAmount.toFixed(2)} به اعتبار اضافه شد.`,
+      credit: getCreditDisplayInfo(),
+    };
+  }
+
+  return {
+    ok: false,
+    error: 'action نامعتبر است (recharge | reset | add).',
+    statusCode: 400,
+    credit: getCreditDisplayInfo(),
   };
 }

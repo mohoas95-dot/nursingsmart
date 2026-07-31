@@ -57,10 +57,15 @@ export {
   INITIAL_CREDIT_USD,
   WARNING_THRESHOLD_USD,
   CRITICAL_THRESHOLD_USD,
+  MAX_CREDIT_LOGS,
   MODEL_PRICING,
   getCreditStatusLevel,
   resetCredit,
   addCredit,
+  rechargeCredit,
+  applyCreditAction,
+  type CreditLogEntry,
+  type CreditActionResult,
 } from './credit';
 
 // سازگاری با کد قدیمی — این‌ها حالا wrapper روی OpenRouter هستند

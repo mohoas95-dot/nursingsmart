@@ -54,6 +54,8 @@ export interface EventLogPanelProps {
   creditData?: AiCreditData | null;
   /** نقش کاربر جاری — اگر پرسنل باشد، پنل اعتبار مخفی می‌ماند */
   userRole?: 'admin' | 'headnurse' | 'personnel' | 'guest';
+  /** پس از شارژ مجدد موفق اعتبار صدا زده می‌شود — برای ریست بنرهای هشدار زرد/قرمز در صفحه */
+  onCreditRecharged?: (credit: AiCreditData) => void;
 }
 
 const CATEGORY_META: Record<SystemEventCategory, { label: string; icon: React.ReactNode }> = {
@@ -119,7 +121,7 @@ function toPersianDigits(value: string | number): string {
   return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
 }
 
-export function EventLogPanel({ events, monthLabel, showCreditPanel = true, creditData, userRole }: EventLogPanelProps) {
+export function EventLogPanel({ events, monthLabel, showCreditPanel = true, creditData, userRole, onCreditRecharged }: EventLogPanelProps) {
   const [filter, setFilter] = React.useState<FilterId>('all');
 
   // سیستم اعتبار — اگر از بیرون داده نشود و کاربر سرپرستار/مدیر باشد، خودش fetch می‌کند
@@ -146,6 +148,7 @@ export function EventLogPanel({ events, monthLabel, showCreditPanel = true, cred
             credit={effectiveCredit}
             isLoading={creditLoading && !creditData}
             onRefresh={refreshCredit}
+            onRecharged={onCreditRecharged}
           />
         </div>
       )}
