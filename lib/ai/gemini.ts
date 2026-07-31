@@ -46,7 +46,7 @@ export const GEMINI_DEFAULT_MODEL = 'gemini-1.5-flash';
  * خطای 404 «models/gemini-1.5-flash is not found» معمولاً وقتی رخ می‌دهد که نام مدل
  * (از متغیر محیطی یا هر جای دیگر) با پیشوند «models/» تنظیم شده باشد و آدرس
  * اندپوینت به شکل اشتباه
- *   https://generativelanguage.googleapis.com/v1beta/models/models/gemini-1.5-flash:generateContent
+ *   https://generativelanguage.googleapis.com/v1/models/models/gemini-1.5-flash:generateContent
  * ساخته شود. این تابع تضمین می‌کند مقدار داخل مسیر همیشه شکل استاندارد
  * «gemini-1.5-flash» (بدون پیشوند models/) باشد:
  *   - حذف پیشوند «models/»، «v1beta/models/»، «v1/models/» و حتی URL کامل
@@ -56,8 +56,12 @@ export const GEMINI_DEFAULT_MODEL = 'gemini-1.5-flash';
 export function normalizeGeminiModelName(input?: string): string {
   let name = String(input ?? '').trim();
   if (!name) return GEMINI_DEFAULT_MODEL;
-  // حذف پیشوندهای رایج مسیر (https://host/، v1beta/، v1/، models/)
-  name = name.replace(/^(?:https?:\/\/[^/]+\/)?(?:v[^/]*\/)?models\//i, '');
+  // حذف پروتکل و دامنه‌ی احتمالی
+  name = name.replace(/^https?:\/\/[^/]+\//i, '');
+  // حذف مکرر پیشوندهای v1/، v1beta/، v1alpha/ و models/ (جلوگیری از models/models/gemini...)
+  while (/^(?:v[0-9]+(?:[a-z0-9]*)?\/|models\/)/i.test(name)) {
+    name = name.replace(/^(?:v[0-9]+(?:[a-z0-9]*)?\/|models\/)/i, '');
+  }
   // حذف سافیکس متد (اگر کسی آدرس کامل اندپوینت را به‌عنوان مدل داده باشد)
   name = name.replace(/:(?:generateContent|streamGenerateContent|countTokens)$/i, '');
   name = name.trim();
@@ -309,11 +313,11 @@ async function callGeminiOnce(
   body: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<GeminiCallOutcome> {
-  // اندپوینت استاندارد (نسخه v1beta) — نام مدل همیشه بدون پیشوند models/ درج می‌شود:
-  //   https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent
+  // اندپوینت استاندارد (نسخه v1) — نام مدل همیشه بدون پیشوند models/ درج می‌شود:
+  //   https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent
   // normalizeGeminiModelName تضمین می‌کند پیشوند اضافه «models/» باعث 404 نشود.
   const safeModel = normalizeGeminiModelName(model);
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+  const endpoint = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(
     safeModel,
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 

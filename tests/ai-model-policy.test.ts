@@ -128,10 +128,12 @@ test('فال‌بک فقط در شرایط جدی مجاز است (مستندا�
 test('normalizeGeminiModelName پیشوند models/ را حذف می‌کند (رفع 404)', async () => {
   const { normalizeGeminiModelName } = await import(`../lib/ai/gemini.ts?norm=${Date.now()}`);
   assert.equal(normalizeGeminiModelName('models/gemini-1.5-flash'), 'gemini-1.5-flash');
+  assert.equal(normalizeGeminiModelName('models/models/gemini-1.5-flash'), 'gemini-1.5-flash');
   assert.equal(normalizeGeminiModelName('v1beta/models/gemini-1.5-flash'), 'gemini-1.5-flash');
   assert.equal(normalizeGeminiModelName('v1/models/gemini-1.5-flash'), 'gemini-1.5-flash');
+  assert.equal(normalizeGeminiModelName('v1/models/models/gemini-1.5-flash'), 'gemini-1.5-flash');
   assert.equal(
-    normalizeGeminiModelName('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'),
+    normalizeGeminiModelName('https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent'),
     'gemini-1.5-flash',
   );
   assert.equal(normalizeGeminiModelName('gemini-1.5-flash'), 'gemini-1.5-flash');
@@ -163,11 +165,12 @@ test('مقدار env با پیشوند models/ خودکار نرمال می‌ش
   }
 });
 
-test('اندپوینت ساخته‌شده از مدل‌های نرمال‌شده به شکل v1beta/models/gemini-1.5-flash است', async () => {
+test('اندپوینت ساخته‌شده از مدل‌های نرمال‌شده به شکل v1/models/gemini-1.5-flash است', async () => {
   const { OPENROUTER_ENDPOINT } = await import(`../lib/ai/index.ts?endpoint=${Date.now()}`);
   assert.ok(
-    OPENROUTER_ENDPOINT.startsWith('https://generativelanguage.googleapis.com/v1beta/models/'),
-    `اندپوینت باید از نسخه v1beta و مسیر models/ استفاده کند: ${OPENROUTER_ENDPOINT}`,
+    OPENROUTER_ENDPOINT.startsWith('https://generativelanguage.googleapis.com/v1/models/') ||
+      OPENROUTER_ENDPOINT.startsWith('https://generativelanguage.googleapis.com/v1beta/models/'),
+    `اندپوینت باید از نسخه v1 یا v1beta و مسیر models/ استفاده کند: ${OPENROUTER_ENDPOINT}`,
   );
   assert.ok(
     OPENROUTER_ENDPOINT.endsWith(':generateContent'),
