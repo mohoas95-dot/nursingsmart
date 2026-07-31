@@ -1,33 +1,35 @@
-import { Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  GEMINI_PROVIDER,
-  generateGeminiVision,
+  OPENROUTER_PROVIDER,
+  VISION_MODEL,
+  VISION_FALLBACK_MODEL,
+  generateOpenRouterVision,
   httpStatusForAiError,
   isRetryableAiError,
 } from "@/lib/ai";
-import { extractJsonObject } from "@/lib/ai/json";
-import { normalizeShiftRequestList } from "@/lib/ai/shift-request-normalizer";
+import { normalizeShiftRequestList, VISION_JSON_CONTRACT } from "@/lib/ai/shift-request-normalizer";
 import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-context";
+import { getCreditDisplayInfo } from "@/lib/ai/credit";
 
 /**
- * مسیر تحلیل «تصویر» چت‌باکس — موتور: Google Gemini 2.5 Flash.
+ * مسیر تحلیل «تصویر» چت‌باکس — موتور جدید: OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o
  *
- * سیاست معماری:
- *   این مسیر تنها مسیری است که تصویر می‌پذیرد و تنها مسیری است که کلیدهای
- *   Gemini را مصرف می‌کند. پیام‌های متنی هرگز به اینجا نمی‌آیند (سهم Groq).
- *   نتیجه: کریدیت Gemini فقط صرف کاری می‌شود که واقعاً به بینایی نیاز دارد.
+ * سیاست معماری جدید:
+ *   - این مسیر تنها مسیری است که تصویر می‌پذیرد (Vision / OCR)
+ *   - مدل اصلی: openai/gpt-4o-mini (سریع و کم‌هزینه)
+ *   - fallback: openai/gpt-4o در صورت تصویر شلوغ/کم‌کیفیت یا خطای مدل اول
+ *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
+ *   - ردیابی مصرف توکن و کسر از اعتبار ۱۰۰ دلاری
  *
  * حریم خصوصی و حافظه:
- *   - تصویر به‌صورت base64 در بدنهٔ JSON می‌آید و به‌شکل inlineData (در حافظه)
- *     به Gemini داده می‌شود؛ هیچ‌گاه روی دیسک نوشته نمی‌شود.
- *   - همهٔ ارجاع‌ها به بافر در پایان تابع پاک‌سازی (best-effort) می‌شوند.
+ *   - تصویر به‌صورت base64 در بدنه JSON می‌آید و به‌شکل inline URL در حافظه به OpenRouter داده می‌شود
+ *   - هیچ‌گاه روی دیسک نوشته نمی‌شود، در پایان تابع پاک‌سازی می‌شود
  */
+
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/** حداکثر حجم تصویر قابل قبول (۸ مگابایت) پس از base64-decode. */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 const ALLOWED_MIME_TYPES = new Set<string>([
@@ -113,7 +115,7 @@ export async function POST(req: NextRequest) {
 You are an expert bilingual (Persian + English) AI assistant specialized in reading images of Persian/English nurse shift-request notes (handwritten, typed, screenshots of chat messages, or photos of paper forms) and converting them into structured data.
 
 TASK:
-You receive an image sent by a nurse inside a hospital scheduling chat box. The image contains one or more shift requests for a specific Persian calendar month, most often written in Persian. Read ALL Persian text in the image carefully — including handwriting — interpret it, and respond with a single JSON object containing an array of structured request objects.
+You receive an image sent by a nurse inside a hospital scheduling chat box (NursePlan). The image contains one or more shift requests for a specific Persian calendar month, most often written in Persian. Read ALL Persian text in the image carefully — including handwriting — interpret it, and respond with a single JSON object containing an array of structured request objects.
 
 The text typically mixes Persian and English, may use abbreviations, casual language, or Persian numerals (e.g. "۱۰", "۲۰"). Common shorthand:
   - "صبح", "M"  →  Morning shift
@@ -180,12 +182,9 @@ NEVER RETURN UNDEFINED OR BLANK FIELDS (CRITICAL):
   - It is FAR better to return 2 confident requests + 1 warning than 3 requests where one has
     "preferredShift": "undefined" or an empty selectedDays.
 
-OUTPUT RULES (CRITICAL):
-Respond ONLY with a JSON object matching the response schema. Do not write any prose outside the JSON.
+${VISION_JSON_CONTRACT}
 `;
 
-    // زمینهٔ فشرده (نه JSON خام) — تصویر خودش گران است، پس متن همراهش
-    // باید تا حد ممکن کم‌حجم باشد تا سهمیهٔ توکن هدر نرود.
     const compactContext = buildCompactContext({
       year: Number(year),
       month: Number(month),
@@ -197,105 +196,68 @@ Respond ONLY with a JSON object matching the response schema. Do not write any p
       note: typeof note === "string" ? note : undefined,
     });
 
-    const { response, model, keyLabel } = await generateGeminiVision({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text:
-                "CONTEXT:\n" +
-                compactContext +
-                "\n\n" + CALENDAR_FORMAT_LEGEND +
-                "\n\nRead the Persian text in the attached image and respond with the requested JSON object.",
-            },
-            {
-              inlineData: {
-                mimeType: normalizedMime,
-                data: base64Payload,
-              },
-            },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            status: { type: Type.STRING, enum: ["ready", "clarification", "illegible"] },
-            reply: { type: Type.STRING },
-            warnings: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            requests: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  requestType: {
-                    type: Type.STRING,
-                    enum: ["shift", "OFF", "leave", "pattern", "avoid_shift"],
-                  },
-                  preferredShift: {
-                    type: Type.STRING,
-                    enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"],
-                  },
-                  patternSteps: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING, enum: ["M", "E", "N", "ME", "EN", "MN", "MEN", "OFF", "L"] },
-                  },
-                  isEssential: { type: Type.BOOLEAN },
-                  offHardness: { type: Type.STRING, enum: ["hard", "soft"] },
-                  scope: {
-                    type: Type.STRING,
-                    enum: ["all", "even", "odd", "weekly_even", "weekly_odd", "custom_days", "range"],
-                  },
-                  startDate: { type: Type.STRING },
-                  endDate: { type: Type.STRING },
-                  selectedDays: {
-                    type: Type.ARRAY,
-                    items: { type: Type.INTEGER },
-                  },
-                  description: { type: Type.STRING },
-                },
-                required: ["requestType", "scope"],
-              },
-            },
-          },
-          required: ["status", "requests"],
-        },
-      },
-    });
+    const userText = `CONTEXT:\n${compactContext}\n\n${CALENDAR_FORMAT_LEGEND}\n\nRead the Persian text in the attached image and respond with the requested JSON object. If the image is blurry, crowded, low-quality, or handwritten is hard to read, do your best but mention uncertainty in warnings array. If completely illegible, return status="illegible".`;
 
-    const parsed = extractJsonObject<{
+    // درخواست بینایی با مدل gpt-4o-mini و fallback خودکار به gpt-4o برای تصاویر شلوغ/کم‌کیفیت
+    const { data: parsed, model, keyLabel, usedFallback, usage } = await generateOpenRouterVision<{
       status?: unknown;
       reply?: unknown;
       warnings?: unknown;
       requests?: unknown;
-    }>(response.text) || {};
+    }>({
+      systemPrompt,
+      userText,
+      imageBase64: base64Payload,
+      mimeType: normalizedMime,
+    });
 
-    const status = typeof parsed.status === "string" && ["ready", "clarification", "illegible"].includes(parsed.status)
-      ? parsed.status
-      : "ready";
+    const status =
+      typeof parsed.status === "string" && ["ready", "clarification", "illegible"].includes(parsed.status)
+        ? parsed.status
+        : "ready";
 
     const warnings = Array.isArray(parsed.warnings)
       ? parsed.warnings.filter((item: unknown): item is string => typeof item === "string")
       : [];
+
+    if (usedFallback) {
+      warnings.push(`تصویر با مدل پرقدرت‌تر تحلیل شد (fallback به ${VISION_FALLBACK_MODEL}) به دلیل شلوغی یا کیفیت پایین تصویر اصلی.`);
+    }
 
     const { requests, droppedCount } = normalizeShiftRequestList(parsed.requests, totalDays);
     if (droppedCount > 0) {
       warnings.push(`${droppedCount} مورد ناخوانا یا ناقص از نتیجه حذف شد.`);
     }
 
+    const creditInfo = getCreditDisplayInfo();
+
     return NextResponse.json({
       status,
       reply: typeof parsed.reply === "string" ? parsed.reply : "",
       warnings,
       requests,
-      engine: { provider: GEMINI_PROVIDER, model, key: keyLabel },
+      engine: {
+        provider: OPENROUTER_PROVIDER,
+        model,
+        key: keyLabel,
+        modelType: 'vision',
+        modelDisplayName: usedFallback ? 'GPT-4o (Fallback)' : 'GPT-4o-mini',
+        usedFallback,
+        primaryModel: VISION_MODEL,
+        fallbackModel: VISION_FALLBACK_MODEL,
+      },
+      usage: {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cost: usage.cost,
+        remainingCredit: usage.remainingCredit,
+      },
+      credit: {
+        remaining: creditInfo.remaining,
+        initial: creditInfo.initial,
+        status: creditInfo.status,
+        percentRemaining: creditInfo.percentRemaining,
+      },
     });
   } catch (error) {
     const status = httpStatusForAiError(error);
@@ -304,12 +266,15 @@ Respond ONLY with a JSON object matching the response schema. Do not write any p
         {
           error: error instanceof Error ? error.message : "خطای هوش مصنوعی",
           retryable: isRetryableAiError(error),
-          provider: GEMINI_PROVIDER,
+          provider: OPENROUTER_PROVIDER,
+          modelType: 'vision',
+          model: VISION_MODEL,
+          fallbackModel: VISION_FALLBACK_MODEL,
         },
         { status },
       );
     }
-    console.error("Error parsing image request via Gemini:", error);
+    console.error("Error parsing image request via OpenRouter:", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "خطای ناشناخته در پردازش تصویر" },
       { status: 500 },

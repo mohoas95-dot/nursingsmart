@@ -1,249 +1,104 @@
 /**
  * lib/ai/gemini-vision.ts
  * ---------------------------------------------------------------------------
- * موتور تحلیل «تصویر» چت‌باکس: Google Gemini 2.5 Flash.
+ * نسخه بازطراحی‌شده بر اساس OpenRouter — سازگار با معماری جدید NursePlan
  *
- * چرا Gemini برای تصویر؟
- *   - Groq در پلن رایگان برای OCR فارسیِ دست‌نوشته قابل اتکا نیست؛ Gemini 2.5
- *     Flash در خواندن دست‌خط فارسی و استخراج ساختار بسیار دقیق‌تر است و در عین
- *     حال از مدل‌های Pro کریدیت به‌مراتب کمتری مصرف می‌کند.
- *
- * قواعد جداسازی (مطابق معماری خواسته‌شده):
- *   - این ماژول *فقط* برای ورودی‌های تصویری استفاده می‌شود.
- *   - هیچ پیام متنیِ خالی از تصویر به Gemini نمی‌رود؛ متن سهم Groq است.
- *   - استخر کلید Gemini کاملاً از استخر Groq جداست: سوختن سهمیهٔ یکی هیچ اثری
- *     روی دیگری ندارد.
- *
- * پایداری:
- *   - چرخش خودکار بین ۳ کلید (GEMINI_API_KEY / _2 / _3).
- *   - زنجیرهٔ مدل جایگزین سبک‌تر وقتی همهٔ کلیدها روی مدل اصلی به سقف بخورند.
- *   - تایم‌اوت هر فراخوانی + سقف بودجهٔ کل.
+ * طبق الزامات جدید:
+ *   - درخواست‌های تصویری (Vision/OCR) از طریق OpenRouter با مدل openai/gpt-4o-mini
+ *   - در صورت تصویر شلوغ یا کم‌کیفیت، fallback به openai/gpt-4o
+ *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
+ *   - این فایل برای سازگاری با کد قدیمی نگه داشته شده و به‌صورت wrapper
+ *     روی openrouter.ts عمل می‌کند
  */
 
-import { GoogleGenAI, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
-import { ApiKeyPool, classifyFailure, parseRetryAfterMs } from "./key-pool";
+import { ApiKeyPool } from './key-pool';
 import {
-  buildQuotaMessage,
-  MissingApiKeyError,
-  ModelBusyError,
-  ModelTimeoutError,
-  ProviderRequestError,
-  QuotaExhaustedError,
-} from "./errors";
+  OPENROUTER_PROVIDER,
+  VISION_MODEL,
+  VISION_FALLBACK_MODEL,
+  openRouterKeyPool,
+  getVisionModelChain,
+  generateOpenRouterVision,
+} from './openrouter';
+import { extractJsonObject } from './json';
 
-export const GEMINI_PROVIDER = "gemini";
+export const GEMINI_PROVIDER = OPENROUTER_PROVIDER;
+export const GEMINI_VISION_MODEL = VISION_MODEL;
+export const GEMINI_VISION_FALLBACK_MODEL = VISION_FALLBACK_MODEL;
 
-/**
- * مدل بینایی. طبق تصمیم محصول روی «gemini-2.5-flash» ثابت است:
- * دقت بالا در OCR فارسی با مصرف کریدیت کم.
- */
-export const GEMINI_VISION_MODEL = process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash";
-
-/** مدل‌های جایگزین با سهمیهٔ بالاتر برای زمانی که همهٔ کلیدها به سقف بخورند. */
-const DEFAULT_VISION_FALLBACKS = ["gemini-2.5-flash-lite", "gemini-2.0-flash"];
-
-const CONFIGURED_FALLBACKS = (process.env.GEMINI_VISION_FALLBACK_MODELS || "")
-  .split(",")
-  .map(model => model.trim())
-  .filter(Boolean);
-
-const MODEL_CHAIN = Array.from(
-  new Set([
-    GEMINI_VISION_MODEL,
-    ...(CONFIGURED_FALLBACKS.length > 0 ? CONFIGURED_FALLBACKS : DEFAULT_VISION_FALLBACKS),
-  ]),
-);
+export const geminiKeyPool: ApiKeyPool = openRouterKeyPool;
 
 export function getGeminiVisionModelChain(): string[] {
-  return [...MODEL_CHAIN];
+  return getVisionModelChain();
 }
 
-/**
- * استخر کلیدهای Gemini — سه کلید رایگان.
- * در Vercel این متغیرها را تعریف کنید:
- *   GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3
- * (نام‌های GOOGLE_GENAI_API_KEY و GEMINI_API_KEYS هم پشتیبانی می‌شوند.)
- */
-export const geminiKeyPool = new ApiKeyPool({
-  provider: GEMINI_PROVIDER,
-  envNames: [
-    "GEMINI_API_KEY",
-    "GEMINI_API_KEY_2",
-    "GEMINI_API_KEY_3",
-    "GEMINI_API_KEYS",
-    "GOOGLE_GENAI_API_KEY",
-  ],
-});
-
-const PER_CALL_TIMEOUT_MS = Math.max(5_000, Number(process.env.GEMINI_CALL_TIMEOUT_MS) || 24_000);
-const TOTAL_BUDGET_MS = Math.max(8_000, Number(process.env.GEMINI_TOTAL_BUDGET_MS) || 48_000);
-
-/** سقف تعداد فراخوانی واقعی API برای یک تصویر (محافظ سهمیه). */
-const MAX_CALLS_PER_REQUEST = Math.max(1, Number(process.env.GEMINI_MAX_CALLS_PER_REQUEST) || 4);
-
-/** کش کلاینت‌ها بر اساس کلید تا در هر فراخوانی شیء تازه ساخته نشود. */
-const clientCache = new Map<string, GoogleGenAI>();
-
-function clientFor(apiKey: string): GoogleGenAI {
-  const cached = clientCache.get(apiKey);
-  if (cached) return cached;
-  const client = new GoogleGenAI({ apiKey });
-  clientCache.set(apiKey, client);
-  return client;
-}
-
-function errorStatus(error: unknown): number | undefined {
-  const candidate = error as { status?: number | string; code?: number | string } | null;
-  const status = Number(candidate?.status ?? candidate?.code);
-  return Number.isFinite(status) ? status : undefined;
-}
-
-function errorMessage(error: unknown): string {
-  const candidate = error as { message?: string } | null;
-  return String(candidate?.message ?? error ?? "");
-}
-
-function isAbortError(error: unknown): boolean {
-  const candidate = error as { name?: string; message?: string } | null;
-  return candidate?.name === "AbortError" || /abort/i.test(String(candidate?.message || ""));
-}
-
-function isModelUnavailable(error: unknown): boolean {
-  const status = errorStatus(error);
-  if (status === 404) return true;
-  return /not found|is not supported|does not exist|unsupported model/i.test(errorMessage(error));
-}
-
-async function callWithTimeout(
-  client: GoogleGenAI,
-  params: Omit<GenerateContentParameters, "model">,
-  model: string,
-  timeoutMs: number,
-): Promise<GenerateContentResponse> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const config = {
-      ...((params as { config?: Record<string, unknown> }).config || {}),
-      abortSignal: controller.signal,
-    };
-    return await client.models.generateContent({ ...params, config, model } as GenerateContentParameters);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
+// نوع قدیمی برای سازگاری — اما حالا با OpenRouter پیاده‌سازی شده
 export interface GeminiVisionResult {
-  response: GenerateContentResponse;
+  response: { text: string };
   model: string;
   keyLabel: string;
 }
 
 /**
- * فراخوانی Gemini برای ورودی چندوجهی (تصویر + متن) با چرخش کلید و مدل.
+ * تابع قدیمی generateGeminiVision — signature قدیمی حفظ شده اما پیاده‌سازی جدید
+ * این تابع دیگر GenerateContentParameters از Gemini نمی‌گیرد؛ به‌جای آن یک wrapper
+ * برای مسیرهای قدیمی است که هنوز آن را صدا می‌زنند.
  *
- * ترتیب تلاش: مدل ۲.۵ Flash با کلید ۱ → ۲ → ۳، سپس مدل جایگزین با همان ترتیب.
+ * برای کد جدید مستقیماً از generateOpenRouterVision استفاده کنید.
  */
-export async function generateGeminiVision(
-  params: Omit<GenerateContentParameters, "model">,
-): Promise<GeminiVisionResult> {
-  if (geminiKeyPool.size() === 0) {
-    throw new MissingApiKeyError(
-      "کلید API سرویس Gemini تنظیم نشده است؛ متغیر GEMINI_API_KEY را در Vercel اضافه کنید.",
-      GEMINI_PROVIDER,
-    );
+export async function generateGeminiVision(params: {
+  contents: Array<{
+    role: string;
+    parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>;
+  }>;
+  config: {
+    systemInstruction: string;
+    responseMimeType?: string;
+    responseSchema?: unknown;
+  };
+}): Promise<GeminiVisionResult> {
+  // استخراج متن و تصویر از فرمت قدیمی Gemini
+  const firstContent = params.contents?.[0];
+  const textPart = firstContent?.parts?.find(p => typeof p.text === 'string')?.text || '';
+  const imagePart = firstContent?.parts?.find(p => p.inlineData?.data)?.inlineData;
+
+  const mimeType = imagePart?.mimeType || 'image/jpeg';
+  const base64Data = imagePart?.data || '';
+
+  if (!base64Data) {
+    throw new Error('تصویری برای تحلیل ارسال نشده است.');
   }
 
-  const startedAt = Date.now();
-  const remaining = () => TOTAL_BUDGET_MS - (Date.now() - startedAt);
+  const result = await generateOpenRouterVision({
+    systemPrompt: params.config?.systemInstruction || '',
+    userText: textPart || 'Read the Persian text in the attached image and respond with the requested JSON object.',
+    imageBase64: base64Data,
+    mimeType,
+  });
 
-  let sawQuota = false;
-  let sawTimeout = false;
-  let lastError: unknown;
+  // برای سازگاری با کد قدیمی که response.text را می‌خواند
+  return {
+    response: {
+      text: JSON.stringify(result.data),
+    },
+    model: result.model,
+    keyLabel: result.keyLabel,
+  };
+}
 
-  // سقف سخت فراخوانی — همان منطق Groq. تصویر گران‌ترین ورودی است
-  // (یک عکس چند صد تا چند هزار توکن)، پس تکرار بی‌حساب سریع سهمیه را می‌سوزاند.
-  let callsMade = 0;
+// تابع جدید و تمیز برای استفاده مستقیم (توصیه می‌شود)
+export async function generateGeminiVisionJson<T = Record<string, unknown>>(options: {
+  systemPrompt: string;
+  userText: string;
+  imageBase64: string;
+  mimeType: string;
+}) {
+  const result = await generateOpenRouterVision<T>({
+    systemPrompt: options.systemPrompt,
+    userText: options.userText,
+    imageBase64: options.imageBase64,
+    mimeType: options.mimeType,
+  });
 
-  for (const model of MODEL_CHAIN) {
-    const keys = geminiKeyPool.order();
-    for (let index = 0; index < keys.length; index++) {
-      const keyState = keys[index];
-      if (callsMade >= MAX_CALLS_PER_REQUEST) {
-        console.warn(`[gemini] سقف ${MAX_CALLS_PER_REQUEST} فراخوانی برای این درخواست پر شد؛ توقف برای حفظ سهمیه.`);
-        throw sawQuota
-          ? new QuotaExhaustedError(undefined, GEMINI_PROVIDER, geminiKeyPool.nextAvailableInMs())
-          : new ModelBusyError(undefined, GEMINI_PROVIDER);
-      }
-      if (remaining() <= 2_500) {
-        throw sawQuota
-          ? new QuotaExhaustedError(undefined, GEMINI_PROVIDER, geminiKeyPool.nextAvailableInMs())
-          : new ModelTimeoutError(undefined, GEMINI_PROVIDER);
-      }
-      callsMade++;
-
-      try {
-        const response = await callWithTimeout(
-          clientFor(keyState.value),
-          params,
-          model,
-          Math.min(PER_CALL_TIMEOUT_MS, Math.max(4_000, remaining() - 1_000)),
-        );
-        geminiKeyPool.reportSuccess(keyState.value);
-        return { response, model, keyLabel: keyState.label };
-      } catch (error) {
-        lastError = error;
-        const status = errorStatus(error);
-        const message = errorMessage(error);
-
-        if (isModelUnavailable(error)) {
-          console.warn(`[gemini] مدل «${model}» برای این کلید در دسترس نیست؛ رفتن به مدل بعدی.`);
-          break;
-        }
-
-        if (status === 400 && !/api key/i.test(message)) {
-          throw new ProviderRequestError(
-            `درخواست ارسالی به Gemini معتبر نبود: ${message}`,
-            GEMINI_PROVIDER,
-            400,
-          );
-        }
-
-        if (isAbortError(error)) {
-          sawTimeout = true;
-          // تایم‌اوت لزوماً تقصیر کلید نیست؛ cooldown کوتاه و رفتن به کلید بعدی.
-          geminiKeyPool.reportFailure(keyState.value, "busy");
-          console.warn(`[gemini] مدل «${model}» با کلید ${keyState.label} تایم‌اوت شد؛ کلید بعدی.`);
-          continue;
-        }
-
-        const kind = classifyFailure(status, message);
-        // daily_quota هم یک خطای سهمیه است، نه «شلوغی سرور». اگر آن را
-        // جدا حساب نکنیم، رسیدن به سقف فراخوانیِ این درخواست به اشتباه 503
-        // و پیام «سرور شلوغ است» برمی‌گرداند (با اینکه پاسخ واقعی Gemini 429 است).
-        if (kind === "quota" || kind === "daily_quota") sawQuota = true;
-        geminiKeyPool.reportFailure(keyState.value, kind, parseRetryAfterMs(null, message));
-        console.warn(
-          `[gemini] مدل «${model}» با کلید ${keyState.label} ناموفق بود (${kind}); ${
-            index + 1 < keys.length ? "چرخش به کلید بعدی" : "چرخش به مدل بعدی"
-          }.`,
-        );
-      }
-    }
-  }
-
-  console.error("[gemini] همهٔ کلیدها و مدل‌های بینایی ناموفق بودند:", lastError);
-
-  if (sawQuota) {
-    const waitMs = geminiKeyPool.nextAvailableInMs();
-    throw new QuotaExhaustedError(
-      `${buildQuotaMessage("تحلیل تصویر", waitMs)} اگر عجله داری، همین درخواست را متنی بنویس — آن از سرویس دیگری استفاده می‌کند.`,
-      GEMINI_PROVIDER,
-      waitMs,
-    );
-  }
-  if (sawTimeout) {
-    throw new ModelTimeoutError(undefined, GEMINI_PROVIDER);
-  }
-  throw new ModelBusyError(undefined, GEMINI_PROVIDER);
+  return result;
 }

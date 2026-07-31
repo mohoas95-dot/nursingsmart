@@ -236,11 +236,11 @@ class ConcurrencyConflictError extends Error {
 // ارسال درخواست به دستیار هوشمند با تایم‌اوت سمت کلاینت و تلاش مجدد خودکار
 // روی خطاهای گذرا (۵۰۳ شلوغی مدل، ۵۰۴ تایم‌اوت، ۴۲۹ سهمیه، قطع موقت شبکه).
 //
-// معماری دو موتوره:
-//   • متن  → /api/ai/chat-requests        (Groq / GPT-OSS 120B)
-//   • تصویر → /api/ai/parse-image-request  (Gemini 2.5 Flash)
-// چرخش بین ۳ کلید هر سرویس در سمت سرور انجام می‌شود؛ اینجا فقط تلاش مجدد
-// سبک برای خطاهای گذرای شبکه‌ای/سروری داریم تا چت‌باکس هرگز قفل نشود.
+// معماری جدید بر پایه OpenRouter (طبق الزامات بازطراحی):
+//   • متن  → /api/ai/chat-requests        (OpenRouter / deepseek/deepseek-chat)
+//   • تصویر → /api/ai/parse-image-request  (OpenRouter / openai/gpt-4o-mini با fallback به gpt-4o)
+//   • اعتبار ۱۰۰ دلاری با ردیابی توکن و هشدار <15$ زرد و <5$ قرمز در UI سرپرستار
+// چرخش بین کلیدهای OpenRouter در سمت سرور انجام می‌شود؛ اعتبار به‌صورت خودکار کسر می‌گردد.
 // ---------------------------------------------------------------------------
 const AI_TEXT_ENDPOINT = '/api/ai/chat-requests';
 const AI_IMAGE_ENDPOINT = '/api/ai/parse-image-request';
@@ -305,7 +305,7 @@ async function postAiWithRetry(
   );
 }
 
-/** پیام متنی → Groq */
+/** پیام متنی → OpenRouter / DeepSeek */
 async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_TEXT_ENDPOINT, payload, {
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
@@ -313,7 +313,7 @@ async function postChatRequestWithRetry(payload: unknown): Promise<Response> {
   });
 }
 
-/** تصویر → Gemini */
+/** تصویر → OpenRouter / GPT-4o-mini (fallback gpt-4o) */
 async function postImageRequestWithRetry(payload: unknown): Promise<Response> {
   return postAiWithRetry(AI_IMAGE_ENDPOINT, payload, {
     timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
@@ -785,6 +785,44 @@ export default function Home() {
   }, [personnel, displayedSchedule, settings, customHolidays, firstDayOfWeekIndex, currentYear, currentMonth, effectiveDutyHours]);
   // شمارندهٔ درخواست‌های باز بازیابی رمز، برای نمایش نشان هشدار روی منوی «مدیریت پرسنل».
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
+
+  // --- سیستم مدیریت اعتبار ۱۰۰ دلاری AI (OpenRouter) — برای سرپرستار/مدیر ---
+  const [aiCreditBanner, setAiCreditBanner] = React.useState<null | { remaining: number; status: 'warning' | 'critical' | 'depleted'; message: string; percent: number }>(null);
+  React.useEffect(() => {
+    if (role !== 'headnurse' && role !== 'admin') {
+      setAiCreditBanner(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchCreditForBanner = async () => {
+      try {
+        const res = await fetch('/api/ai/credit', { cache: 'no-store' });
+        const data = await res.json();
+        if (cancelled) return;
+        const c = data.credit;
+        if (!c) return;
+        if (c.status === 'warning' || c.status === 'critical' || c.status === 'depleted') {
+          setAiCreditBanner({
+            remaining: c.remaining,
+            status: c.status === 'depleted' ? 'critical' : c.status,
+            message: c.warningMessage || c.messages?.warning || `اعتبار باقی‌مانده: $${c.remaining.toFixed(2)}`,
+            percent: c.percentRemaining,
+          });
+        } else {
+          setAiCreditBanner(null);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void fetchCreditForBanner();
+    const interval = setInterval(fetchCreditForBanner, 120_000); // هر ۲ دقیقه
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [role]);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -5916,6 +5954,37 @@ export default function Home() {
       )}
 
       <main className="flex-1 flex flex-col h-full overflow-hidden">
+      {/* بنر هشدار اعتبار API — فقط برای سرپرستار/مدیر، وقتی <15$ زرد و <5$ قرمز */}
+      {aiCreditBanner && (
+        <div className={`mx-4 mt-3 rounded-2xl border-2 px-4 py-3 flex items-start gap-3 shadow-sm animate-fadeIn ${aiCreditBanner.status === 'critical' ? 'bg-rose-600 border-rose-700 text-white shadow-rose-200' : 'bg-amber-100 border-amber-300 text-amber-900'}`}>
+          <div className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${aiCreditBanner.status === 'critical' ? 'bg-white/20' : 'bg-amber-500 text-white'}`}>
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`text-xs font-black ${aiCreditBanner.status === 'critical' ? 'text-white' : 'text-amber-900'}`}>
+                {aiCreditBanner.message}
+              </span>
+              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black font-mono ${aiCreditBanner.status === 'critical' ? 'bg-white/20 border-white/30 text-white' : 'bg-amber-50 border-amber-200 text-amber-800'}`} dir="ltr">
+                Credit: ${aiCreditBanner.remaining.toFixed(2)} / $100 — {aiCreditBanner.percent.toFixed(1)}% left
+              </span>
+            </div>
+            {aiCreditBanner.status === 'critical' && (
+              <p className="mt-1 text-[11px] font-bold text-white/90 leading-5">
+                سرویس هوش مصنوعی (چت متنی DeepSeek و OCR تصویری GPT-4o-mini) در آستانه قطعی است. لطفاً از طریق پنل OpenRouter اقدام به شارژ کنید تا از اختلال در ثبت درخواست‌های پرستاران جلوگیری شود.
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => setAiCreditBanner(null)}
+            className={`shrink-0 rounded-lg p-1.5 transition-colors ${aiCreditBanner.status === 'critical' ? 'hover:bg-white/20 text-white/80' : 'hover:bg-amber-200 text-amber-700'}`}
+            title="بستن"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
 
         <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0 print:hidden transition-all duration-300">
           <div className="flex items-center gap-4">
@@ -7748,11 +7817,13 @@ export default function Home() {
 
               </div>
 
-              {/* لاگ‌ها و اتفاقات — فقط مدیر و سرپرستار؛ در پنل پرسنل نمایش داده نمی‌شود */}
+              {/* لاگ‌ها و اتفاقات + پنل اعتبار ۱۰۰ دلاری — فقط مدیر و سرپرستار؛ در پنل پرسنل نمایش داده نمی‌شود */}
               {role !== 'personnel' && (
                 <EventLogPanel
                   events={eventLogs}
                   monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
+                  userRole={role}
+                  showCreditPanel={true}
                 />
               )}
 

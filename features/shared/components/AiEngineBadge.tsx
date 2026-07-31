@@ -3,80 +3,71 @@
 import React from 'react';
 
 /**
- * AiEngineBadge — Presentational Component
+ * AiEngineBadge — Presentational Component (معماری جدید OpenRouter)
  *
  * RESPONSIBILITY:
- *   تگ ترکیبی «Groq + Gemini» برای هدر چت‌باکس.
+ *   تگ ترکیبی «DeepSeek + GPT-4o-mini» برای هدر چت‌باکس.
  *
- *   چت‌باکس دیگر تک‌موتوره نیست؛ دو موتور مستقل دارد:
- *     • Groq (Llama)      → تحلیل پیام‌های متنی
- *     • Gemini 2.5 Flash  → تحلیل تصاویر و OCR فارسی
+ *   معماری جدید بر پایه OpenRouter:
+ *     • متن  → deepseek/deepseek-chat      (Text Analysis)
+ *     • تصویر → openai/gpt-4o-mini         (Vision/OCR) با fallback به gpt-4o
  *   این کامپوننت هر دو را با لوگو و نقش‌شان به‌صورت شکیل نمایش می‌دهد تا کاربر
  *   بداند کدام موتور پشت کدام قابلیت است.
  *
  * طراحی:
  *   قرص شیشه‌ای (glass pill) روی هدر گرادیانی چت، با دو نشان کوچک که هرکدام
- *   لوگوی برند + نام + نقش را در خود دارند و یک جداکنندهٔ نازک بین‌شان.
- *   در حالت فشرده (تمام‌صفحه/موبایل) فقط لوگوها و نام‌ها می‌مانند.
- *
- * لوگوها به‌صورت SVG درون‌خطی رسم شده‌اند (بدون فایل باینری و بدون درخواست
- * شبکه) تا هم سبک باشند، هم در حالت آفلاین/PWA سالم بمانند و هم رنگ‌شان با
- * تم هدر هماهنگ شود.
+ *   لوگوی برند + نام + نقش را در خود دارند و یک جداکننده نازک بین‌شان.
  */
 
 export type AiEngineBadgeSize = 'compact' | 'full';
 
 interface AiEngineBadgeProps {
-  /** compact برای هدر تمام‌صفحه و موبایل، full برای هدر معمولی. */
   size?: AiEngineBadgeSize;
   className?: string;
 }
 
 /**
- * نشان Groq — الهام‌گرفته از هویت بصری برند: دایرهٔ نارنجی/مرجانی با
- * حفرهٔ مرکزی و «دم» مشخصهٔ حرف q.
+ * نشان DeepSeek — گرادیان آبی-نیلی با حرف D انتزاعی (بر اساس هویت بصری DeepSeek)
  */
-function GroqMark({ className, gradientId }: { className?: string; gradientId: string }) {
+function DeepSeekMark({ className, gradientId }: { className?: string; gradientId: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Groq" focusable="false">
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="DeepSeek" focusable="false">
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#FF8A4C" />
-          <stop offset="55%" stopColor="#F55036" />
-          <stop offset="100%" stopColor="#D93A25" />
+          <stop offset="0%" stopColor="#4A90E2" />
+          <stop offset="50%" stopColor="#357ABD" />
+          <stop offset="100%" stopColor="#1E5A8A" />
         </linearGradient>
       </defs>
-      {/* حلقهٔ اصلی */}
+      {/* دایره پس‌زمینه + حرف D خلاقانه */}
+      <circle cx="12" cy="12" r="10" fill={`url(#${gradientId})`} />
       <path
-        fill={`url(#${gradientId})`}
-        d="M12 2.4a9.6 9.6 0 1 0 0 19.2 9.6 9.6 0 0 0 0-19.2Zm0 3.55a6.05 6.05 0 1 1 0 12.1 6.05 6.05 0 0 1 0-12.1Z"
-      />
-      {/* دم مشخصهٔ حرف q — طول و ضخامتش طوری تنظیم شده که در ۱۲ پیکسل هم خوانا بماند */}
-      <path
-        fill={`url(#${gradientId})`}
-        d="M13.1 12.2h3.4v7.9a1.7 1.7 0 0 1-3.4 0V12.2Z"
+        d="M8 7.5h3.2c2.8 0 4.8 1.8 4.8 4.5s-2 4.5-4.8 4.5H8V7.5Zm2 2v5h1.1c1.5 0 2.6-1 2.6-2.5S12.6 9.5 11.1 9.5H10Z"
+        fill="white"
       />
     </svg>
   );
 }
 
 /**
- * نشان Gemini — ستارهٔ چهارپرِ مشخصهٔ برند با گرادیان آبی-بنفش گوگل.
+ * نشان OpenAI (برای GPT-4o-mini) — لوگوی ساده‌سازی‌شده OpenAI با گرادیان سبز-خاکستری
  */
-function GeminiMark({ className, gradientId }: { className?: string; gradientId: string }) {
+function OpenAIMark({ className, gradientId }: { className?: string; gradientId: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Gemini" focusable="false">
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="OpenAI GPT-4o" focusable="false">
       <defs>
-        <linearGradient id={gradientId} x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0%" stopColor="#4796E3" />
-          <stop offset="50%" stopColor="#8C6BE8" />
-          <stop offset="100%" stopColor="#D96570" />
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#10A37F" />
+          <stop offset="50%" stopColor="#0D8A6A" />
+          <stop offset="100%" stopColor="#065F46" />
         </linearGradient>
       </defs>
+      {/* شش‌ضلعی انتزاعی OpenAI */}
       <path
         fill={`url(#${gradientId})`}
-        d="M12 1.5c.34 4.02 1.7 6.9 4.08 8.63 1.28.93 3.09 1.55 5.42 1.87-2.33.32-4.14.94-5.42 1.87-2.38 1.73-3.74 4.61-4.08 8.63-.34-4.02-1.7-6.9-4.08-8.63-1.28-.93-3.09-1.55-5.42-1.87 2.33-.32 4.14-.94 5.42-1.87C10.3 8.4 11.66 5.52 12 1.5Z"
+        d="M12 2.2l7.8 4.5v9L12 20.2 4.2 15.7v-9L12 2.2Zm0 2.2L6.2 7.7v6.6L12 17.6l5.8-3.3V7.7L12 4.4Z"
       />
+      <circle cx="12" cy="12" r="2.2" fill={`url(#${gradientId})`} />
     </svg>
   );
 }
@@ -84,12 +75,9 @@ function GeminiMark({ className, gradientId }: { className?: string; gradientId:
 export function AiEngineBadge({ size = 'full', className = '' }: AiEngineBadgeProps) {
   const isCompact = size === 'compact';
 
-  // شناسهٔ یکتا برای gradient ها: اگر چند نمونه از این تگ هم‌زمان در DOM باشند
-  // (مثلاً هدر معمولی و هدر تمام‌صفحه)، شناسه‌های تکراری باعث نمی‌شود مرورگر
-  // گرادیان اشتباه را روی نشان‌ها اعمال کند.
   const uid = React.useId().replace(/[:]/g, '');
-  const groqGradientId = `ai-badge-groq-${uid}`;
-  const geminiGradientId = `ai-badge-gemini-${uid}`;
+  const deepSeekGradientId = `ai-badge-deepseek-${uid}`;
+  const openAIGradientId = `ai-badge-openai-${uid}`;
 
   const shellClass = isCompact
     ? 'inline-flex items-center gap-1 rounded-full border border-white/25 bg-white/15 px-1.5 py-0.5 backdrop-blur-sm'
@@ -103,15 +91,15 @@ export function AiEngineBadge({ size = 'full', className = '' }: AiEngineBadgePr
     <span
       dir="ltr"
       className={`${shellClass} ${className}`}
-      title="تحلیل متن با Groq (Llama) و تحلیل تصویر با Gemini 2.5 Flash"
+      title="تحلیل متن با DeepSeek (deepseek/deepseek-chat) و تحلیل تصویر با GPT-4o-mini (fallback به GPT-4o) از طریق OpenRouter — اعتبار ۱۰۰ دلاری"
     >
-      {/* موتور متن */}
+      {/* موتور متن — DeepSeek */}
       <span className="inline-flex items-center gap-1">
         <span className="inline-flex items-center justify-center rounded-full bg-white/90 p-[3px] shadow-xs">
-          <GroqMark className={markClass} gradientId={groqGradientId} />
+          <DeepSeekMark className={markClass} gradientId={deepSeekGradientId} />
         </span>
         <span className="inline-flex flex-col items-start">
-          <span className={`${nameClass} text-white`}>Groq</span>
+          <span className={`${nameClass} text-white`}>DeepSeek</span>
           {!isCompact && <span className={roleClass}>متن</span>}
         </span>
       </span>
@@ -119,13 +107,13 @@ export function AiEngineBadge({ size = 'full', className = '' }: AiEngineBadgePr
       {/* جداکننده */}
       <span aria-hidden="true" className={`${isCompact ? 'h-3' : 'h-4'} w-px bg-white/30`} />
 
-      {/* موتور تصویر */}
+      {/* موتور تصویر — GPT-4o-mini */}
       <span className="inline-flex items-center gap-1">
         <span className="inline-flex items-center justify-center rounded-full bg-white/90 p-[3px] shadow-xs">
-          <GeminiMark className={markClass} gradientId={geminiGradientId} />
+          <OpenAIMark className={markClass} gradientId={openAIGradientId} />
         </span>
         <span className="inline-flex flex-col items-start">
-          <span className={`${nameClass} text-white`}>Gemini</span>
+          <span className={`${nameClass} text-white`}>GPT-4o-mini</span>
           {!isCompact && <span className={roleClass}>تصویر</span>}
         </span>
       </span>
