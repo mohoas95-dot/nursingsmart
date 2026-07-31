@@ -9,7 +9,7 @@
 
 ### قبل:
 - متن → Groq `openai/gpt-oss-120b` با استخر کلید `GROQ_API_KEY`
-- تصویر → Gemini `gemini-2.5-flash` با استخر کلید `GEMINI_API_KEY`
+- تصویر → Gemini `gemini-1.5-flash` با استخر کلید `GEMINI_API_KEY`
 - دو استخر کلید مجزا، بدون ردیابی هزینه
 
 ### بعد (جدید):

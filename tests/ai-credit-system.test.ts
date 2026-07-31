@@ -27,7 +27,7 @@ test('getCreditDisplayInfo باید خالی برگرداند و لاگ نداش
 
 test('calculateCostUSD باید ۰ برگرداند چون هزینه در کنسول گوگل مدیریت می‌شود', async () => {
   const mod = await import(`../lib/ai/credit.ts?cost-zero=${Date.now()}`);
-  const cost = mod.calculateCostUSD('gemini-2.5-flash', 1000000, 500000);
+  const cost = mod.calculateCostUSD('gemini-1.5-flash', 1000000, 500000);
   assert.equal(cost, 0);
 });
 

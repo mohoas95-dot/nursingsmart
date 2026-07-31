@@ -12,7 +12,7 @@ import { PERSIAN_VOCABULARY_LESSON } from "@/lib/ai/persian-vocabulary";
 
 /**
  * پارس یک‌مرحله‌ای متن درخواست — موتور جدید: Gemini Direct
- * primary: gemini-2.5-flash, fallback: gemini-3.5-flash
+ * primary: gemini-1.5-flash, fallback: gemini-1.5-flash
  */
 
 export const runtime = "nodejs";

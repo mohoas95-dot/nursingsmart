@@ -13,7 +13,7 @@ import { buildCompactContext, CALENDAR_FORMAT_LEGEND } from "@/lib/ai/compact-co
 
 /**
  * مسیر تحلیل تصویر چت‌باکس — موتور جدید: Gemini Direct
- * primary: gemini-2.5-flash, fallback: gemini-3.5-flash
+ * primary: gemini-1.5-flash, fallback: gemini-1.5-flash
  *
  * حریم خصوصی:
  *   - تصویر به‌صورت base64 در بدنه JSON می‌آید و inline به Gemini داده می‌شود

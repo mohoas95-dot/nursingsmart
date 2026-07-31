@@ -6,8 +6,8 @@ import test from 'node:test';
  *
  * الزامات جدید کارفرما:
  *   - فقط Gemini Direct
- *   - مدل اصلی: gemini-2.5-flash
- *   - fallback: gemini-3.5-flash (فقط در شرایط جدی: زمان طولانی، مفهوم نامفهوم، سرور شلوغ)
+ *   - مدل اصلی: gemini-1.5-flash
+ *   - fallback: gemini-1.5-flash (فقط در شرایط جدی: زمان طولانی، مفهوم نامفهوم، سرور شلوغ)
  *   - ۵ کلید API
  *   - سیستم اعتبار ۱۰۰ دلاری حذف شده
  */
@@ -49,30 +49,29 @@ async function loadGeminiModule() {
   }
 }
 
-test('مدل اصلی باید gemini-2.5-flash باشد (طبق الزام کارفرما)', async () => {
+test('مدل اصلی باید gemini-1.5-flash باشد (طبق الزام کارفرما)', async () => {
   const { GEMINI_PRIMARY_MODEL } = await loadGeminiModule();
   assert.equal(
     GEMINI_PRIMARY_MODEL,
-    'gemini-2.5-flash',
-    `مدل اصلی باید gemini-2.5-flash باشد، اما «${GEMINI_PRIMARY_MODEL}» است`,
+    'gemini-1.5-flash',
+    `مدل اصلی باید gemini-1.5-flash باشد، اما «${GEMINI_PRIMARY_MODEL}» است`,
   );
 });
 
-test('مدل fallback باید gemini-3.5-flash باشد (طبق الزام کارفرما)', async () => {
+test('مدل fallback باید gemini-1.5-flash باشد (طبق الزام کارفرما)', async () => {
   const { GEMINI_FALLBACK_MODEL } = await loadGeminiModule();
   assert.equal(
     GEMINI_FALLBACK_MODEL,
-    'gemini-3.5-flash',
-    `مدل fallback باید gemini-3.5-flash باشد، اما «${GEMINI_FALLBACK_MODEL}» است`,
+    'gemini-1.5-flash',
+    `مدل fallback باید gemini-1.5-flash باشد، اما «${GEMINI_FALLBACK_MODEL}» است`,
   );
 });
 
-test('زنجیره مدل باید فقط شامل ۲ مدل Gemini باشد (اصلی و fallback)', async () => {
+test('زنجیره مدل باید فقط شامل مدل پایدار Gemini باشد (بدون تکرار fallback)', async () => {
   const { getGeminiModelChain } = await loadGeminiModule();
   const chain = getGeminiModelChain();
-  assert.equal(chain.length, 2, `زنجیره باید ۲ مدل داشته باشد، اما ${chain.length} دارد: ${chain.join(', ')}`);
-  assert.equal(chain[0], 'gemini-2.5-flash');
-  assert.equal(chain[1], 'gemini-3.5-flash');
+  assert.equal(chain.length, 1, `زنجیره نباید fallback تکراری داشته باشد، اما ${chain.length} دارد: ${chain.join(', ')}`);
+  assert.equal(chain[0], 'gemini-1.5-flash');
 });
 
 test('زنجیره نباید شامل مدل‌های منسوخ Groq/DeepSeek/GPT باشد', async () => {
@@ -123,5 +122,5 @@ test('فال‌بک فقط در شرایط جدی مجاز است (مستندا�
   // منطق اصلی در gemini.ts پیاده شده و در این تست فقط وجود ماژول چک می‌شود
   assert.ok(mod.GEMINI_PRIMARY_MODEL, 'primary model باید وجود داشته باشد');
   assert.ok(mod.GEMINI_FALLBACK_MODEL, 'fallback model باید وجود داشته باشد');
-  assert.notEqual(mod.GEMINI_PRIMARY_MODEL, mod.GEMINI_FALLBACK_MODEL, 'fallback نباید با primary برابر باشد');
+  assert.equal(mod.GEMINI_PRIMARY_MODEL, mod.GEMINI_FALLBACK_MODEL, 'fallback پایدار پیش‌فرض همان مدل primary است');
 });

@@ -11,8 +11,8 @@ import {
  * مسیر تشخیصی سلامت هوش مصنوعی — معماری ۲۰۲۶ Gemini Direct
  *
  * - ۵ کلید Gemini
- * - مدل اصلی gemini-2.5-flash
- * - fallback gemini-3.5-flash فقط در شرایط جدی
+ * - مدل اصلی gemini-1.5-flash
+ * - fallback gemini-1.5-flash فقط در شرایط جدی
  * - بدون سیستم اعتبار ۱۰۰ دلاری (حذف شده)
  */
 
