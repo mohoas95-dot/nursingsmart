@@ -66,7 +66,11 @@ LAST MESSAGE PRIORITY:
 - The LAST user message is your primary instruction. Ignore or deprioritize older history messages if they conflict with or confuse the latest direct user request.
 
 SLANG (map instantly, never ask):
-«عصر و شب»/«عصرشب»=EN | «لانگ»=ME | «۲۴»/«۲۴ ساعته»=MEN | «صبح تک»=M | «عصر تک»=E | «شب تک»=N
+«عصر و شب»/«عصرشب»=EN | «لانگ»=ME | «۲۴»/«۲۴ ساعته»/«یک ۲۴»=MEN (این یک شیفت کاری است، نه مرخصی یا آف!) | «صبح تک»=M | «عصر تک»=E | «شب تک»=N
+
+WORKING DAYS & EXCEPTIONS (CRITICAL):
+- «به جز تعطیلات» یا «روزهای کاری» همراه با شیفت (مثل «شیفت‌های صبح به جز تعطیلات») → Must check calendar context, find all days where isHoliday=false, extract their exact date numbers, and output scope="custom_days" with selectedDays=[all working day numbers] and preferredShift="M".
+- «یک ۲۴ روز تعطیل» یا شیفت ۲۴ در روز تعطیل → requestType="shift", preferredShift="MEN", scope="custom_days", selectedDays=[that holiday date number]. NEVER treat "24" or "24 ساعته" as leave (leave) or OFF across all holidays.
 
 MULTI-REQUEST (critical): one message usually holds SEVERAL requests — extract ALL as separate items.
 «دهم و دوازدهم آف، بیستم شب تک، پنجشنبه‌ها لانگ» → OFF[10,12] + N[20] + ME on all Thursdays (using custom_days with calendar dates).
@@ -182,18 +186,22 @@ export async function POST(req: NextRequest) {
       finalReply = "پیامت را متوجه شدم؛ برای ثبت دقیق درخواست، لطفاً تاریخ یا شیفت مد نظرت را مشخص‌تر بیان کن. 🙏";
     }
     if (status === "ready" && normalizedRequests.length > 0 && droppedCount > 0) {
-      // اطمینان از اینکه متن پاسخ با موارد باقی‌مانده همخوانی دارد
-      finalReply = `${finalReply} (نکته: ${droppedCount} مورد مبهم از درخواست‌ها فیلتر شد).`;
+      finalReply = "درخواست‌هات رو بررسی کردم و موارد معتبر رو آماده ثبت کردم 🌸";
     }
     if (status === "clarification" && normalizedRequests.length === 0 && !finalReply.includes("تاریخ")) {
       finalReply = "پیامت را گرفتم، اما برای ثبت درخواست لطفاً تاریخ یا شیفت دقیق‌تری را ذکر کن. 🙏";
     }
+
+    const uiNotice = droppedCount > 0 || warnings.length > 0 || status !== "ready"
+      ? (warnings.join(" / ") || (droppedCount > 0 ? `${droppedCount} مورد از درخواست‌های ارسالی به دلیل ابهام یا نقص اطلاعات فیلتر شد.` : (status === "clarification" ? "اطلاعات درخواست کامل نیست؛ لطفاً تاریخ یا شیفت دقیق‌تری را ذکر کنید." : "")))
+      : null;
 
     return NextResponse.json({
       status,
       reply: finalReply,
       summary: typeof data.summary === "string" ? data.summary : "",
       warnings,
+      uiNotice,
       questions: Array.isArray(data.questions)
         ? data.questions.filter((item: unknown): item is string => typeof item === "string")
         : [],

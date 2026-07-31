@@ -5,10 +5,6 @@ import {
   normalizeShiftRequest,
   normalizeShiftRequestList,
 } from '../lib/ai/shift-request-normalizer';
-import {
-  WEEKLY_ODD_DAY_NAMES,
-  WEEKLY_EVEN_DAY_NAMES,
-} from '../lib/ai/persian-vocabulary';
 
 // ============================================================================
 // تست‌های واحد و یکپارچه‌سازی برای پردازش درخواست‌های چت و نرمال‌ساز (Section 4)
@@ -40,12 +36,11 @@ test('2. درخواست‌های کاملاً نامعتبر یا خالی من�
 });
 
 test('3. «پنجشنبه‌ها لانگ می‌خوام» → باید به عنوان custom_days با تاریخ‌های استخراج‌شده از calendarDays استخراج شود', () => {
-  // شبیه‌سازی خروجی مدل برای درخواست پنجشنبه‌ها
   const raw = {
     requestType: 'shift',
     preferredShift: 'ME',
     scope: 'custom_days',
-    selectedDays: [4, 11, 18, 25], // تاریخ‌های فرضی پنجشنبه‌های ماه
+    selectedDays: [4, 11, 18, 25],
     description: 'پنجشنبه‌ها لانگ می‌خواهم',
   };
 
@@ -88,16 +83,42 @@ test('5. «تاریخ‌های فرد ماه آف» → odd و OFF', () => {
   assert.equal(normalized.offHardness, 'hard');
 });
 
-test('6. ورودی مبهم یا درد دل متنی بدون درخواست مشخص → آیتم معتبری تولید نمی‌کند', () => {
-  const rawList = [
-    { requestType: 'shift', preferredShift: '?', scope: 'none' },
-  ];
-  const { requests, droppedCount } = normalizeShiftRequestList(rawList, 31);
-  assert.equal(requests.length, 0);
-  assert.equal(droppedCount, 1);
+test('6. «یک ۲۴ روز تعطیل» به عنوان شیفت کاری MEN ثبت می‌شود، نه مرخصی یا آف سراسری', () => {
+  const raw = {
+    requestType: 'shift',
+    preferredShift: 'MEN',
+    scope: 'custom_days',
+    selectedDays: [7], // روز تعطیل فرضی
+    description: 'یک ۲۴ روز تعطیل',
+  };
+
+  const normalized = normalizeShiftRequest(raw, 31);
+  assert.ok(normalized);
+  assert.equal(normalized.requestType, 'shift');
+  assert.equal(normalized.preferredShift, 'MEN');
+  assert.notEqual(normalized.requestType, 'leave');
+  assert.notEqual(normalized.requestType, 'OFF');
+  assert.deepEqual(normalized.selectedDays, [7]);
 });
 
-test('7. ارقام فارسی در selectedDays به لاتین تبدیل می‌شوند و فیلتر می‌شوند', () => {
+test('7. «شیفت‌های صبح به جز تعطیلات» به عنوان شیفت M روی روزهای کاری استخراج می‌شود', () => {
+  const raw = {
+    requestType: 'shift',
+    preferredShift: 'M',
+    scope: 'custom_days',
+    selectedDays: [1, 2, 3, 4, 5, 8, 9, 10, 11, 12], // روزهای غیرتعطیل فرضی
+    description: 'شیفت‌های صبح به جز تعطیلات',
+  };
+
+  const normalized = normalizeShiftRequest(raw, 31);
+  assert.ok(normalized);
+  assert.equal(normalized.requestType, 'shift');
+  assert.equal(normalized.preferredShift, 'M');
+  assert.equal(normalized.scope, 'custom_days');
+  assert.ok(normalized.selectedDays && normalized.selectedDays.length > 0);
+});
+
+test('8. ارقام فارسی در selectedDays به لاتین تبدیل می‌شوند و فیلتر می‌شوند', () => {
   const raw = {
     requestType: 'OFF',
     scope: 'custom_days',
