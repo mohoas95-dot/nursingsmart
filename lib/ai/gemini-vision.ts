@@ -4,8 +4,8 @@
  * نسخه بازطراحی‌شده بر اساس OpenRouter — سازگار با معماری جدید NursePlan
  *
  * طبق الزامات جدید:
- *   - درخواست‌های تصویری (Vision/OCR) از طریق OpenRouter با مدل openai/gpt-4o-mini
- *   - در صورت تصویر شلوغ یا کم‌کیفیت، fallback به openai/gpt-4o
+ *   - درخواست‌های تصویری (Vision/OCR) از طریق Bluesminds با مدل gpt-4o-mini
+ *   - در صورت تصویر شلوغ یا کم‌کیفیت، fallback به gpt-4o
  *   - کلید از OPENROUTER_API_KEY خوانده می‌شود
  *   - این فایل برای سازگاری با کد قدیمی نگه داشته شده و به‌صورت wrapper
  *     روی openrouter.ts عمل می‌کند

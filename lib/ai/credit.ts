@@ -10,11 +10,11 @@
  *   - به‌روزرسانی اعتبار در state سیستم (و ذخیره در فایل برای پایداری بین restarts)
  *   - هشدار زرد < 15 دلار و قرمز < 5 دلار در UI سرپرستار
  *
- * قیمت‌گذاری (بر اساس OpenRouter / دلار به ازای هر ۱M توکن):
- *   - deepseek/deepseek-chat      : input $0.27 / output $1.10
- *   - deepseek/deepseek-v3 alias  : همان قیمت deepseek-chat
- *   - openai/gpt-4o-mini          : input $0.15 / output $0.60
- *   - openai/gpt-4o               : input $2.50 / output $10.00
+ * قیمت‌گذاری (بر اساس Bluesminds / دلار به ازای هر ۱M توکن):
+ *   - deepseek-chat (یا deepseek/deepseek-chat) : input $0.27 / output $1.10
+ *   - deepseek-v3 (یا deepseek/deepseek-v3)      : همان قیمت deepseek-chat
+ *   - gpt-4o-mini (یا openai/gpt-4o-mini)       : input $0.15 / output $0.60
+ *   - gpt-4o (یا openai/gpt-4o)                  : input $2.50 / output $10.00
  *
  * قیمت‌ها از env قابل override هستند جهت انعطاف.
  */
@@ -32,6 +32,14 @@ export interface ModelPricing {
 }
 
 export const MODEL_PRICING: Record<string, ModelPricing> = {
+  'deepseek-chat': {
+    inputPerMillion: Number(process.env.PRICING_DEEPSEEK_INPUT) || 0.27,
+    outputPerMillion: Number(process.env.PRICING_DEEPSEEK_OUTPUT) || 1.10,
+  },
+  'deepseek-v3': {
+    inputPerMillion: Number(process.env.PRICING_DEEPSEEK_INPUT) || 0.27,
+    outputPerMillion: Number(process.env.PRICING_DEEPSEEK_OUTPUT) || 1.10,
+  },
   'deepseek/deepseek-chat': {
     inputPerMillion: Number(process.env.PRICING_DEEPSEEK_INPUT) || 0.27,
     outputPerMillion: Number(process.env.PRICING_DEEPSEEK_OUTPUT) || 1.10,
@@ -43,6 +51,14 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   'deepseek/deepseek-chat-v3-0324': {
     inputPerMillion: 0.27,
     outputPerMillion: 1.10,
+  },
+  'gpt-4o-mini': {
+    inputPerMillion: Number(process.env.PRICING_GPT4O_MINI_INPUT) || 0.15,
+    outputPerMillion: Number(process.env.PRICING_GPT4O_MINI_OUTPUT) || 0.60,
+  },
+  'gpt-4o': {
+    inputPerMillion: Number(process.env.PRICING_GPT4O_INPUT) || 2.5,
+    outputPerMillion: Number(process.env.PRICING_GPT4O_OUTPUT) || 10.0,
   },
   'openai/gpt-4o-mini': {
     inputPerMillion: Number(process.env.PRICING_GPT4O_MINI_INPUT) || 0.15,
