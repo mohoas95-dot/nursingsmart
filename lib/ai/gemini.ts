@@ -37,16 +37,47 @@ import { extractJsonObject } from './json';
 
 export const GEMINI_PROVIDER = 'gemini' as const;
 
+// مدل پایدار پیش‌فرض Gemini — مطابق الزام کارفرما (مه ۲۰۲۶)
+export const GEMINI_DEFAULT_MODEL = 'gemini-1.5-flash';
+
+/**
+ * نرمال‌سازی نام مدل برای API Gemini.
+ *
+ * خطای 404 «models/gemini-1.5-flash is not found» معمولاً وقتی رخ می‌دهد که نام مدل
+ * (از متغیر محیطی یا هر جای دیگر) با پیشوند «models/» تنظیم شده باشد و آدرس
+ * اندپوینت به شکل اشتباه
+ *   https://generativelanguage.googleapis.com/v1beta/models/models/gemini-1.5-flash:generateContent
+ * ساخته شود. این تابع تضمین می‌کند مقدار داخل مسیر همیشه شکل استاندارد
+ * «gemini-1.5-flash» (بدون پیشوند models/) باشد:
+ *   - حذف پیشوند «models/»، «v1beta/models/»، «v1/models/» و حتی URL کامل
+ *   - حذف سافیکس متد مثل «:generateContent»
+ *   - اگر پس از پاک‌سازی خالی بود، به مدل پایدار پیش‌فرض برمی‌گردد
+ */
+export function normalizeGeminiModelName(input?: string): string {
+  let name = String(input ?? '').trim();
+  if (!name) return GEMINI_DEFAULT_MODEL;
+  // حذف پیشوندهای رایج مسیر (https://host/، v1beta/، v1/، models/)
+  name = name.replace(/^(?:https?:\/\/[^/]+\/)?(?:v[^/]*\/)?models\//i, '');
+  // حذف سافیکس متد (اگر کسی آدرس کامل اندپوینت را به‌عنوان مدل داده باشد)
+  name = name.replace(/:(?:generateContent|streamGenerateContent|countTokens)$/i, '');
+  name = name.trim();
+  return name || GEMINI_DEFAULT_MODEL;
+}
+
 // مدل‌های پایدار عمومی Gemini. fallback عمداً همین مدل است تا نام مدل ناموجود
 // باعث خطای 503/404 نشود؛ در صورت نیاز از محیط قابل override است.
-export const GEMINI_PRIMARY_MODEL: string =
-  (process.env.GEMINI_PRIMARY_MODEL ||
+// نکته: حتی اگر مقدار env با پیشوند «models/» تنظیم شده باشد، normalizeGeminiModelName
+// آن را پاک می‌کند تا خطای 404 «models/gemini-1.5-flash is not found» رخ ندهد.
+export const GEMINI_PRIMARY_MODEL: string = normalizeGeminiModelName(
+  process.env.GEMINI_PRIMARY_MODEL ||
     process.env.GEMINI_TEXT_MODEL ||
     process.env.GEMINI_MODEL ||
-    'gemini-1.5-flash') as string;
+    GEMINI_DEFAULT_MODEL,
+);
 
-export const GEMINI_FALLBACK_MODEL: string =
-  (process.env.GEMINI_FALLBACK_MODEL || 'gemini-1.5-flash') as string;
+export const GEMINI_FALLBACK_MODEL: string = normalizeGeminiModelName(
+  process.env.GEMINI_FALLBACK_MODEL || GEMINI_DEFAULT_MODEL,
+);
 
 export function getGeminiModelChain(): string[] {
   // حفظ ترتیب: اول اصلی، بعد fallback — بدون تکرار
@@ -278,8 +309,12 @@ async function callGeminiOnce(
   body: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<GeminiCallOutcome> {
+  // اندپوینت استاندارد (نسخه v1beta) — نام مدل همیشه بدون پیشوند models/ درج می‌شود:
+  //   https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent
+  // normalizeGeminiModelName تضمین می‌کند پیشوند اضافه «models/» باعث 404 نشود.
+  const safeModel = normalizeGeminiModelName(model);
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    model,
+    safeModel,
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const controller = new AbortController();

@@ -124,3 +124,57 @@ test('فال‌بک فقط در شرایط جدی مجاز است (مستندا�
   assert.ok(mod.GEMINI_FALLBACK_MODEL, 'fallback model باید وجود داشته باشد');
   assert.equal(mod.GEMINI_PRIMARY_MODEL, mod.GEMINI_FALLBACK_MODEL, 'fallback پایدار پیش‌فرض همان مدل primary است');
 });
+
+test('normalizeGeminiModelName پیشوند models/ را حذف می‌کند (رفع 404)', async () => {
+  const { normalizeGeminiModelName } = await import(`../lib/ai/gemini.ts?norm=${Date.now()}`);
+  assert.equal(normalizeGeminiModelName('models/gemini-1.5-flash'), 'gemini-1.5-flash');
+  assert.equal(normalizeGeminiModelName('v1beta/models/gemini-1.5-flash'), 'gemini-1.5-flash');
+  assert.equal(normalizeGeminiModelName('v1/models/gemini-1.5-flash'), 'gemini-1.5-flash');
+  assert.equal(
+    normalizeGeminiModelName('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'),
+    'gemini-1.5-flash',
+  );
+  assert.equal(normalizeGeminiModelName('gemini-1.5-flash'), 'gemini-1.5-flash');
+  assert.equal(normalizeGeminiModelName(''), 'gemini-1.5-flash');
+  assert.equal(normalizeGeminiModelName(undefined), 'gemini-1.5-flash');
+});
+
+test('مقدار env با پیشوند models/ خودکار نرمال می‌شود (رفع 404)', async () => {
+  const savedPrimary = process.env.GEMINI_PRIMARY_MODEL;
+  const savedFallback = process.env.GEMINI_FALLBACK_MODEL;
+  const savedAlias = process.env.GEMINI_MODEL;
+  try {
+    process.env.GEMINI_PRIMARY_MODEL = 'models/gemini-1.5-flash';
+    process.env.GEMINI_FALLBACK_MODEL = 'models/gemini-1.5-flash';
+    delete process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_TEXT_MODEL;
+    const mod = await import(`../lib/ai/gemini.ts?env-norm=${Date.now()}`);
+    assert.equal(mod.GEMINI_PRIMARY_MODEL, 'gemini-1.5-flash', 'primary باید بدون پیشوند models/ باشد');
+    assert.equal(mod.GEMINI_FALLBACK_MODEL, 'gemini-1.5-flash', 'fallback باید بدون پیشوند models/ باشد');
+    // زنجیره نیز نباید پیشوند داشته باشد
+    assert.deepEqual(mod.getGeminiModelChain(), ['gemini-1.5-flash']);
+  } finally {
+    if (savedPrimary === undefined) delete process.env.GEMINI_PRIMARY_MODEL;
+    else process.env.GEMINI_PRIMARY_MODEL = savedPrimary;
+    if (savedFallback === undefined) delete process.env.GEMINI_FALLBACK_MODEL;
+    else process.env.GEMINI_FALLBACK_MODEL = savedFallback;
+    if (savedAlias === undefined) delete process.env.GEMINI_MODEL;
+    else process.env.GEMINI_MODEL = savedAlias;
+  }
+});
+
+test('اندپوینت ساخته‌شده از مدل‌های نرمال‌شده به شکل v1beta/models/gemini-1.5-flash است', async () => {
+  const { OPENROUTER_ENDPOINT } = await import(`../lib/ai/index.ts?endpoint=${Date.now()}`);
+  assert.ok(
+    OPENROUTER_ENDPOINT.startsWith('https://generativelanguage.googleapis.com/v1beta/models/'),
+    `اندپوینت باید از نسخه v1beta و مسیر models/ استفاده کند: ${OPENROUTER_ENDPOINT}`,
+  );
+  assert.ok(
+    OPENROUTER_ENDPOINT.endsWith(':generateContent'),
+    `اندپوینت باید به :generateContent ختم شود: ${OPENROUTER_ENDPOINT}`,
+  );
+  assert.ok(
+    !OPENROUTER_ENDPOINT.includes('/models/models/'),
+    `پیشوند تکراری models/ نباید وجود داشته باشد: ${OPENROUTER_ENDPOINT}`,
+  );
+});
