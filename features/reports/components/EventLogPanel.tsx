@@ -52,7 +52,6 @@ const CATEGORY_META: Record<SystemEventCategory, { label: string; icon: React.Re
   personnel: { label: 'پرسنل', icon: <Users className="h-3.5 w-3.5" /> },
   settings: { label: 'تنظیمات', icon: <Settings2 className="h-3.5 w-3.5" /> },
   calendar: { label: 'تقویم و تعطیلات', icon: <CalendarDays className="h-3.5 w-3.5" /> },
-  ai: { label: 'هوش مصنوعی', icon: <Sparkles className="h-3.5 w-3.5" /> },
   storage: { label: 'ذخیره‌سازی ابری', icon: <CloudUpload className="h-3.5 w-3.5" /> },
 };
 
@@ -96,7 +95,6 @@ const SEVERITY_META: Record<SystemEventSeverity, {
 const FILTERS = [
   { id: 'all', label: 'همه' },
   { id: 'solver', label: 'موتور هوشمند' },
-  { id: 'ai', label: 'هوش مصنوعی' },
   { id: 'warning', label: 'هشدار و خطا' },
 ] as const;
 
@@ -114,7 +112,6 @@ export function EventLogPanel({ events, monthLabel }: EventLogPanelProps) {
 
   const visible = React.useMemo(() => {
     if (filter === 'solver') return ordered.filter(event => event.category === 'solver');
-    if (filter === 'ai') return ordered.filter(event => event.category === 'ai');
     if (filter === 'warning') return ordered.filter(event => event.severity === 'warning' || event.severity === 'error');
     return ordered;
   }, [filter, ordered]);
