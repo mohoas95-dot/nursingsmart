@@ -6668,7 +6668,6 @@ export default function Home() {
                         if (!p) return null;
                         const pReqs = requests.filter(r => r.personnelId === pid);
                         const hasEssential = pReqs.some(r => r.isEssential);
-                        const [expanded, setExpanded] = React.useState(false);
                         return (
                           <div key={`card-${pid}`} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-all p-5 relative overflow-hidden group">
                             <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-400 to-violet-400" />
@@ -6730,7 +6729,7 @@ export default function Home() {
                               </div>
                           </div>
                         );
-                      })}
+                      })
                     })()}
                   </div>
                 </div>
