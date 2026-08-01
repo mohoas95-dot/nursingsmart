@@ -5926,8 +5926,34 @@ export default function Home() {
 
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden">
-                  <div className="md:col-span-2">
+                <div className="space-y-4 print:hidden">
+                  {/* ===== نوار جمع‌وجور ساعت موظفی (داشبورد پرسنل) ===== */}
+                  <div className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-emerald-500 via-teal-500 to-sky-500 p-[1.5px] shadow-[0_8px_24px_-12px_rgba(16,185,129,0.6)]">
+                    <div className="flex items-center gap-3 rounded-[15px] bg-white/95 backdrop-blur px-4 py-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/30">
+                        <Clock className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] font-black text-slate-700 leading-tight">ساعت موظفی این ماه شما</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black text-emerald-700 border border-emerald-100">
+                            {selectedPersonnelUser?.employmentType === 'official' ? 'رسمی' : selectedPersonnelUser?.employmentType === 'contract' ? 'قراردادی' : selectedPersonnelUser?.employmentType === 'conscript' ? 'طرح/وظیفه' : 'اضافه‌کار'}
+                          </span>
+                          <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[9px] font-bold text-slate-500 border border-slate-100">
+                            {JALALI_MONTH_NAMES[currentMonth - 1]} {toPersianDigits(currentYear)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-baseline gap-1 rounded-xl bg-gradient-to-br from-emerald-50 to-sky-50 px-3 py-1.5 border border-emerald-100/70">
+                        <span className="font-mono text-2xl font-black leading-none bg-gradient-to-b from-emerald-600 to-teal-600 bg-clip-text text-transparent">
+                          {effectiveDutyHours[selectedPersonnelUser?.employmentType || 'official']}
+                        </span>
+                        <span className="text-[10px] font-extrabold text-emerald-700/70">ساعت</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
                     <JalaliCalendar
                       idPrefix="dashboard"
                       year={currentYear}
@@ -5944,21 +5970,6 @@ export default function Home() {
                     />
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col justify-center items-center text-center relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-100/50 rounded-full blur-3xl -mr-10 -mt-10"></div>
-                    <div className="relative z-10 w-full flex flex-col items-center">
-                      <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mb-4 ring-8 ring-emerald-50/50">
-                        <Clock className="w-7 h-7" />
-                      </div>
-                      <h3 className="text-sm font-black text-slate-800 mb-1">ساعت موظفی این ماه شما</h3>
-                      <div className="text-[11px] font-bold text-slate-500 mb-4 bg-slate-50 px-3 py-1 rounded-full border border-slate-100">
-                        استخدام: {selectedPersonnelUser?.employmentType === 'official' ? 'رسمی' : selectedPersonnelUser?.employmentType === 'contract' ? 'قراردادی' : selectedPersonnelUser?.employmentType === 'conscript' ? 'طرح/وظیفه' : 'اضافه‌کار'}
-                      </div>
-                      <div className="text-4xl font-mono font-black text-emerald-600">
-                        {effectiveDutyHours[selectedPersonnelUser?.employmentType || 'official']} <span className="text-lg font-sans font-extrabold text-emerald-700/60">ساعت</span>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               )}
             </>
