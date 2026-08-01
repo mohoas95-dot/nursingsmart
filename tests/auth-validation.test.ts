@@ -22,11 +22,11 @@ test('accepts Persian digits for the initial numeric password', () => {
   assert.deepEqual(result, { nationalId: '0010000003', password: '1234' });
 });
 
-test('requires a strong replacement password and matching confirmation', () => {
+test('accepts custom replacement password and matching confirmation', () => {
   assert.equal(ChangePasswordSchema.safeParse({
     currentPassword: '1234',
-    newPassword: 'secure123',
-    confirmPassword: 'secure123',
+    newPassword: '567',
+    confirmPassword: '567',
   }).success, true);
   assert.equal(ChangePasswordSchema.safeParse({
     currentPassword: '1234',

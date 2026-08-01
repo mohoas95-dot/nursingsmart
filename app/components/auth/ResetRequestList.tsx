@@ -21,13 +21,18 @@ export function ResetRequestList() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isManual = false) => {
     setError('');
+    setLoading(true);
     try {
       const response = await fetch('/api/head-nurse/reset-requests', { cache: 'no-store' });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || 'دریافت درخواست‌ها ناموفق بود.');
       setUsers(result.users);
+      if (isManual) {
+        setMessage('فهرست درخواست‌ها با موفقیت به‌روزرسانی شد.');
+        setTimeout(() => setMessage(''), 3000);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'خطا در دریافت درخواست‌ها.');
     } finally {
@@ -79,8 +84,8 @@ export function ResetRequestList() {
             <p className="mt-1 text-[11px] font-bold text-slate-500">فقط درخواست‌های فعال بخش شما نمایش داده می‌شوند.</p>
           </div>
         </div>
-        <button type="button" onClick={() => void load()} disabled={loading} className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-black text-slate-600 hover:bg-slate-100 disabled:opacity-50">
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> تازه‌سازی
+        <button type="button" onClick={() => void load(true)} disabled={loading} className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-100 hover:text-indigo-600 disabled:opacity-50 transition-all cursor-pointer shadow-xs active:scale-95">
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-indigo-600' : ''}`} /> تازه‌سازی
         </button>
       </div>
 

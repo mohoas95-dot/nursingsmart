@@ -502,15 +502,27 @@ export default function Home() {
   const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'] as any;
 
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
+    const rawWarns = rawScenario?.schedule?.warnings || rawScenario?.warnings || [];
+    const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
+    const activeWarnings = filterActiveWarnings(filteredGroup, dismissedWarnings);
+
     if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
-      return rawScenario as ScoredSchedule;
+      return {
+        ...rawScenario,
+        warnings: activeWarnings,
+        relevantWarningCount: activeWarnings.length,
+        schedule: {
+          ...(rawScenario.schedule || {}),
+          warnings: activeWarnings,
+        },
+      } as ScoredSchedule;
     }
     return evaluateScenarioSchedule({
       id: rawScenario?.id ?? index + 1,
       type: rawScenario?.type || (index === 0 ? 'REQUESTS' : index === 1 ? 'FAIRNESS' : 'MIXED'),
       schedule: {
         ...(rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
-        warnings: filterWarningsForScenarioGroup(rawScenario?.schedule?.warnings || rawScenario?.warnings || [], personnel, group),
+        warnings: activeWarnings,
       },
       personnelList: personnel,
       requests,
@@ -522,7 +534,7 @@ export default function Home() {
       monthlyDutyHours,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
+  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
@@ -1947,6 +1959,7 @@ export default function Home() {
 
   // UI Tabs & Active View
   const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'profile'>('schedule');
+  const [isMonthDrawerOpen, setIsMonthDrawerOpen] = useState<boolean>(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'personnel' | 'request'; label: string } | null>(null);
   const [isNavOpen, setIsNavOpen] = useState<boolean>(false);
 
@@ -2007,6 +2020,7 @@ export default function Home() {
   // Additional system request states
   const [draftRequests, setDraftRequests] = useState<ShiftRequest[]>([]);
   const [showSplitRequests, setShowSplitRequests] = useState<boolean>(false);
+  const [expandedCardPersonnelId, setExpandedCardPersonnelId] = useState<string | null>(null);
   const [quickSelectedTemplateId, setQuickSelectedTemplateId] = useState<QuickRequestTemplateId | null>(null);
   // زیرشاخه‌های هر الگو به‌صورت پیش‌فرض مخفی‌اند و فقط با کلیک روی همان کارت باز می‌شوند
   const [quickScopePickerFor, setQuickScopePickerFor] = useState<QuickRequestTemplateId | null>(null);
@@ -2131,6 +2145,61 @@ export default function Home() {
   //   • MEN همیشه «۲۴» است و ترکیب صبح+عصر همیشه «لانگ»
   //   • روزها به شکل «۵اُم، ۷اُم» نوشته می‌شوند، نه «روزهای 5، 7»
   //   • «تاریخ زوج/فرد» (شمارهٔ روز ماه) از «روز زوج/فرد» (روز هفته) جدا است
+  const formatJalaliDateTime = (isoString?: string): string => {
+    if (!isoString) return 'ثبت‌شده در سیستم';
+    try {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return isoString;
+      const parts = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Asia/Tehran',
+      }).formatToParts(d);
+      let year = '', month = '', day = '', hour = '', minute = '';
+      for (const p of parts) {
+        if (p.type === 'year') year = p.value;
+        if (p.type === 'month') month = p.value;
+        if (p.type === 'day') day = p.value;
+        if (p.type === 'hour') hour = p.value;
+        if (p.type === 'minute') minute = p.value;
+      }
+      return toPersianDigits(`${year}/${month}/${day} - ${hour}:${minute}`);
+    } catch {
+      return isoString;
+    }
+  };
+
+  const formatRequestConversational = (r: ShiftRequest): string => {
+    const datesText = r.scope === 'range'
+      ? `از ${toPersianDigits(r.startDate || '')} تا ${toPersianDigits(r.endDate || '')}`
+      : r.selectedDays && r.selectedDays.length > 0
+      ? `روزهای ${r.selectedDays.map(d => toPersianDigits(d) + 'ام').join('، ')}`
+      : r.scope === 'odd' ? 'روزهای فرد ماه'
+      : r.scope === 'even' ? 'روزهای زوج ماه'
+      : r.scope === 'weekly_odd' ? 'روزهای فرد هفته (یکشنبه، سه‌شنبه، پنج‌شنبه)'
+      : r.scope === 'weekly_even' ? 'روزهای زوج هفته (شنبه، دوشنبه، چهارشنبه)'
+      : 'کل طول ماه';
+
+    const shiftName = getShiftLabel(r.preferredShift);
+
+    if (r.requestType === 'shift') {
+      return `برای من شیفت ${shiftName} در ${datesText} لحاظ فرمایید.`;
+    } else if (r.requestType === 'avoid_shift') {
+      return `برای من شیفت ${shiftName} در ${datesText} لحاظ نفرمایید.`;
+    } else if (r.requestType === 'OFF') {
+      const hardnessText = r.offHardness === 'hard' ? 'آف قطعی' : r.offHardness === 'soft' ? 'آف ترجیحی' : 'آف';
+      return `درخواست ${hardnessText} برای ${datesText} لحاظ فرمایید.`;
+    } else if (r.requestType === 'leave') {
+      return `درخواست مرخصی برای ${datesText} لحاظ فرمایید.`;
+    } else if (r.requestType === 'pattern') {
+      return `درخواست اجرای الگوی شیفتی ${r.patternSteps?.join(' ➔ ') || 'سفارشی'} برای ${datesText} لحاظ فرمایید.`;
+    }
+    return `درخواست شیفت برای ${datesText} لحاظ فرمایید.`;
+  };
+
   const getRequestSummaryText = (r: ShiftRequest): string => {
     const shiftLabel = r.preferredShift === 'OFF'
       ? 'آف قطعی'
@@ -2144,11 +2213,11 @@ export default function Home() {
     if (r.requestType === 'avoid_shift') {
       return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
     } else if (r.requestType === 'OFF') {
-      // پرسنل فقط «آف» را می‌بیند؛ تعیین سخت/نرم بودن در اختیار سرپرستار است
+      // پرسنل فقط «آف» را می‌بیند؛ تعیین قطعی/ترجیحی بودن در اختیار سرپرستار است
       const canSeeHardness = role === 'admin' || role === 'headnurse';
       const hardnessLabel = !canSeeHardness
         ? '⚫ آف'
-        : r.offHardness === 'hard' ? '🔴 آف سخت' : r.offHardness === 'soft' ? '🟡 آف نرم' : '🔴 آف قطعی';
+        : r.offHardness === 'hard' ? '🔴 آف قطعی' : r.offHardness === 'soft' ? '🟡 آف ترجیحی' : '🔴 آف قطعی';
       return `${hardnessLabel} [${timeLabel}]`;
     } else if (r.requestType === 'leave') {
       return `🟢 مرخصی [${timeLabel}]`;
@@ -2484,9 +2553,14 @@ export default function Home() {
 
   const reevaluateScenarioForGroup = React.useCallback((scenario: ScoredSchedule, group: JobGroup, scheduleOverride?: MonthlySchedule): ScoredSchedule => {
     const baseSchedule = scheduleOverride || scenario.schedule;
+    const currentDismissed = dismissedWarningsRef.current || [];
+    const activeWarnings = filterActiveWarnings(
+      filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group),
+      currentDismissed
+    );
     const normalizedSchedule: MonthlySchedule = {
       ...baseSchedule,
-      warnings: filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group),
+      warnings: activeWarnings,
     };
     return evaluateScenarioSchedule({
       id: scenario.id,
@@ -3420,7 +3494,7 @@ export default function Home() {
         scope: quickSelectedScope,
       }];
 
-      // لانگ‌آف یعنی حضور ME یک‌روزدرمیان؛ برای روزهای مقابل، آف نرم ثبت می‌شود
+      // لانگ‌آف یعنی حضور ME یک‌روزدرمیان؛ برای روزهای مقابل، آف ترجیحی ثبت می‌شود
       // تا موتور زمان‌بندی ترجیح استراحت بین دو لانگ را بداند ولی در بن‌بست نشکند.
       if (quickSelectedTemplateId === 'long_off') {
         newRequests.push({
@@ -3665,6 +3739,68 @@ export default function Home() {
     } catch (e) {
       console.error("Error deleting all requests:", e);
       alert("خطا در حذف درخواست‌ها: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const handleToggleSingleRequestPriority = async (requestId: string) => {
+    try {
+      const targetReq = requests.find(r => r.id === requestId);
+      if (!targetReq) return;
+      const now = new Date().toISOString();
+      const nextEssential = !targetReq.isEssential;
+      const updatedR = requests.map(r => {
+        if (r.id === requestId) {
+          return { ...r, isEssential: nextEssential, updatedAt: now };
+        }
+        return r;
+      });
+      await saveState(personnel, updatedR, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [targetReq.personnelId]
+      });
+    } catch (e) {
+      console.error("Error toggling request priority:", e);
+      alert("خطا در تغییر اولویت درخواست: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const handleSetSingleRequestOffHardness = async (requestId: string, hardness: 'hard' | 'soft') => {
+    try {
+      const targetReq = requests.find(r => r.id === requestId);
+      if (!targetReq) return;
+      const now = new Date().toISOString();
+      const updatedR = requests.map(r => {
+        if (r.id === requestId) {
+          return { ...r, offHardness: hardness, updatedAt: now };
+        }
+        return r;
+      });
+      await saveState(personnel, updatedR, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [targetReq.personnelId]
+      });
+    } catch (e) {
+      console.error("Error setting OFF hardness:", e);
+      alert("خطا در تغییر نوع آف: " + (e instanceof Error ? e.message : String(e)));
+    }
+  };
+
+  const handleTogglePersonOffHardness = async (personId: string, hardness: 'hard' | 'soft') => {
+    try {
+      const now = new Date().toISOString();
+      const updatedR = requests.map(r => {
+        if (r.personnelId === personId && r.requestType === 'OFF') {
+          return { ...r, offHardness: hardness, updatedAt: now };
+        }
+        return r;
+      });
+      await saveState(personnel, updatedR, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [personId]
+      });
+    } catch (e) {
+      console.error("Error updating OFF hardness:", e);
+      alert("خطا در تغییر نوع آف: " + (e instanceof Error ? e.message : String(e)));
     }
   };
 
@@ -5323,55 +5459,114 @@ export default function Home() {
           </div>
         </header>
 
-        <div className={`border-b px-6 sm:px-8 py-3 flex items-center gap-3 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none ${monthTheme.frameBorder} ${monthTheme.frameBackground}`}>
-          {/* دکمهٔ بازگشت به ماه جاری — همان «امروز» تقویم */}
-          <button
-            type="button"
-            onClick={() => {
-              const now = todayJalali();
-              handleCalendarNavigate(now.year, now.month);
-            }}
-            className={`shrink-0 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-black transition-all cursor-pointer ${monthTheme.chip} ${
-              currentYear === todayJalali().year && currentMonth === todayJalali().month ? 'ring-2 ring-offset-1 ' + monthTheme.ring : ''
-            }`}
-            title="بازگشت به ماه جاری"
-          >
-            <CalendarIcon className="w-3.5 h-3.5" /> امروز
-          </button>
+        <div className={`border-b px-4 sm:px-6 py-2.5 flex flex-col print:hidden shrink-0 shadow-2xs ${monthTheme.frameBorder} ${monthTheme.frameBackground}`}>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* متن راهنما با رنگ پررنگ */}
+            <span className="text-xs sm:text-sm font-black text-slate-800 shrink-0">
+              ماه و سال مورد نظر را انتخاب کنید:
+            </span>
 
-          <div className="flex items-center gap-2 bg-white/80 border border-slate-200 rounded-full px-2 py-1 shrink-0">
-             <button onClick={() => handleCalendarNavigate(currentYear - 1, currentMonth)} className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer" title="سال قبل"><ChevronRight className="w-4 h-4"/></button>
-             <select
-               value={currentYear}
-               onChange={event => handleCalendarNavigate(Number(event.target.value), currentMonth)}
-               className="cursor-pointer bg-transparent text-xs font-black text-slate-800 outline-none"
-               aria-label="انتخاب سال"
-             >
-               {navYearOptions.map(option => (
-                 <option key={`nav-year-${option}`} value={option}>{toPersianDigits(option)}</option>
-               ))}
-             </select>
-             <button onClick={() => handleCalendarNavigate(currentYear + 1, currentMonth)} className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer" title="سال بعد"><ChevronLeft className="w-4 h-4"/></button>
-          </div>
-          <div className="w-px h-6 bg-slate-200 shrink-0 hidden sm:block"></div>
-          {JALALI_MONTH_NAMES.map((name, idx) => {
-            const mNum = idx + 1;
-            const isActive = currentMonth === mNum;
-            return (
+            {/* انتخاب سال */}
+            <div className="flex items-center gap-1.5 bg-white/80 border border-slate-200 rounded-full px-2 py-1 shrink-0 shadow-2xs">
               <button
-                key={name}
                 type="button"
-                onClick={() => handleSelectMonth(mNum)}
-                className={`px-4 py-1.5 rounded-full text-[11px] font-black shrink-0 border transition-all cursor-pointer ${
-                  isActive
-                    ? `bg-gradient-to-l ${getCalendarTheme(mNum).headerGradient} text-white border-transparent shadow-md scale-105`
-                    : `${getCalendarTheme(mNum).chip}`
-                }`}
+                onClick={() => handleCalendarNavigate(currentYear - 1, currentMonth)}
+                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer"
+                title="سال قبل"
               >
-                {name}
+                <ChevronRight className="w-4 h-4" />
               </button>
-            );
-          })}
+              <select
+                value={currentYear}
+                onChange={event => handleCalendarNavigate(Number(event.target.value), currentMonth)}
+                className="cursor-pointer bg-transparent text-xs font-black text-slate-800 outline-none"
+                aria-label="انتخاب سال"
+              >
+                {navYearOptions.map(option => (
+                  <option key={`nav-year-${option}`} value={option}>{toPersianDigits(option)}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => handleCalendarNavigate(currentYear + 1, currentMonth)}
+                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer"
+                title="سال بعد"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="w-px h-5 bg-slate-200/80 shrink-0 hidden sm:block"></div>
+
+            {/* انتخاب ماه — خلاصه‌شده در یک دکمه واحد دقیقا مانند دکمه سال */}
+            <div className="flex items-center gap-1.5 bg-white/90 border border-slate-200 rounded-full px-2 py-1 shrink-0 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => {
+                  const prevM = currentMonth === 1 ? 12 : currentMonth - 1;
+                  const prevY = currentMonth === 1 ? currentYear - 1 : currentYear;
+                  handleCalendarNavigate(prevY, prevM);
+                }}
+                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer rounded-full hover:bg-slate-100"
+                title="ماه قبل"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsMonthDrawerOpen(prev => !prev)}
+                className={`px-3 py-1 rounded-full text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${monthTheme.chip}`}
+                aria-expanded={isMonthDrawerOpen}
+                title="تغییر ماه و انتخاب از کشو"
+              >
+                <span>{JALALI_MONTH_NAMES[currentMonth - 1]}</span>
+                <span className={`transition-transform duration-200 text-[10px] ${isMonthDrawerOpen ? 'rotate-180' : ''}`}>▼</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const nextM = currentMonth === 12 ? 1 : currentMonth + 1;
+                  const nextY = currentMonth === 12 ? currentYear + 1 : currentYear;
+                  handleCalendarNavigate(nextY, nextM);
+                }}
+                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer rounded-full hover:bg-slate-100"
+                title="ماه بعد"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* کشوی بازشوندهٔ انتخاب ماه (انیمیشن کشویی و شبکه‌ای کاملاً بدون اسکرول افقی) */}
+          {isMonthDrawerOpen && (
+            <div className="mt-2.5 pt-2.5 border-t border-slate-200/60 animate-fadeIn">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 bg-white/90 p-3 rounded-2xl border border-slate-200/80 shadow-md">
+                {JALALI_MONTH_NAMES.map((name, idx) => {
+                  const mNum = idx + 1;
+                  const isActive = currentMonth === mNum;
+                  return (
+                    <button
+                      key={`drawer-month-${name}`}
+                      type="button"
+                      onClick={() => {
+                        handleSelectMonth(mNum);
+                        setIsMonthDrawerOpen(false);
+                      }}
+                      className={`px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer text-center border ${
+                        isActive
+                          ? `bg-gradient-to-l ${getCalendarTheme(mNum).headerGradient} text-white border-transparent shadow-md scale-102`
+                          : `${getCalendarTheme(mNum).chip} hover:scale-102`
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
@@ -6142,15 +6337,6 @@ export default function Home() {
                         />
                         اتمام مهلت ثبت درخواست‌ها
                       </label>
-                      <label className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-2 rounded-xl text-xs font-black text-slate-700 cursor-pointer transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={showSplitRequests}
-                          onChange={(e) => setShowSplitRequests(e.target.checked)}
-                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        نمایش تفکیکی درخواست‌ها
-                      </label>
                     </>
                   )}
                 </div>
@@ -6277,7 +6463,7 @@ export default function Home() {
                         <Sparkles className="w-3.5 h-3.5 text-amber-200 fill-amber-200" /> درخواست‌های پر کاربرد
                       </div>
                       <h4 className="text-xl font-black text-slate-900 leading-8">اگر درخواست‌ روتین داری همیجا فوری وارد کن!</h4>
-                      <p className="text-xs sm:text-sm font-extrabold text-slate-500">اگر درخواستت طولانیه برو به 🤩 !CHAT BOX</p>
+                      <p className="text-xs sm:text-sm font-extrabold text-indigo-600 animate-[pulse_2.5s_infinite]">اگر درخواستت رو از اینجا نمیتونی ثبت کنی برو به انتخاب از روی تقویم</p>
                     </div>
                   </div>
                 </div>
@@ -6294,12 +6480,17 @@ export default function Home() {
                           type="button"
                           key={template.id}
                           onClick={() => {
-                            setQuickSelectedTemplateId(template.id);
-                            setQuickSelectedDays([]);
-                            // زیرشاخه فقط برای الگوهای شیفتی و دقیقاً زیر همان کارت باز می‌شود
-                            setQuickScopePickerFor(prev => (needsScope && prev !== template.id ? template.id : null));
+                            if (quickSelectedTemplateId === template.id) {
+                              setQuickSelectedTemplateId(null as any);
+                              setQuickScopePickerFor(null);
+                              setQuickSelectedDays([]);
+                            } else {
+                              setQuickSelectedTemplateId(template.id);
+                              setQuickSelectedDays([]);
+                              setQuickScopePickerFor(needsScope ? template.id : null);
+                            }
                           }}
-                          aria-expanded={isScopePickerOpen}
+                          aria-expanded={isScopePickerOpen || (isSelected && (template.id === 'off' || template.id === 'leave'))}
                           className={`group relative overflow-hidden rounded-2xl border p-3 min-h-[94px] text-right transition-all cursor-pointer ${
                             isSelected
                               ? 'bg-white border-indigo-300 shadow-lg shadow-indigo-100 scale-[1.02]'
@@ -6646,227 +6837,388 @@ export default function Home() {
               </div>
               )}
 
-              <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
-                <div className="overflow-x-auto w-full">
-                  <table className="w-full text-right border-collapse min-w-[900px]">
-                    <thead className="bg-slate-50 border-b border-slate-205">
-                      <tr>
-                        <th className="px-6 py-4 text-xs font-black text-slate-500 w-1/4">متقاضی (پرستار / بهیار)</th>
-                        {showSplitRequests || role === 'personnel' ? (
-                          <>
-                            <th className="px-6 py-4 text-xs font-black text-slate-500">نوع درخواست</th>
-                            <th className="px-6 py-4 text-xs font-black text-slate-500">شیفت ترجیحی / الگو</th>
-                            <th className="px-6 py-4 text-xs font-black text-slate-500">بازه زمانی / روزها</th>
-                          </>
-                        ) : (
-                          <th className="px-6 py-4 text-xs font-black text-slate-500 w-1/2">مجموعه درخواست‌های ارسالی این ماه</th>
-                        )}
-                        <th className="px-6 py-4 text-xs font-black text-slate-500 text-center w-36">نوع اولویت</th>
-                        <th className="px-6 py-4 text-xs font-black text-slate-500 text-center w-28">عملیات</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-sm">
-                      {!showSplitRequests && role !== 'personnel' ? (
-                        (() => {
-                          const groupedPIds = Array.from(new Set(requests.map(r => r.personnelId)));
-                          if (groupedPIds.length === 0) {
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
-                                  هیچ درخواستی برای این ماه ثبت نشده است.
-                                </td>
-                              </tr>
-                            );
-                          }
-                          return groupedPIds.map(pid => {
+              {/* ====== بخش کارت‌های درخواست پرسنل و چاپ PDF ====== */}
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 rounded-[2rem] border-2 border-indigo-500/30 text-white shadow-xl print:hidden">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-5 h-5 text-indigo-400" />
+                      <h4 className="text-lg font-black text-white">کارت‌های درخواست پرسنل</h4>
+                    </div>
+                    <p className="text-xs text-slate-300 font-medium">
+                      برای هر نفر یک کارت درخواست صادر شده است. روی هر کارت کلیک کنید تا تمام جزئیات، ویرایش، اولویت‌بندی مجزا و آف قطعی/ترجیحی قابل مدیریت باشد.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs px-6 py-3.5 rounded-2xl shadow-lg shadow-emerald-900/40 transition-all cursor-pointer shrink-0 active:scale-95"
+                    id="btn-print-all-requests-pdf"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>چاپ همه درخواست‌ها (PDF)</span>
+                  </button>
+                </div>
+
+                {/* چیدمان افقی و روی‌هم کارت‌ها (Fanned Cards Layout) */}
+                <div className="print:hidden overflow-hidden">
+                  {(() => {
+                    const groupedPIds = Array.from(new Set(requests.map(r => r.personnelId)));
+                    const filteredGroupedPIds = role === 'personnel' && selectedPersonnelUser
+                      ? groupedPIds.filter(pid => pid === selectedPersonnelUser.id)
+                      : groupedPIds;
+
+                    if (filteredGroupedPIds.length === 0) {
+                      return (
+                        <div className="rounded-[2rem] border-2 border-dashed border-slate-200 bg-white p-12 text-center text-slate-400 font-bold shadow-xs">
+                          هیچ کارت درخواستی برای این ماه ثبت نشده است.
+                        </div>
+                      );
+                    }
+
+                    const NAME_COLOR_GRADIENTS = [
+                      'from-indigo-600 via-purple-600 to-pink-600',
+                      'from-emerald-600 via-teal-600 to-cyan-600',
+                      'from-rose-600 via-red-600 to-orange-600',
+                      'from-amber-600 via-orange-600 to-yellow-600',
+                      'from-blue-600 via-indigo-600 to-violet-600',
+                      'from-fuchsia-600 via-pink-600 to-rose-600',
+                    ];
+
+                    const activePerson = expandedCardPersonnelId
+                      ? personnel.find(per => per.id === expandedCardPersonnelId)
+                      : null;
+                    const activeReqs = expandedCardPersonnelId
+                      ? requests.filter(r => r.personnelId === expandedCardPersonnelId)
+                      : [];
+
+                    return (
+                      <div className="w-full">
+                        {/* کارت‌ها به‌صورت افقی با روی‌هم‌افتادگی زیاد در موبایل و دسکتاپ (با امکان اسکرول به چپ و راست) */}
+                        <div className="flex flex-nowrap overflow-x-auto py-10 px-6 sm:px-12 scrollbar-thin -space-x-28 sm:-space-x-36 md:-space-x-44 rtl:space-x-reverse snap-x justify-start items-start min-h-[360px] sm:min-h-[420px]">
+                          {filteredGroupedPIds.map((pid, idx) => {
                             const p = personnel.find(per => per.id === pid);
                             if (!p) return null;
                             const pReqs = requests.filter(r => r.personnelId === pid);
                             const hasEssential = pReqs.some(r => r.isEssential);
 
+                            const nameGradient = NAME_COLOR_GRADIENTS[idx % NAME_COLOR_GRADIENTS.length];
+                            const rotationDeg = (idx % 5 - 2) * 2.5; // -5deg, -2.5deg, 0deg, 2.5deg, 5deg
+
+                            // تاریخ و ساعت ثبت و ویرایش
+                            const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
+                            const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
+                            const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
+
                             return (
-                              <tr key={`group-row-${pid}`} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="px-6 py-4">
-                                  <span className="font-extrabold text-slate-800">{p.firstName} {p.lastName}</span>
-                                  <span className="text-xs text-slate-400 block mt-0.5">کد پرسنلی: {p.personalCode} ({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک بهیار'})</span>
-                                </td>
-                                <td className="px-6 py-4">
-                                  <div className="flex flex-wrap gap-1.5 max-w-xl">
-                                    {pReqs.map((r) => (
-                                      <span key={`pReq-${r.id}`} className="text-[10px] bg-slate-50 border border-slate-150 text-slate-705 font-black px-2 py-1 rounded-xl shadow-2xs flex items-center gap-1">
-                                        {getRequestSummaryText(r)}
+                              <div
+                                key={`fanned-card-${pid}`}
+                                onClick={() => setExpandedCardPersonnelId(pid)}
+                                style={{ transform: `rotate(${rotationDeg}deg)` }}
+                                className="group shrink-0 relative w-[280px] sm:w-[340px] md:w-[380px] rounded-[2rem] border-2 bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-indigo-400 shadow-xl hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden snap-center hover:-translate-y-10 hover:rotate-0 hover:z-40"
+                              >
+                                {/* سربرگ کارت */}
+                                <div className="p-5 border-b border-slate-100 bg-slate-50/80 flex items-start justify-between gap-3">
+                                  <div className="space-y-1">
+                                    <h5 className={`text-base sm:text-lg font-black bg-gradient-to-r ${nameGradient} bg-clip-text text-transparent drop-shadow-xs`}>
+                                      {p.firstName} {p.lastName}
+                                    </h5>
+                                    <div className="text-[11px] font-extrabold text-slate-500 flex items-center gap-2">
+                                      <span>کد پرسنلی: <span className="font-mono">{toPersianDigits(p.personalCode)}</span></span>
+                                      <span>•</span>
+                                      <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 font-bold border border-indigo-200/40">
+                                        {p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
                                       </span>
-                                    ))}
-                                    {/* توضیحات ثبت‌شده توسط پرسنل — برای سرپرستار قابل مشاهده است */}
-                                    {[...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))].map((note, noteIndex) => (
-                                      <span
-                                        key={`pReq-note-${pid}-${noteIndex}`}
-                                        className="text-[10px] bg-amber-50 border border-amber-200 text-amber-800 font-bold px-2 py-1 rounded-xl shadow-2xs"
-                                        title="توضیحات ثبت‌شده توسط پرسنل"
-                                      >
-                                        📝 {note}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-col items-end gap-1">
+                                    {hasEssential ? (
+                                      <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-rose-500 text-white shadow-xs">
+                                        ★ دارای اولویت
                                       </span>
-                                    ))}
-                                    <span className="bg-indigo-50 text-indigo-700 text-[10px] px-2.5 py-1 rounded-xl font-bold">مجموعاً {pReqs.length} درخواست</span>
-                                  </div>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  {hasEssential ? (
-                                    <span className="bg-red-50 text-red-700 border border-red-200 font-black text-[10px] px-3 py-1 rounded-full">دارای اولویت بالا ★</span>
-                                  ) : (
-                                    <span className="bg-slate-100 text-slate-600 font-bold text-[10px] px-3 py-1 rounded-full">عادی</span>
-                                  )}
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    <button
-                                      onClick={() => {
-                                        setShowSplitRequests(true);
-                                      }}
-                                      className="text-indigo-600 hover:bg-indigo-50 border border-indigo-100 bg-white text-xs font-bold px-2.5 py-1.5 rounded-xl transition-all cursor-pointer"
-                                      title="مشاهده تفکیکی"
-                                    >
-                                      مشاهده و افراز
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteAllPersonRequests(pid, `${p.firstName} ${p.lastName}`)}
-                                      className="text-red-500 hover:text-red-700 bg-white border border-red-100 hover:bg-red-50 p-1.5 rounded-xl transition-all cursor-pointer"
-                                      title="حذف کلیه درخواست‌ها"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          });
-                        })()
-                      ) : (
-                        (() => {
-                          const filteredRequests = requests.filter(r => {
-                            if (role === 'personnel' && selectedPersonnelUser) {
-                              return r.personnelId === selectedPersonnelUser.id;
-                            }
-                            return true;
-                          });
-
-                          if (filteredRequests.length === 0) {
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
-                                  هیچ درخواستی برای این ماه ثبت نشده است.
-                                </td>
-                              </tr>
-                            );
-                          }
-
-                          return filteredRequests.map(r => {
-                            const p = personnel.find(per => per.id === r.personnelId);
-                            if (!p) return null;
-
-                            return (
-                              <tr key={r.id} className="hover:bg-slate-50/50 transition-colors animate-fadeIn">
-                                <td className="px-6 py-3.5">
-                                  <span className="font-extrabold text-slate-800">{p.firstName} {p.lastName}</span>
-                                  <span className="text-xs text-slate-400 block mt-0.5">{p.personalCode}</span>
-                                </td>
-                                <td className="px-6 py-3.5 text-slate-600">
-                                  {r.requestType === 'shift' && <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded text-xs">تعیین شیفت</span>}
-                                  {r.requestType === 'avoid_shift' && <span className="bg-rose-50 text-rose-700 border border-rose-100 font-bold px-2 py-0.5 rounded text-xs">نبودن در شیفت</span>}
-                                  {/* نوع آف (سخت/نرم) فقط برای سرپرستار و مدیر؛ پرسنل فقط «آف» می‌بیند */}
-                                  {r.requestType === 'OFF' && (role === 'admin' || role === 'headnurse') ? (
-                                    r.offHardness === 'hard'
-                                      ? <span className="bg-red-50 text-red-700 border border-red-200 font-black px-2 py-0.5 rounded text-xs">🔴 آف سخت (Hard OFF)</span>
-                                      : r.offHardness === 'soft'
-                                        ? <span className="bg-amber-50 text-amber-700 border border-amber-200 font-black px-2 py-0.5 rounded text-xs">🟡 آف نرم (Soft OFF)</span>
-                                        : <span className="bg-red-50 text-red-700 border border-red-200 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>
-                                  ) : r.requestType === 'OFF' ? (
-                                    <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2 py-0.5 rounded text-xs">درخواست آف</span>
-                                  ) : null}
-                                  {r.requestType === 'leave' && <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded text-xs">درخواست مرخصی</span>}
-                                  {r.requestType === 'pattern' && <span className="bg-violet-50 text-violet-700 border border-violet-100 font-bold px-2 py-0.5 rounded text-xs">الگوی شیفت</span>}
-                                </td>
-                                <td className="px-6 py-3.5 font-semibold text-slate-700">
-                                  {r.requestType === 'pattern' ? (
-                                    <span className="text-violet-700 font-bold">{r.patternSteps?.join(' / ') || 'الگوی سفارشی'}</span>
-                                  ) : r.requestType === 'avoid_shift' ? (
-                                    <span className="text-rose-600 font-bold">شیفت {getShiftLabel(r.preferredShift)} نباشم</span>
-                                  ) : (
-                                    getShiftLabel(r.preferredShift)
-                                  )}
-                                </td>
-                                <td className="px-6 py-3.5 text-slate-600 text-xs font-bold text-slate-500">
-                                  {r.scope === 'range'
-                                    ? `از ${r.startDate} تا ${r.endDate}`
-                                    : r.scope === 'custom_days'
-                                      ? `تاریخ‌های ${formatDayList(r.selectedDays)}`
-                                      : SCOPE_LABELS[r.scope as string] || ''}
-                                  {/* توضیحات کاربر؛ هم برای خودش و هم برای سرپرستار قابل مشاهده */}
-                                  {r.note?.trim() && (
-                                    <span className="mt-1.5 block rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold leading-5 text-amber-800">
-                                      📝 {r.note}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-6 py-3.5 text-center">
-                                  {(role === 'admin' || role === 'headnurse') ? (
-                                    <button
-                                      onClick={async () => {
-                                        const updatedReq = { ...r, isEssential: !r.isEssential };
-                                        const updatedList = requests.map(item => item.id === r.id ? updatedReq : item);
-                                        await saveState(personnel, updatedList, settings, customHolidays, {
-                                          mode: 'refresh_personnel',
-                                          personnelIds: [r.personnelId]
-                                        });
-                                      }}
-                                      className={`px-3 py-1.5 rounded-full text-[10px] font-black transition-all border cursor-pointer ${
-                                        r.isEssential
-                                          ? 'bg-red-500 text-white border-red-500 hover:bg-red-650 shadow-xs'
-                                          : 'bg-slate-50 text-slate-500 border-slate-205 hover:bg-slate-100'
-                                      }`}
-                                    >
-                                      {r.isEssential ? '★ ضروری (اولویت بالا)' : '☆ عادی'}
-                                    </button>
-                                  ) : (
-                                    r.isEssential ? (
-                                      <span className="bg-red-50 text-red-700 border border-red-200 font-extrabold text-[10px] px-3 py-1 rounded-full">ضروری</span>
                                     ) : (
-                                      <span className="bg-slate-150 text-slate-600 font-bold text-[10px] px-3 py-1 rounded-full">عادی</span>
-                                    )
-                                  )}
-                                </td>
-                                <td className="px-6 py-3.5 text-center flex items-center justify-center gap-1">
-                                  {/* ویرایش نامحدود درخواست تا پیش از اتمام مهلت */}
-                                  <button
-                                    onClick={() => handleOpenRequestEditor(r)}
-                                    disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
-                                    className="text-sky-600 hover:text-sky-800 disabled:text-slate-300 disabled:cursor-not-allowed p-1.5 rounded-lg hover:bg-sky-50 transition-colors cursor-pointer"
-                                    title="ویرایش درخواست روی تقویم"
-                                    id={`btn-edit-req-${r.id}`}
-                                  >
-                                    <Edit className="w-4 h-4" />
-                                  </button>
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
+                                        عادی
+                                      </span>
+                                    )}
+                                    <span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                                      {toPersianDigits(pReqs.length)} درخواست
+                                    </span>
+                                  </div>
+                                </div>
 
+                                {/* پیش‌نمایش در حالت غیرفعال */}
+                                <div className="p-5 space-y-4">
+                                  <div className="space-y-2">
+                                    <p className="text-xs font-bold text-slate-600 leading-6 line-clamp-2">
+                                      {pReqs.map(r => formatRequestConversational(r)).join(' — ')}
+                                    </p>
+
+                                    {notesList.length > 0 && (
+                                      <div className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded-xl line-clamp-1">
+                                        📝 {notesList[0]}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] font-bold text-slate-400">
+                                    <span>ثبت: {formatJalaliDateTime(earliestCreated)}</span>
+                                    <span className="text-indigo-600 font-black group-hover:translate-x-1 transition-transform">
+                                      باز کردن تمام صفحه ◄
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* مودال تمام‌صفحه / وسط صفحه با تمام جزئیات کارت کلیک‌شده */}
+                        {activePerson && (
+                          <div
+                            className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/80 backdrop-blur-md animate-fadeIn"
+                            onClick={() => setExpandedCardPersonnelId(null)}
+                          >
+                            <div
+                              className="relative max-w-2xl w-full bg-slate-900 text-white border-2 border-amber-400/80 rounded-[2.5rem] shadow-2xl overflow-hidden p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto animate-scaleUp"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              {/* سربرگ مودال */}
+                              <div className="flex items-start justify-between gap-4 border-b border-white/15 pb-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-xl sm:text-2xl font-black text-amber-300">
+                                    {activePerson.firstName} {activePerson.lastName}
+                                  </h3>
+                                  <p className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                                    <span>کد پرسنلی: <span className="font-mono text-white">{toPersianDigits(activePerson.personalCode)}</span></span>
+                                    <span>•</span>
+                                    <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-black border border-indigo-400/30">
+                                      {activePerson.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
+                                    </span>
+                                  </p>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedCardPersonnelId(null)}
+                                  className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-colors shrink-0 cursor-pointer"
+                                  title="بستن"
+                                >
+                                  <X className="w-5 h-5" />
+                                </button>
+                              </div>
+
+                              {/* لیست کامل درخواست‌ها با دکمه ویرایش و اولویت مجزا */}
+                              <div className="space-y-3">
+                                <div className="text-xs font-black text-amber-300 flex items-center justify-between border-b border-amber-400/20 pb-2">
+                                  <span>📜 شرح کامل درخواست‌ها:</span>
+                                  <span className="text-[11px] text-slate-300 font-bold">{toPersianDigits(activeReqs.length)} مورد</span>
+                                </div>
+
+                                <ul className="space-y-3">
+                                  {activeReqs.map(r => (
+                                    <li key={`modal-req-${r.id}`} className="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-3 text-xs text-slate-100 leading-6">
+                                      <div className="font-extrabold text-amber-200 flex items-start justify-between gap-3">
+                                        <span className="flex-1">• {formatRequestConversational(r)}</span>
+
+                                        {/* دکمه ویرایش درخواست رو تقویم */}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setExpandedCardPersonnelId(null);
+                                            handleOpenRequestEditor(r);
+                                          }}
+                                          disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
+                                          className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-black bg-sky-500/20 hover:bg-sky-500 text-sky-200 hover:text-white transition-all cursor-pointer flex items-center gap-1 border border-sky-400/30 active:scale-95"
+                                          title="ویرایش این درخواست روی تقویم"
+                                        >
+                                          <Edit className="w-3.5 h-3.5" />
+                                          <span>ویرایش</span>
+                                        </button>
+                                      </div>
+
+                                      {/* اولویت‌بندی مجزا برای همین درخواست + نوع آف */}
+                                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10 text-[11px]">
+                                        <div className="flex items-center gap-2">
+                                          {r.requestType === 'OFF' && (
+                                            <span className={`px-2.5 py-0.5 rounded-full font-black ${
+                                              r.offHardness === 'hard' ? 'bg-rose-500 text-white' : 'bg-amber-500 text-slate-900'
+                                            }`}>
+                                              {r.offHardness === 'hard' ? '🔴 آف قطعی' : '🟡 آف ترجیحی'}
+                                            </span>
+                                          )}
+                                          {r.isEssential && (
+                                            <span className="bg-rose-500/80 text-white px-2.5 py-0.5 rounded-full font-black">
+                                              ★ اولویت بالا
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {(role === 'headnurse' || role === 'admin') && (
+                                          <div className="flex items-center gap-2">
+                                            {/* اولویت مجزای همین درخواست */}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleToggleSingleRequestPriority(r.id)}
+                                              className={`px-3 py-1.5 rounded-xl font-black transition-all cursor-pointer ${
+                                                r.isEssential
+                                                  ? 'bg-rose-500 text-white hover:bg-rose-600'
+                                                  : 'bg-white/15 text-slate-200 hover:bg-white/25 border border-white/20'
+                                              }`}
+                                              title="تغییر اولویت مجزا برای همین درخواست"
+                                            >
+                                              {r.isEssential ? '★ اولویت بالا' : '☆ اولویت عادی'}
+                                            </button>
+
+                                            {/* آف ترجیحی/قطعی مجزا برای همین درخواست */}
+                                            {r.requestType === 'OFF' && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleSetSingleRequestOffHardness(r.id, r.offHardness === 'hard' ? 'soft' : 'hard')}
+                                                className="px-3 py-1.5 rounded-xl font-black bg-amber-400 hover:bg-amber-500 text-slate-950 transition-all cursor-pointer"
+                                                title="تغییر نوع آف"
+                                              >
+                                                {r.offHardness === 'hard' ? '🟡 آف ترجیحی' : '🔴 آف قطعی'}
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+
+                                {/* نمایش توضیحات اضافی پرسنل */}
+                                {[...new Set(activeReqs.map(r => r.note?.trim()).filter(Boolean))].length > 0 && (
+                                  <div className="bg-amber-400/15 border border-amber-400/40 p-4 rounded-2xl space-y-1">
+                                    <div className="text-xs font-black text-amber-300">📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</div>
+                                    <p className="text-xs font-bold text-amber-100 leading-6">
+                                      {[...new Set(activeReqs.map(r => r.note?.trim()).filter(Boolean))].join(' — ')}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* تاریخ و ساعت ثبت و ویرایش */}
+                              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-1.5 text-xs font-extrabold text-slate-300">
+                                <div>📅 تاریخ و ساعت ثبت: <span className="font-mono text-white">{formatJalaliDateTime(activeReqs.map(r => r.createdAt).filter(Boolean).sort()[0])}</span></div>
+                                <div>✏️ تاریخ و ساعت آخرین ویرایش: <span className="font-mono text-white">{formatJalaliDateTime(activeReqs.map(r => r.updatedAt).filter(Boolean).sort().reverse()[0] || activeReqs.map(r => r.createdAt).filter(Boolean).sort()[0])}</span></div>
+                              </div>
+
+                              {/* دکمه‌های پایانی سرپرستار */}
+                              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-white/15">
+                                {(role === 'headnurse' || role === 'admin') && (
                                   <button
-                                    onClick={() => setDeleteTarget({
-                                      id: r.id,
-                                      type: 'request',
-                                      label: `درخواست پرسنل ${p.firstName} ${p.lastName}`
-                                    })}
-                                    className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
-                                    title="حذف درخواست"
-                                    id={`btn-delete-req-${r.id}`}
+                                    type="button"
+                                    onClick={() => {
+                                      handleDeleteAllPersonRequests(activePerson.id, `${activePerson.firstName} ${activePerson.lastName}`);
+                                      setExpandedCardPersonnelId(null);
+                                    }}
+                                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-black bg-rose-500/20 text-rose-300 hover:bg-rose-500 hover:text-white border border-rose-500/40 transition-all cursor-pointer flex items-center justify-center gap-2"
                                   >
                                     <Trash2 className="w-4 h-4" />
+                                    <span>حذف کامل کلیه درخواست‌ها</span>
                                   </button>
-                                </td>
-                              </tr>
-                            );
-                          });
-                        })()
-                      )}
-                    </tbody>
-                  </table>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedCardPersonnelId(null)}
+                                  className="w-full sm:w-auto mr-auto px-6 py-2.5 rounded-xl text-xs font-black bg-amber-400 text-slate-950 hover:bg-amber-300 transition-all cursor-pointer text-center"
+                                >
+                                  بستن و بازگشت
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* ====== نسخهٔ چاپی PDF جهت خروجی چاپ عامیانه ====== */}
+                <div className="hidden print:block space-y-6 text-slate-900 p-6 bg-white dir-rtl" dir="rtl">
+                  <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
+                    <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
+                    <p className="text-xs font-bold text-slate-600">
+                      برنامه‌ریزی {JALALI_MONTH_NAMES[currentMonth - 1]} سال {toPersianDigits(currentYear)} — تمامی درخواست‌های ثبت‌شده بدون ابهام
+                    </p>
+                  </div>
+
+                  <div className="space-y-6">
+                    {Array.from(new Set(requests.map(r => r.personnelId))).map(pid => {
+                      const p = personnel.find(per => per.id === pid);
+                      if (!p) return null;
+                      const pReqs = requests.filter(r => r.personnelId === pid);
+                      const hasEssential = pReqs.some(r => r.isEssential);
+                      const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
+
+                      const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
+                      const updatedAtDates = pReqs.map(r => r.updatedAt).filter(Boolean);
+                      const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
+                      const latestUpdated = updatedAtDates.length > 0 ? updatedAtDates.sort().reverse()[0] : undefined;
+
+                      return (
+                        <div key={`print-card-${pid}`} className="border-2 border-slate-800 rounded-2xl p-5 space-y-3 break-inside-avoid bg-slate-50/50">
+                          <div className="flex items-center justify-between border-b border-slate-300 pb-2">
+                            <div>
+                              <h3 className="text-base font-black text-slate-900">
+                                {p.firstName} {p.lastName} <span className="text-xs font-bold text-slate-600">({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})</span>
+                              </h3>
+                              <p className="text-xs font-bold text-slate-500">کد پرسنلی: {toPersianDigits(p.personalCode)}</p>
+                            </div>
+                            <div>
+                              {hasEssential ? (
+                                <span className="border-2 border-rose-600 text-rose-700 bg-rose-50 font-black text-xs px-3 py-1 rounded-full">
+                                  ★ دارای اولویت بالا
+                                </span>
+                              ) : (
+                                <span className="border border-slate-300 text-slate-700 font-bold text-xs px-3 py-1 rounded-full">
+                                  عادی
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <h4 className="text-xs font-black text-slate-800">📌 شرح دقیق درخواست‌ها:</h4>
+                            <ul className="list-disc list-inside space-y-1.5 text-xs font-bold leading-6 text-slate-800">
+                              {pReqs.map(r => (
+                                <li key={`print-req-${r.id}`}>
+                                  {formatRequestConversational(r)}
+                                  {r.requestType === 'OFF' && (
+                                    <span className="mr-1 text-[10px] font-black text-slate-600">
+                                      ({r.offHardness === 'hard' ? 'نوع: آف قطعی 🔴' : 'نوع: آف ترجیحی 🟡'})
+                                    </span>
+                                  )}
+                                  {r.isEssential && (
+                                    <span className="mr-1 text-[10px] font-black text-rose-700">
+                                      [اولویت بالا ★]
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+
+                          {notesList.length > 0 && (
+                            <div className="border border-amber-300 bg-amber-50/80 p-3 rounded-xl text-xs font-bold text-amber-900">
+                              <b>📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</b>
+                              <p className="mt-1 leading-6">{notesList.join(' — ')}</p>
+                            </div>
+                          )}
+
+                          <div className="text-[10px] font-bold text-slate-500 border-t border-slate-200 pt-2 flex flex-wrap items-center justify-between gap-2">
+                            <span>📅 تاریخ و ساعت ثبت: {formatJalaliDateTime(earliestCreated)}</span>
+                            <span>✏️ تاریخ و ساعت آخرین ویرایش: {formatJalaliDateTime(latestUpdated || earliestCreated)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -7280,26 +7632,7 @@ export default function Home() {
                 </form>
               </div>
 
-              {/* «تعریف تقویم و مناسبت‌های تعطیل انتخابی» به تب «مدیریت تقویم و تعطیلات» منتقل شد. */}
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100 flex items-center gap-2">
-                    <CalendarIcon className="w-5 h-5 text-emerald-600" /> تعریف تقویم و مناسبت‌های تعطیل انتخابی
-                  </h3>
-                  <p className="text-xs font-bold leading-6 text-slate-500 mt-3">
-                    این بخش به تب «مدیریت تقویم و تعطیلات» منتقل شده است تا همه‌ی تنظیمات تقویم، تعطیلات رسمی کشور،
-                    مناسبت‌های تعطیل انتخابی بخش و محاسبه ساعت موظفی در یک صفحه مدیریت شوند.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('calendar')}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
-                  id="btn-go-to-calendar-tab"
-                >
-                  <CalendarIcon className="w-4 h-4" /> رفتن به مدیریت تقویم و تعطیلات
-                </button>
-              </div>
+
 
               <div className="lg:col-span-2 bg-white border border-rose-200 rounded-3xl p-6 shadow-sm space-y-5">
                 <div>
@@ -7545,7 +7878,7 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                  <div className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 space-y-3 max-w-full overflow-hidden">
                     <div>
                       <h5 className="text-xs font-black text-slate-800 font-sans">تقویم تعاملی {JALALI_MONTH_NAMES[currentMonth - 1]} (کلیک جهت تعیین تعطیلی):</h5>
                       <p className="text-[10px] text-slate-400 mt-1">
@@ -7555,30 +7888,34 @@ export default function Home() {
                       </p>
                     </div>
 
-                    <JalaliCalendar
-                      idPrefix="holiday-settings"
-                      year={currentYear}
-                      month={currentMonth}
-                      days={calendarDays}
-                      occasions={calendarOccasions}
-                      holidays={customHolidays}
-                      status={officialCalendarState.status}
-                      onMonthChange={handleCalendarNavigate}
-                      size="md"
-                      onDayClick={day => {
-                        const dayInfo = calendarDays.find(item => item.day === day);
-                        if (!canManageHolidays || dayInfo?.dayOfWeek === 6) return;
-                        handleToggleHoliday(day);
-                      }}
-                      getDayDecoration={dayInfo => {
-                        const isFriday = dayInfo.dayOfWeek === 6;
-                        const source = holidaySource(officialHolidays, holidayOverrides, dayInfo.day);
-                        return {
-                          disabled: isFriday || !canManageHolidays,
-                          label: isFriday ? 'جمعه' : source === 'official' ? 'تعطیل رسمی' : source === 'custom' ? 'تعطیل بخش' : 'روز کاری',
-                        };
-                      }}
-                    />
+                    <div className="w-full overflow-x-auto">
+                      <JalaliCalendar
+                        idPrefix="holiday-settings"
+                        year={currentYear}
+                        month={currentMonth}
+                        days={calendarDays}
+                        occasions={calendarOccasions}
+                        holidays={customHolidays}
+                        status={officialCalendarState.status}
+                        onMonthChange={handleCalendarNavigate}
+                        size="sm"
+                        showControls={false}
+                        showOccasionList={false}
+                        onDayClick={day => {
+                          const dayInfo = calendarDays.find(item => item.day === day);
+                          if (!canManageHolidays || dayInfo?.dayOfWeek === 6) return;
+                          handleToggleHoliday(day);
+                        }}
+                        getDayDecoration={dayInfo => {
+                          const isFriday = dayInfo.dayOfWeek === 6;
+                          const source = holidaySource(officialHolidays, holidayOverrides, dayInfo.day);
+                          return {
+                            disabled: isFriday || !canManageHolidays,
+                            label: isFriday ? 'جمعه' : source === 'official' ? 'تعطیل رسمی' : source === 'custom' ? 'تعطیل بخش' : 'روز کاری',
+                          };
+                        }}
+                      />
+                    </div>
 
                     <div className="flex flex-wrap gap-3 pt-1 text-[9px] font-bold text-slate-500">
                       <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-rose-100 ring-1 ring-rose-300" /> تعطیل</span>
@@ -8267,11 +8604,11 @@ export default function Home() {
                 </div>
               )}
 
-              {/* ====== انتخاب نوع آف: Hard OFF / Soft OFF ====== */}
+              {/* ====== انتخاب نوع آف: قطعی / ترجیحی ====== */}
               {(role === 'admin' || role === 'headnurse') && reqType === 'OFF' && (
                 <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-3 space-y-2">
                   <div className="text-xs font-black text-amber-800">
-                    🔒 نوع آف قطعی: سرپرستار تعیین می‌کند که آف سخت (Hard OFF) یا نرم (Soft OFF) باشد.
+                    🔒 نوع آف: سرپرستار تعیین می‌کند که آف قطعی یا ترجیحی باشد.
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -8283,7 +8620,7 @@ export default function Home() {
                           : 'bg-white text-red-600 border-red-200 hover:bg-red-50'
                       }`}
                     >
-                      🔴 آف سخت (Hard OFF)
+                      🔴 آف قطعی (Hard OFF)
                       <div className={`text-[10px] mt-1 ${reqOffHardness === 'hard' ? 'text-white/80' : 'text-red-400'}`}>
                         Solver حق نقض ندارد — قطعی و غیرقابل تغییر
                       </div>
@@ -8297,7 +8634,7 @@ export default function Home() {
                           : 'bg-white text-amber-600 border-amber-200 hover:bg-amber-50'
                       }`}
                     >
-                      🟡 آف نرم (Soft OFF)
+                      🟡 آف ترجیحی (Soft OFF)
                       <div className={`text-[10px] mt-1 ${reqOffHardness === 'soft' ? 'text-white/80' : 'text-amber-400'}`}>
                         Solver می‌تواند در بن‌بست نقض کند — ترجیحی ولی قابل تغییر
                       </div>
@@ -8305,7 +8642,7 @@ export default function Home() {
                   </div>
                   {!reqOffHardness && (
                     <div className="text-[10px] font-bold text-amber-600 bg-amber-100 px-3 py-1.5 rounded-lg">
-                      ⚠️ لطفاً نوع آف را انتخاب کنید. بدون انتخاب، آف به‌صورت پیش‌فرض سخت (Hard OFF) تلقی می‌شود.
+                      ⚠️ لطفاً نوع آف را انتخاب کنید. بدون انتخاب، آف به‌صورت پیش‌فرض قطعی (Hard OFF) تلقی می‌شود.
                     </div>
                   )}
                 </div>
