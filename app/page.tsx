@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import TehranDateTime from './components/TehranDateTime';
+import AnimatedCalendarIcon from './components/AnimatedCalendarIcon';
 import { ResetRequestList } from './components/auth/ResetRequestList';
 import { useResetRequestCount } from './components/auth/useResetRequestCount';
 import { WelcomeOverlay } from './components/auth/WelcomeOverlay';
@@ -5459,114 +5460,133 @@ export default function Home() {
           </div>
         </header>
 
-        <div className={`border-b px-4 sm:px-6 py-2.5 flex flex-col print:hidden shrink-0 shadow-2xs ${monthTheme.frameBorder} ${monthTheme.frameBackground}`}>
-          <div className="flex flex-wrap items-center gap-3">
-            {/* متن راهنما با رنگ پررنگ */}
-            <span className="text-xs sm:text-sm font-black text-slate-800 shrink-0">
-              ماه و سال مورد نظر را انتخاب کنید:
-            </span>
+        {/* ========== کارت پریمیوم انتخاب بازه برنامه‌ریزی (فقط UI) ========== */}
+        <div className="px-4 sm:px-6 py-4 print:hidden shrink-0 bg-[#F7FAF9] border-b border-[#E8F1EE]" dir="rtl">
+          <section
+            aria-label="انتخاب بازه برنامه‌ریزی"
+            title={monthTheme.seasonLabel}
+            className="relative overflow-hidden rounded-[24px] border border-[#EEF2F5] bg-white px-6 py-6 sm:px-7 sm:py-7 shadow-[0_8px_30px_rgba(15,23,42,0.04)] animate-period-select"
+          >
+            {/* هاله تزئینی بسیار ملایم گوشه */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -left-16 -top-16 h-40 w-40 rounded-full bg-gradient-to-br from-[#14B88A]/10 to-transparent blur-2xl"
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -bottom-20 -right-10 h-44 w-44 rounded-full bg-gradient-to-tl from-[#0F9D7A]/08 to-transparent blur-2xl"
+            />
 
-            {/* انتخاب سال */}
-            <div className="flex items-center gap-1.5 bg-white/80 border border-slate-200 rounded-full px-2 py-1 shrink-0 shadow-2xs">
-              <button
-                type="button"
-                onClick={() => handleCalendarNavigate(currentYear - 1, currentMonth)}
-                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer"
-                title="سال قبل"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-              <select
-                value={currentYear}
-                onChange={event => handleCalendarNavigate(Number(event.target.value), currentMonth)}
-                className="cursor-pointer bg-transparent text-xs font-black text-slate-800 outline-none"
-                aria-label="انتخاب سال"
-              >
-                {navYearOptions.map(option => (
-                  <option key={`nav-year-${option}`} value={option}>{toPersianDigits(option)}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => handleCalendarNavigate(currentYear + 1, currentMonth)}
-                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer"
-                title="سال بعد"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            </div>
+            {/* ردیف اصلی: عنوان (راست) | دراپ‌داون‌ها (وسط) | آیکون (چپ) */}
+            <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:gap-6 lg:gap-8">
+              {/* عنوان — راست در دسکتاپ */}
+              <div className="order-1 flex min-w-0 shrink-0 flex-col gap-3 md:max-w-[220px] lg:max-w-[260px]">
+                <div className="space-y-1.5 text-right">
+                  <h2
+                    className="text-base sm:text-lg font-black tracking-tight text-[#1F2937]"
+                    style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
+                  >
+                    انتخاب بازه برنامه‌ریزی
+                  </h2>
+                  <p className="text-xs sm:text-[13px] font-medium leading-6 text-slate-500">
+                    سال و ماه مورد نظر را انتخاب کنید
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const today = todayJalali();
+                    handleCalendarNavigate(today.year, today.month);
+                    setIsMonthDrawerOpen(false);
+                  }}
+                  className="period-today-btn inline-flex w-fit items-center gap-1.5 rounded-full border border-[#E8F1EE] bg-white px-3.5 py-1.5 text-[11px] font-bold text-slate-600 cursor-pointer"
+                  title="بازگشت به ماه جاری"
+                  aria-label="پریدن به ماه جاری"
+                >
+                  <CalendarIcon className="h-3.5 w-3.5 text-[#0F9D7A]" strokeWidth={2} />
+                  امروز
+                </button>
+              </div>
 
-            <div className="w-px h-5 bg-slate-200/80 shrink-0 hidden sm:block"></div>
+              {/* دراپ‌داون‌ها — مرکز */}
+              <div className="order-2 flex min-w-0 flex-1 flex-col gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-3">
+                  {/* سال */}
+                  <label className="flex min-w-0 flex-col gap-1.5">
+                    <span className="sr-only">سال</span>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute inset-y-0 right-3.5 z-[1] flex items-center text-[#0F9D7A]">
+                        <CalendarIcon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </span>
+                      <select
+                        value={currentYear}
+                        onChange={event => handleCalendarNavigate(Number(event.target.value), currentMonth)}
+                        className="period-select h-14 w-full cursor-pointer appearance-none rounded-2xl border border-[#E8F1EE] bg-white py-2 pr-11 pl-9 text-sm font-black text-[#1F2937] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        aria-label="انتخاب سال"
+                      >
+                        {navYearOptions.map(option => (
+                          <option key={`nav-year-${option}`} value={option}>
+                            {toPersianDigits(option)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-slate-400">
+                        <ChevronDown className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </label>
 
-            {/* انتخاب ماه — خلاصه‌شده در یک دکمه واحد دقیقا مانند دکمه سال */}
-            <div className="flex items-center gap-1.5 bg-white/90 border border-slate-200 rounded-full px-2 py-1 shrink-0 shadow-2xs">
-              <button
-                type="button"
-                onClick={() => {
-                  const prevM = currentMonth === 1 ? 12 : currentMonth - 1;
-                  const prevY = currentMonth === 1 ? currentYear - 1 : currentYear;
-                  handleCalendarNavigate(prevY, prevM);
-                }}
-                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer rounded-full hover:bg-slate-100"
-                title="ماه قبل"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+                  {/* ماه */}
+                  <label className="flex min-w-0 flex-col gap-1.5">
+                    <span className="sr-only">ماه</span>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute inset-y-0 right-3.5 z-[1] flex items-center text-[#0F9D7A]">
+                        <CalendarIcon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </span>
+                      <select
+                        value={currentMonth}
+                        onChange={event => {
+                          handleSelectMonth(Number(event.target.value));
+                          setIsMonthDrawerOpen(false);
+                        }}
+                        className="period-select h-14 w-full cursor-pointer appearance-none rounded-2xl border border-[#E8F1EE] bg-white py-2 pr-11 pl-9 text-sm font-black text-[#1F2937] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        aria-label="انتخاب ماه"
+                      >
+                        {JALALI_MONTH_NAMES.map((name, idx) => (
+                          <option key={`nav-month-${name}`} value={idx + 1}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-slate-400">
+                        <ChevronDown className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </label>
+                </div>
 
-              <button
-                type="button"
-                onClick={() => setIsMonthDrawerOpen(prev => !prev)}
-                className={`px-3 py-1 rounded-full text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${monthTheme.chip}`}
-                aria-expanded={isMonthDrawerOpen}
-                title="تغییر ماه و انتخاب از کشو"
-              >
-                <span>{JALALI_MONTH_NAMES[currentMonth - 1]}</span>
-                <span className={`transition-transform duration-200 text-[10px] ${isMonthDrawerOpen ? 'rotate-180' : ''}`}>▼</span>
-              </button>
+                {/* بج وضعیت — زیر دراپ‌داون‌ها */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-2 rounded-full border border-[#E8F1EE] bg-[#F0FDF8] px-3.5 py-1.5 text-[12px] font-medium text-[#0F9D7A]">
+                    <CalendarIcon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                    <span>
+                      در حال مشاهده برنامه{' '}
+                      <b className="font-black">
+                        {JALALI_MONTH_NAMES[currentMonth - 1]} {toPersianDigits(currentYear)}
+                      </b>
+                    </span>
+                  </span>
+                </div>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  const nextM = currentMonth === 12 ? 1 : currentMonth + 1;
-                  const nextY = currentMonth === 12 ? currentYear + 1 : currentYear;
-                  handleCalendarNavigate(nextY, nextM);
-                }}
-                className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer rounded-full hover:bg-slate-100"
-                title="ماه بعد"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* کشوی بازشوندهٔ انتخاب ماه (انیمیشن کشویی و شبکه‌ای کاملاً بدون اسکرول افقی) */}
-          {isMonthDrawerOpen && (
-            <div className="mt-2.5 pt-2.5 border-t border-slate-200/60 animate-fadeIn">
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 bg-white/90 p-3 rounded-2xl border border-slate-200/80 shadow-md">
-                {JALALI_MONTH_NAMES.map((name, idx) => {
-                  const mNum = idx + 1;
-                  const isActive = currentMonth === mNum;
-                  return (
-                    <button
-                      key={`drawer-month-${name}`}
-                      type="button"
-                      onClick={() => {
-                        handleSelectMonth(mNum);
-                        setIsMonthDrawerOpen(false);
-                      }}
-                      className={`px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer text-center border ${
-                        isActive
-                          ? `bg-gradient-to-l ${getCalendarTheme(mNum).headerGradient} text-white border-transparent shadow-md scale-102`
-                          : `${getCalendarTheme(mNum).chip} hover:scale-102`
-                      }`}
-                    >
-                      {name}
-                    </button>
-                  );
-                })}
+              {/* آیکون سه‌بعدی انیمیشنی — چپ در دسکتاپ */}
+              <div className="order-3 flex shrink-0 items-center justify-center self-center md:self-center">
+                <AnimatedCalendarIcon className="md:hidden" size={80} />
+                <AnimatedCalendarIcon className="hidden md:block lg:hidden" size={92} />
+                <AnimatedCalendarIcon className="hidden lg:block" size={108} />
               </div>
             </div>
-          )}
+          </section>
         </div>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">

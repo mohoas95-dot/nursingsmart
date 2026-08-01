@@ -101,6 +101,181 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* --- آیکون سه‌بعدی تقویم (کارت انتخاب بازه برنامه‌ریزی) --- */
+@keyframes cal-float {
+  0%, 100% { transform: translateY(0) rotate(-1deg); }
+  50% { transform: translateY(-5px) rotate(1deg); }
+}
+
+@keyframes cal-shadow {
+  0%, 100% { transform: scaleX(1); opacity: 0.12; }
+  50% { transform: scaleX(0.88); opacity: 0.08; }
+}
+
+@keyframes cal-pulse-cell {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@keyframes cal-check-pop {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+@keyframes period-select-open {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-cal-float {
+  animation: cal-float 4.2s ease-in-out infinite;
+}
+
+.animate-cal-shadow {
+  animation: cal-shadow 4.2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.animate-cal-pulse {
+  animation: cal-pulse-cell 2.8s ease-in-out infinite;
+}
+
+.animate-cal-check {
+  animation: cal-check-pop 3.2s ease-in-out infinite;
+}
+
+.animate-period-select {
+  animation: period-select-open 200ms ease forwards;
+}
+
+/* فوکوس و هاور کنترل‌های کارت بازه برنامه‌ریزی */
+.period-select {
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 200ms ease, background-color 150ms ease;
+}
+
+.period-select:hover {
+  border-color: #14B88A;
+  box-shadow: 0 4px 14px rgba(15, 157, 122, 0.10);
+}
+
+.period-select:focus {
+  outline: none;
+  border-color: #0F9D7A;
+  box-shadow: 0 0 0 3px rgba(15, 157, 122, 0.18), 0 4px 14px rgba(15, 157, 122, 0.10);
+  transform: scale(1.01);
+}
+
+.period-today-btn {
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 200ms ease, box-shadow 150ms ease;
+}
+
+.period-today-btn:hover {
+  background-color: #F0FDF8;
+  border-color: #14B88A;
+  color: #0F9D7A;
+}
+
+.period-today-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(15, 157, 122, 0.22);
+}
+
+.period-today-btn:active {
+  transform: scale(0.98);
+}
+
+/* ==========================================================================
+   کارت تاریخ/ساعت تهران (TehranDateTime) — پریمیوم
+   انیمیشن‌ها فقط با transform/opacity برای ۶۰fps
+   ========================================================================== */
+
+.tdt-card {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+  will-change: transform;
+}
+
+.tdt-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.16) !important;
+}
+
+/* شناوری بسیار ملایم قاب ساعت */
+.tdt-clock {
+  animation: tdt-clock-float 6s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes tdt-clock-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+/* حرکت پیوستهٔ عقربهٔ ثانیه بین تیک‌های ۱ثانیه‌ای */
+.tdt-second-hand {
+  transition: transform 1s linear;
+  will-change: transform;
+}
+
+/* موج‌های آرام پس‌زمینه — لایه‌های با سرعت متفاوت */
+.tdt-wave {
+  will-change: transform;
+}
+
+.tdt-wave-1 {
+  animation: tdt-wave-drift-a 18s ease-in-out infinite alternate;
+  opacity: 1;
+}
+
+.tdt-wave-2 {
+  animation: tdt-wave-drift-b 14s ease-in-out infinite alternate;
+  opacity: 1;
+}
+
+.tdt-wave-3 {
+  animation: tdt-wave-drift-c 20s ease-in-out infinite alternate;
+  opacity: 1;
+}
+
+@keyframes tdt-wave-drift-a {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(4%, -2%, 0) scale(1.03); }
+}
+
+@keyframes tdt-wave-drift-b {
+  0% { transform: translate3d(0, 0, 0) scale(1.02); }
+  100% { transform: translate3d(-5%, 3%, 0) scale(1); }
+}
+
+@keyframes tdt-wave-drift-c {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(3%, 4%, 0); }
+}
+
+/* دکمهٔ تقویم شیشه‌ای + ریپل کلیک */
+.tdt-cal-btn {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tdt-ripple {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0) 70%);
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tdt-cal-btn:active .tdt-ripple {
+  animation: tdt-ripple-burst 450ms ease-out;
+}
+
+@keyframes tdt-ripple-burst {
+  0% { transform: scale(0); opacity: 0.55; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
 .animate-fade-in,
 .animate-fadeIn {
   animation: calendar-fade-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -136,7 +311,30 @@
   .animate-overlay-pop,
   .animate-cloud-arrow,
   .animate-cloud-float,
-  .animate-indeterminate-bar {
+  .animate-indeterminate-bar,
+  .animate-cal-float,
+  .animate-cal-shadow,
+  .animate-cal-pulse,
+  .animate-cal-check,
+  .animate-period-select,
+  .tdt-clock,
+  .tdt-wave-1,
+  .tdt-wave-2,
+  .tdt-wave-3 {
+    animation: none !important;
+  }
+
+  .tdt-card,
+  .tdt-card:hover {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .tdt-second-hand {
+    transition: none !important;
+  }
+
+  .tdt-cal-btn:active .tdt-ripple {
     animation: none !important;
   }
 }
