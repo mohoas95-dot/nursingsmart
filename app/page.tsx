@@ -7164,6 +7164,7 @@ export default function Home() {
                                       <div className="font-extrabold text-amber-200 flex items-start justify-between gap-3">
                                         <span className="flex-1">• {formatRequestConversational(r)}</span>
 
+                                        <div className="flex shrink-0 items-center gap-1.5">
                                         {/* دکمه ویرایش درخواست رو تقویم */}
                                         <button
                                           type="button"
@@ -7172,11 +7173,11 @@ export default function Home() {
                                             handleOpenRequestEditor(r);
                                           }}
                                           disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
-                                          className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-black bg-sky-500/20 hover:bg-sky-500 text-sky-200 hover:text-white transition-all cursor-pointer flex items-center gap-1 border border-sky-400/30 active:scale-95"
+                                          className="shrink-0 h-7 w-7 rounded-lg bg-sky-500/20 hover:bg-sky-500 text-sky-200 hover:text-white transition-all cursor-pointer inline-flex items-center justify-center border border-sky-400/30 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                                           title="ویرایش این درخواست روی تقویم"
+                                          aria-label="ویرایش این درخواست"
                                         >
                                           <Edit className="w-3.5 h-3.5" />
-                                          <span>ویرایش</span>
                                         </button>
 
                                         {/* حذف همین درخواست (در دسترس پرسنل و سرپرستار) */}
@@ -7191,12 +7192,13 @@ export default function Home() {
                                             });
                                           }}
                                           disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
-                                          className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-black bg-rose-500/20 hover:bg-rose-500 text-rose-200 hover:text-white transition-all cursor-pointer flex items-center gap-1 border border-rose-400/30 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                                          className="shrink-0 h-7 w-7 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-200 hover:text-white transition-all cursor-pointer inline-flex items-center justify-center border border-rose-400/30 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                                           title="حذف این درخواست"
+                                          aria-label="حذف این درخواست"
                                         >
                                           <Trash2 className="w-3.5 h-3.5" />
-                                          <span>حذف</span>
                                         </button>
+                                        </div>
                                       </div>
 
                                       {/* اولویت‌بندی مجزا برای همین درخواست + نوع آف */}
