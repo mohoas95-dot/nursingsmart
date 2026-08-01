@@ -641,6 +641,24 @@ export default function Home() {
     return schedule;
   }, [schedule, personnel, currentScenarioNurse, currentScenarioAssistant, lockedRows]);
 
+  const globalActiveWarnings = React.useMemo(() => {
+    const all = new Set<string>();
+    if (schedule?.warnings) schedule.warnings.forEach(w => all.add(w));
+    if (currentScenarioNurse?.schedule?.warnings) currentScenarioNurse.schedule.warnings.forEach(w => all.add(w));
+    if (currentScenarioAssistant?.schedule?.warnings) currentScenarioAssistant.schedule.warnings.forEach(w => all.add(w));
+    if (nurseWorkflow) {
+      nurseWorkflow.scenarios.forEach(s => {
+        if (s.schedule?.warnings) s.schedule.warnings.forEach(w => all.add(w));
+      });
+    }
+    if (assistantWorkflow) {
+      assistantWorkflow.scenarios.forEach(s => {
+        if (s.schedule?.warnings) s.schedule.warnings.forEach(w => all.add(w));
+      });
+    }
+    return Array.from(all);
+  }, [schedule, currentScenarioNurse, currentScenarioAssistant, nurseWorkflow, assistantWorkflow]);
+
   // Compiled reports from current schedule dynamically and reactively
   React.useEffect(() => {
     if (!nurseWorkflow || nurseWorkflow.scenarios.length === 0) {
@@ -1004,8 +1022,8 @@ export default function Home() {
     if (sched) {
       // هشدارهای رفع‌شده نباید در حالتِ «نادیده‌گرفته‌شده» باقی بمانند؛ در غیر این‌صورت
       // اگر همان تخلف دوباره ساخته شود، بی‌صدا پنهان می‌ماند.
-      setDismissedWarnings(pruneDismissedWarnings(sched.warnings || [], sched.dismissedWarnings || []));
-      setDismissedAlertWarnings(prev => pruneDismissedWarningMap(sched.warnings || [], prev));
+      setDismissedWarnings(pruneDismissedWarnings(globalActiveWarnings, sched.dismissedWarnings || []));
+      setDismissedAlertWarnings(prev => pruneDismissedWarningMap(globalActiveWarnings, prev));
       setLockedRows(sched.lockedRows || []);
       const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
       const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
@@ -1417,8 +1435,8 @@ export default function Home() {
           setSchedule(sched);
           if (sched) {
             // هم‌ترازسازی وضعیت نادیده‌گرفتن با هشدارهای فعلی (هشدار رفع‌شده = حذف کامل).
-            setDismissedWarnings(pruneDismissedWarnings(sched.warnings || [], sched.dismissedWarnings || []));
-            setDismissedAlertWarnings(prev => pruneDismissedWarningMap(sched.warnings || [], prev));
+            setDismissedWarnings(pruneDismissedWarnings(globalActiveWarnings, sched.dismissedWarnings || []));
+            setDismissedAlertWarnings(prev => pruneDismissedWarningMap(globalActiveWarnings, prev));
             setLockedRows(sched.lockedRows || []);
             const isFinNurses = !!sched.finalizedNurses || !!sched.finalized;
             const isFinAssistants = !!sched.finalizedAssistants || !!sched.finalized;
@@ -1766,7 +1784,7 @@ export default function Home() {
   //   ۲) شمارندهٔ «بازیابی همه» عددی نشان می‌دهد که ربطی به وضعیت فعلی برنامه ندارد.
   React.useEffect(() => {
     if (!schedule) return;
-    const activeWarnings = schedule.warnings || [];
+    const activeWarnings = globalActiveWarnings;
 
     setDismissedAlertWarnings(prev => {
       const next = pruneDismissedWarningMap(activeWarnings, prev);
@@ -1897,12 +1915,12 @@ export default function Home() {
       assignments: effectiveAssignments,
       warnings: freshWarnings,
       shiftLeaders: verification.shiftLeaders,
-      dismissedWarnings: pruneDismissedWarnings(freshWarnings, schedule.dismissedWarnings || []),
+      dismissedWarnings: pruneDismissedWarnings(globalActiveWarnings, schedule.dismissedWarnings || []),
     };
 
     setSchedule(updatedSchedule);
-    setDismissedAlertWarnings(prev => pruneDismissedWarningMap(freshWarnings, prev));
-    setDismissedWarnings(prev => pruneDismissedWarnings(freshWarnings, prev));
+    setDismissedAlertWarnings(prev => pruneDismissedWarningMap(globalActiveWarnings, prev));
+    setDismissedWarnings(prev => pruneDismissedWarnings(globalActiveWarnings, prev));
 
     // ذخیره در پایگاه داده (بدون نمایش لایهٔ انتظار)
     const key = `${currentYear}_${currentMonth}`;
@@ -2400,7 +2418,7 @@ export default function Home() {
         requestsLocked: isReqLocked,
         // پس از هر بازتولید، هشدارهایی که دیگر مصداق ندارند از فهرست
         // نادیده‌گرفته‌ها هم پاک می‌شوند تا هشدار رفع‌شده کاملاً از سیستم برود.
-        dismissedWarnings: pruneDismissedWarnings(solved.warnings || [], dismissedWarnings),
+        dismissedWarnings: pruneDismissedWarnings(globalActiveWarnings, dismissedWarnings),
         lockedRows: lockedRows,
         // «لاگ‌ها و اتفاقات» ماه حفظ می‌شود؛ رکوردهای متنی قدیمی هم در همین
         // مسیر به رویداد ساخت‌یافته مهاجرت می‌کنند و سقف ۳۰تایی اعمال می‌گردد.
@@ -4059,8 +4077,8 @@ export default function Home() {
         if (!scenarioContext) {
           setSchedule(finalSchedule);
           const remainingWarnings = finalSchedule.warnings ?? [];
-          setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
-          setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
+          setDismissedAlertWarnings(prev => pruneDismissedWarningMap(globalActiveWarnings, prev));
+          setDismissedWarnings(prev => pruneDismissedWarnings(globalActiveWarnings, prev));
         }
 
         // ویرایش دستی سرپرستار + هشدارهایی که با همین ویرایش رفع شدند، ثبت می‌شود.
@@ -5324,20 +5342,7 @@ export default function Home() {
         </header>
 
         <div className={`border-b px-6 sm:px-8 py-3 flex items-center gap-3 overflow-x-auto print:hidden shrink-0 shadow-2xs scrollbar-none ${monthTheme.frameBorder} ${monthTheme.frameBackground}`}>
-          {/* دکمهٔ بازگشت به ماه جاری — همان «امروز» تقویم */}
-          <button
-            type="button"
-            onClick={() => {
-              const now = todayJalali();
-              handleCalendarNavigate(now.year, now.month);
-            }}
-            className={`shrink-0 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-black transition-all cursor-pointer ${monthTheme.chip} ${
-              currentYear === todayJalali().year && currentMonth === todayJalali().month ? 'ring-2 ring-offset-1 ' + monthTheme.ring : ''
-            }`}
-            title="بازگشت به ماه جاری"
-          >
-            <CalendarIcon className="w-3.5 h-3.5" /> امروز
-          </button>
+          <span className="text-[10px] font-bold text-slate-300 whitespace-nowrap">ماه و سال مورد نظر را انتخاب کنید</span>
 
           <div className="flex items-center gap-2 bg-white/80 border border-slate-200 rounded-full px-2 py-1 shrink-0">
              <button onClick={() => handleCalendarNavigate(currentYear - 1, currentMonth)} className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer" title="سال قبل"><ChevronRight className="w-4 h-4"/></button>
@@ -5354,24 +5359,19 @@ export default function Home() {
              <button onClick={() => handleCalendarNavigate(currentYear + 1, currentMonth)} className="p-1 text-slate-500 hover:text-emerald-600 transition-colors cursor-pointer" title="سال بعد"><ChevronLeft className="w-4 h-4"/></button>
           </div>
           <div className="w-px h-6 bg-slate-200 shrink-0 hidden sm:block"></div>
-          {JALALI_MONTH_NAMES.map((name, idx) => {
-            const mNum = idx + 1;
-            const isActive = currentMonth === mNum;
-            return (
-              <button
-                key={name}
-                type="button"
-                onClick={() => handleSelectMonth(mNum)}
-                className={`px-4 py-1.5 rounded-full text-[11px] font-black shrink-0 border transition-all cursor-pointer ${
-                  isActive
-                    ? `bg-gradient-to-l ${getCalendarTheme(mNum).headerGradient} text-white border-transparent shadow-md scale-105`
-                    : `${getCalendarTheme(mNum).chip}`
-                }`}
-              >
-                {name}
-              </button>
-            );
-          })}
+          <select
+            value={currentMonth}
+            onChange={event => handleSelectMonth(Number(event.target.value))}
+            className="cursor-pointer bg-white/90 border border-slate-200 rounded-full px-3 py-1.5 text-[11px] font-black text-slate-800 outline-none shrink-0 shadow-xs"
+            aria-label="انتخاب ماه"
+          >
+            {JALALI_MONTH_NAMES.map((name, idx) => {
+              const mNum = idx + 1;
+              return (
+                <option key={name} value={mNum}>{name}</option>
+              );
+            })}
+          </select>
         </div>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
@@ -5520,7 +5520,7 @@ export default function Home() {
                                       assignments: updatedAssignments,
                                       shiftLeaders: verification.shiftLeaders,
                                       warnings: verification.warnings,
-                                      dismissedWarnings: pruneDismissedWarnings(verification.warnings, dismissedWarnings),
+                                      dismissedWarnings: pruneDismissedWarnings(globalActiveWarnings, dismissedWarnings),
                                       lockedRows: lockedRows
                                     }
                                   }
@@ -6142,15 +6142,7 @@ export default function Home() {
                         />
                         اتمام مهلت ثبت درخواست‌ها
                       </label>
-                      <label className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-2 rounded-xl text-xs font-black text-slate-700 cursor-pointer transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={showSplitRequests}
-                          onChange={(e) => setShowSplitRequests(e.target.checked)}
-                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        نمایش تفکیکی درخواست‌ها
-                      </label>
+
                     </>
                   )}
                 </div>
@@ -6277,7 +6269,7 @@ export default function Home() {
                         <Sparkles className="w-3.5 h-3.5 text-amber-200 fill-amber-200" /> درخواست‌های پر کاربرد
                       </div>
                       <h4 className="text-xl font-black text-slate-900 leading-8">اگر درخواست‌ روتین داری همیجا فوری وارد کن!</h4>
-                      <p className="text-xs sm:text-sm font-extrabold text-slate-500">اگر درخواستت طولانیه برو به 🤩 !CHAT BOX</p>
+                      <p className="text-xs sm:text-sm font-extrabold text-amber-500 animate-blink-slow">اگر درخواستت رو از اینجا نمیتونی ثبت کنی برو به انتخاب از روی تقویم</p>
                     </div>
                   </div>
                 </div>
@@ -6646,227 +6638,101 @@ export default function Home() {
               </div>
               )}
 
-              <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
-                <div className="overflow-x-auto w-full">
-                  <table className="w-full text-right border-collapse min-w-[900px]">
-                    <thead className="bg-slate-50 border-b border-slate-205">
-                      <tr>
-                        <th className="px-6 py-4 text-xs font-black text-slate-500 w-1/4">متقاضی (پرستار / بهیار)</th>
-                        {showSplitRequests || role === 'personnel' ? (
-                          <>
-                            <th className="px-6 py-4 text-xs font-black text-slate-500">نوع درخواست</th>
-                            <th className="px-6 py-4 text-xs font-black text-slate-500">شیفت ترجیحی / الگو</th>
-                            <th className="px-6 py-4 text-xs font-black text-slate-500">بازه زمانی / روزها</th>
-                          </>
-                        ) : (
-                          <th className="px-6 py-4 text-xs font-black text-slate-500 w-1/2">مجموعه درخواست‌های ارسالی این ماه</th>
-                        )}
-                        <th className="px-6 py-4 text-xs font-black text-slate-500 text-center w-36">نوع اولویت</th>
-                        <th className="px-6 py-4 text-xs font-black text-slate-500 text-center w-28">عملیات</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-sm">
-                      {!showSplitRequests && role !== 'personnel' ? (
-                        (() => {
-                          const groupedPIds = Array.from(new Set(requests.map(r => r.personnelId)));
-                          if (groupedPIds.length === 0) {
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
-                                  هیچ درخواستی برای این ماه ثبت نشده است.
-                                </td>
-                              </tr>
-                            );
-                          }
-                          return groupedPIds.map(pid => {
-                            const p = personnel.find(per => per.id === pid);
-                            if (!p) return null;
-                            const pReqs = requests.filter(r => r.personnelId === pid);
-                            const hasEssential = pReqs.some(r => r.isEssential);
+              <div className="bg-gradient-to-br from-indigo-50 via-white to-amber-50/40 border border-indigo-100 rounded-[2rem] shadow-sm overflow-hidden" id="requests-cards">
+                <div className="p-5 sm:p-6">
+                  <h4 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-4">
+                    <Users className="w-4 h-4 text-indigo-600" /> کارت‌های درخواست پرسنل
+                  </h4>
+                  <div className="flex justify-between items-center mb-4">
+                    <div />
+                    <button
+                      onClick={() => window.print()}
+                      className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-black px-3 py-2 rounded-xl shadow-md transition-all cursor-pointer"
+                      id="btn-print-requests"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> چاپ همه درخواست‌ها
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {(() => {
+                      const groupedPIds = Array.from(new Set(requests.map(r => r.personnelId)));
+                      if (groupedPIds.length === 0) {
+                        return (
+                          <div className="col-span-full text-center text-slate-400 font-bold py-8">
+                            هیچ درخواستی برای این ماه ثبت نشده است.
+                          </div>
+                        );
+                      }
+                      return groupedPIds.map(pid => {
+                        const p = personnel.find(per => per.id === pid);
+                        if (!p) return null;
+                        const pReqs = requests.filter(r => r.personnelId === pid);
+                        const hasEssential = pReqs.some(r => r.isEssential);
+                        const [expanded, setExpanded] = React.useState(false);
+                        return (
+                          <div key={`card-${pid}`} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-all p-5 relative overflow-hidden group">
+                            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-400 to-violet-400" />
+                            <div className="flex items-start justify-between gap-3 mb-3">
+                              <div className="min-w-0">
+                                <h5 className="text-base font-black text-slate-800 truncate">{p.firstName} {p.lastName}</h5>
+                                <p className="text-[10px] text-slate-400 font-bold">کد پرسنلی: {p.personalCode} · {p.jobGroup === 'nurse' ? 'پرستار' : 'کمک بهیار'}</p>
+                              </div>
 
-                            return (
-                              <tr key={`group-row-${pid}`} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="px-6 py-4">
-                                  <span className="font-extrabold text-slate-800">{p.firstName} {p.lastName}</span>
-                                  <span className="text-xs text-slate-400 block mt-0.5">کد پرسنلی: {p.personalCode} ({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک بهیار'})</span>
-                                </td>
-                                <td className="px-6 py-4">
-                                  <div className="flex flex-wrap gap-1.5 max-w-xl">
-                                    {pReqs.map((r) => (
-                                      <span key={`pReq-${r.id}`} className="text-[10px] bg-slate-50 border border-slate-150 text-slate-705 font-black px-2 py-1 rounded-xl shadow-2xs flex items-center gap-1">
-                                        {getRequestSummaryText(r)}
-                                      </span>
-                                    ))}
-                                    {/* توضیحات ثبت‌شده توسط پرسنل — برای سرپرستار قابل مشاهده است */}
-                                    {[...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))].map((note, noteIndex) => (
-                                      <span
-                                        key={`pReq-note-${pid}-${noteIndex}`}
-                                        className="text-[10px] bg-amber-50 border border-amber-200 text-amber-800 font-bold px-2 py-1 rounded-xl shadow-2xs"
-                                        title="توضیحات ثبت‌شده توسط پرسنل"
-                                      >
-                                        📝 {note}
-                                      </span>
-                                    ))}
-                                    <span className="bg-indigo-50 text-indigo-700 text-[10px] px-2.5 py-1 rounded-xl font-bold">مجموعاً {pReqs.length} درخواست</span>
-                                  </div>
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  {hasEssential ? (
-                                    <span className="bg-red-50 text-red-700 border border-red-200 font-black text-[10px] px-3 py-1 rounded-full">دارای اولویت بالا ★</span>
-                                  ) : (
-                                    <span className="bg-slate-100 text-slate-600 font-bold text-[10px] px-3 py-1 rounded-full">عادی</span>
-                                  )}
-                                </td>
-                                <td className="px-6 py-4 text-center">
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    <button
-                                      onClick={() => {
-                                        setShowSplitRequests(true);
-                                      }}
-                                      className="text-indigo-600 hover:bg-indigo-50 border border-indigo-100 bg-white text-xs font-bold px-2.5 py-1.5 rounded-xl transition-all cursor-pointer"
-                                      title="مشاهده تفکیکی"
-                                    >
-                                      مشاهده و افراز
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteAllPersonRequests(pid, `${p.firstName} ${p.lastName}`)}
-                                      className="text-red-500 hover:text-red-700 bg-white border border-red-100 hover:bg-red-50 p-1.5 rounded-xl transition-all cursor-pointer"
-                                      title="حذف کلیه درخواست‌ها"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          });
-                        })()
-                      ) : (
-                        (() => {
-                          const filteredRequests = requests.filter(r => {
-                            if (role === 'personnel' && selectedPersonnelUser) {
-                              return r.personnelId === selectedPersonnelUser.id;
-                            }
-                            return true;
-                          });
+                            </div>
 
-                          if (filteredRequests.length === 0) {
-                            return (
-                              <tr>
-                                <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
-                                  هیچ درخواستی برای این ماه ثبت نشده است.
-                                </td>
-                              </tr>
-                            );
-                          }
-
-                          return filteredRequests.map(r => {
-                            const p = personnel.find(per => per.id === r.personnelId);
-                            if (!p) return null;
-
-                            return (
-                              <tr key={r.id} className="hover:bg-slate-50/50 transition-colors animate-fadeIn">
-                                <td className="px-6 py-3.5">
-                                  <span className="font-extrabold text-slate-800">{p.firstName} {p.lastName}</span>
-                                  <span className="text-xs text-slate-400 block mt-0.5">{p.personalCode}</span>
-                                </td>
-                                <td className="px-6 py-3.5 text-slate-600">
-                                  {r.requestType === 'shift' && <span className="bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded text-xs">تعیین شیفت</span>}
-                                  {r.requestType === 'avoid_shift' && <span className="bg-rose-50 text-rose-700 border border-rose-100 font-bold px-2 py-0.5 rounded text-xs">نبودن در شیفت</span>}
-                                  {/* نوع آف (سخت/نرم) فقط برای سرپرستار و مدیر؛ پرسنل فقط «آف» می‌بیند */}
-                                  {r.requestType === 'OFF' && (role === 'admin' || role === 'headnurse') ? (
-                                    r.offHardness === 'hard'
-                                      ? <span className="bg-red-50 text-red-700 border border-red-200 font-black px-2 py-0.5 rounded text-xs">🔴 آف سخت (Hard OFF)</span>
-                                      : r.offHardness === 'soft'
-                                        ? <span className="bg-amber-50 text-amber-700 border border-amber-200 font-black px-2 py-0.5 rounded text-xs">🟡 آف نرم (Soft OFF)</span>
-                                        : <span className="bg-red-50 text-red-700 border border-red-200 font-bold px-2 py-0.5 rounded text-xs">آف قطعی (OFF)</span>
-                                  ) : r.requestType === 'OFF' ? (
-                                    <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2 py-0.5 rounded text-xs">درخواست آف</span>
-                                  ) : null}
-                                  {r.requestType === 'leave' && <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded text-xs">درخواست مرخصی</span>}
-                                  {r.requestType === 'pattern' && <span className="bg-violet-50 text-violet-700 border border-violet-100 font-bold px-2 py-0.5 rounded text-xs">الگوی شیفت</span>}
-                                </td>
-                                <td className="px-6 py-3.5 font-semibold text-slate-700">
-                                  {r.requestType === 'pattern' ? (
-                                    <span className="text-violet-700 font-bold">{r.patternSteps?.join(' / ') || 'الگوی سفارشی'}</span>
-                                  ) : r.requestType === 'avoid_shift' ? (
-                                    <span className="text-rose-600 font-bold">شیفت {getShiftLabel(r.preferredShift)} نباشم</span>
-                                  ) : (
-                                    getShiftLabel(r.preferredShift)
-                                  )}
-                                </td>
-                                <td className="px-6 py-3.5 text-slate-600 text-xs font-bold text-slate-500">
-                                  {r.scope === 'range'
-                                    ? `از ${r.startDate} تا ${r.endDate}`
-                                    : r.scope === 'custom_days'
-                                      ? `تاریخ‌های ${formatDayList(r.selectedDays)}`
-                                      : SCOPE_LABELS[r.scope as string] || ''}
-                                  {/* توضیحات کاربر؛ هم برای خودش و هم برای سرپرستار قابل مشاهده */}
-                                  {r.note?.trim() && (
-                                    <span className="mt-1.5 block rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-bold leading-5 text-amber-800">
-                                      📝 {r.note}
+                            <div className="space-y-2 mb-3">
+                              {pReqs.map(r => (
+                                <div key={`card-req-${r.id}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 border border-slate-100">
+                                  <span className="text-[10px] font-bold text-slate-700">{getRequestSummaryText(r)}</span>
+                                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${r.isEssential ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>
+                                    {r.isEssential ? 'ضروری' : 'عادی'}
+                                  </span>
+                                </div>
+                              ))}
+                              {pReqs.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                  {Array.from(new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))).map((note, i) => (
+                                    <span key={`card-note-${pid}-${i}`} className="text-[10px] bg-amber-50 border border-amber-200 text-amber-800 font-bold px-2 py-1 rounded-lg" title={String(note)}>
+                                      📝 {String(note).length > 30 ? String(note).slice(0, 30) + '…' : note}
                                     </span>
-                                  )}
-                                </td>
-                                <td className="px-6 py-3.5 text-center">
-                                  {(role === 'admin' || role === 'headnurse') ? (
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="border-t border-slate-100 pt-3 mt-2 space-y-3">
+                                <div className="text-[11px] text-slate-500 font-bold">
+                                  تاریخ و ساعت ثبت: {new Date(pReqs[0]?.createdAt || '').toLocaleString('fa-IR') || '—'} · ویرایش: {new Date(pReqs[0]?.updatedAt || '').toLocaleString('fa-IR') || '—'}
+                                </div>
+                                <div className="flex gap-2">
+                                  {(role === 'admin' || role === 'headnurse') && (
                                     <button
                                       onClick={async () => {
-                                        const updatedReq = { ...r, isEssential: !r.isEssential };
-                                        const updatedList = requests.map(item => item.id === r.id ? updatedReq : item);
+                                        const updatedReq = { ...pReqs[0], isEssential: !(pReqs[0]?.isEssential ?? false) };
+                                        const updatedList = requests.map(item => item.id === pReqs[0].id ? updatedReq : item);
                                         await saveState(personnel, updatedList, settings, customHolidays, {
                                           mode: 'refresh_personnel',
-                                          personnelIds: [r.personnelId]
+                                          personnelIds: [pid]
                                         });
                                       }}
-                                      className={`px-3 py-1.5 rounded-full text-[10px] font-black transition-all border cursor-pointer ${
-                                        r.isEssential
-                                          ? 'bg-red-500 text-white border-red-500 hover:bg-red-650 shadow-xs'
-                                          : 'bg-slate-50 text-slate-500 border-slate-205 hover:bg-slate-100'
-                                      }`}
+                                      className="text-xs font-black px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-all cursor-pointer"
                                     >
-                                      {r.isEssential ? '★ ضروری (اولویت بالا)' : '☆ عادی'}
+                                      تعیین اولویت {pReqs[0]?.isEssential ? 'عادی' : 'ضروری'}
                                     </button>
-                                  ) : (
-                                    r.isEssential ? (
-                                      <span className="bg-red-50 text-red-700 border border-red-200 font-extrabold text-[10px] px-3 py-1 rounded-full">ضروری</span>
-                                    ) : (
-                                      <span className="bg-slate-150 text-slate-600 font-bold text-[10px] px-3 py-1 rounded-full">عادی</span>
-                                    )
                                   )}
-                                </td>
-                                <td className="px-6 py-3.5 text-center flex items-center justify-center gap-1">
-                                  {/* ویرایش نامحدود درخواست تا پیش از اتمام مهلت */}
                                   <button
-                                    onClick={() => handleOpenRequestEditor(r)}
-                                    disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
-                                    className="text-sky-600 hover:text-sky-800 disabled:text-slate-300 disabled:cursor-not-allowed p-1.5 rounded-lg hover:bg-sky-50 transition-colors cursor-pointer"
-                                    title="ویرایش درخواست روی تقویم"
-                                    id={`btn-edit-req-${r.id}`}
+                                    onClick={() => setDeleteTarget({ id: pid, type: 'request', label: `درخواست‌های ${p.firstName} ${p.lastName}` })}
+                                    className="text-xs font-black px-3 py-1.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-all cursor-pointer"
                                   >
-                                    <Edit className="w-4 h-4" />
+                                    حذف همه
                                   </button>
-
-                                  <button
-                                    onClick={() => setDeleteTarget({
-                                      id: r.id,
-                                      type: 'request',
-                                      label: `درخواست پرسنل ${p.firstName} ${p.lastName}`
-                                    })}
-                                    className="text-red-500 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
-                                    title="حذف درخواست"
-                                    id={`btn-delete-req-${r.id}`}
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          });
-                        })()
-                      )}
-                    </tbody>
-                  </table>
+                                </div>
+                              </div>
+                          </div>
+                        );
+                      })}
+                    })()}
+                  </div>
                 </div>
               </div>
 
@@ -7280,26 +7146,7 @@ export default function Home() {
                 </form>
               </div>
 
-              {/* «تعریف تقویم و مناسبت‌های تعطیل انتخابی» به تب «مدیریت تقویم و تعطیلات» منتقل شد. */}
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-black text-slate-900 border-b pb-3 border-slate-100 flex items-center gap-2">
-                    <CalendarIcon className="w-5 h-5 text-emerald-600" /> تعریف تقویم و مناسبت‌های تعطیل انتخابی
-                  </h3>
-                  <p className="text-xs font-bold leading-6 text-slate-500 mt-3">
-                    این بخش به تب «مدیریت تقویم و تعطیلات» منتقل شده است تا همه‌ی تنظیمات تقویم، تعطیلات رسمی کشور،
-                    مناسبت‌های تعطیل انتخابی بخش و محاسبه ساعت موظفی در یک صفحه مدیریت شوند.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('calendar')}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
-                  id="btn-go-to-calendar-tab"
-                >
-                  <CalendarIcon className="w-4 h-4" /> رفتن به مدیریت تقویم و تعطیلات
-                </button>
-              </div>
+              {/* «تعریف تقویم و مناسبت‌های تعطیل انتخابی» در تب مدیریت تقویم موجود است */}
 
               <div className="lg:col-span-2 bg-white border border-rose-200 rounded-3xl p-6 shadow-sm space-y-5">
                 <div>
@@ -7564,7 +7411,8 @@ export default function Home() {
                       holidays={customHolidays}
                       status={officialCalendarState.status}
                       onMonthChange={handleCalendarNavigate}
-                      size="md"
+                      size="sm"
+                      className="scale-[0.92] origin-top-left"
                       onDayClick={day => {
                         const dayInfo = calendarDays.find(item => item.day === day);
                         if (!canManageHolidays || dayInfo?.dayOfWeek === 6) return;

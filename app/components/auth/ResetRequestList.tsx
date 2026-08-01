@@ -22,6 +22,7 @@ export function ResetRequestList() {
   const [message, setMessage] = useState('');
 
   const load = useCallback(async () => {
+    setLoading(true);
     setError('');
     try {
       const response = await fetch('/api/head-nurse/reset-requests', { cache: 'no-store' });

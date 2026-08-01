@@ -43,15 +43,10 @@ export const ForgotPasswordSchema = z.object({
 export const ChangePasswordSchema = z.object({
   currentPassword: PasswordInputSchema,
   newPassword: z.string()
-    .min(8, 'رمز عبور جدید باید حداقل ۸ کاراکتر باشد.')
-    .max(200)
-    .regex(/[A-Za-z]/, 'رمز عبور جدید باید حداقل یک حرف داشته باشد.')
-    .regex(/\d/, 'رمز عبور جدید باید حداقل یک عدد داشته باشد.'),
+    .min(1, 'رمز عبور جدید را وارد کنید.')
+    .max(200),
   confirmPassword: z.string().max(200),
 }).strict().refine(data => data.newPassword === data.confirmPassword, {
   path: ['confirmPassword'],
   message: 'تکرار رمز عبور با رمز جدید یکسان نیست.',
-}).refine(data => data.newPassword !== '1234', {
-  path: ['newPassword'],
-  message: 'رمز عبور جدید نباید رمز پیش‌فرض باشد.',
 });

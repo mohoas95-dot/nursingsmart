@@ -44,6 +44,36 @@
     box-shadow: none !important;
   }
 
+  #requests-cards,
+  #requests-cards * {
+    visibility: visible !important;
+  }
+
+  #requests-cards {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    right: 0;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+  }
+
+  @media print {
+    #requests-cards .group .hidden-print,
+    #requests-cards button:not(#btn-print-requests) {
+      display: none !important;
+    }
+    #requests-cards .group {
+      border: 1px solid #ddd !important;
+      break-inside: avoid !important;
+      page-break-inside: avoid !important;
+    }
+  }
+
   /* جلوگیری از شکستن جدول بین دو صفحه */
   #print-schedule-sheet table,
   #print-schedule-sheet tr,
@@ -128,6 +158,16 @@
 
 .animate-indeterminate-bar {
   animation: indeterminate-bar 1.4s ease-in-out infinite;
+}
+
+/* چشمک‌زن آهسته برای جلب نظر کاربر */
+@keyframes blink-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.animate-blink-slow {
+  animation: blink-slow 2.4s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
