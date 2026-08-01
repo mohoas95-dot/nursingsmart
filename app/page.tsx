@@ -2190,7 +2190,7 @@ export default function Home() {
     } else if (r.requestType === 'avoid_shift') {
       return `برای من شیفت ${shiftName} در ${datesText} لحاظ نفرمایید.`;
     } else if (r.requestType === 'OFF') {
-      const hardnessText = r.offHardness === 'hard' ? 'آف قطعی و ضروری (آف سخت)' : r.offHardness === 'soft' ? 'آف پیشنهادی (آف نرم)' : 'آف';
+      const hardnessText = r.offHardness === 'hard' ? 'آف قطعی' : r.offHardness === 'soft' ? 'آف ترجیحی' : 'آف';
       return `درخواست ${hardnessText} برای ${datesText} لحاظ فرمایید.`;
     } else if (r.requestType === 'leave') {
       return `درخواست مرخصی برای ${datesText} لحاظ فرمایید.`;
@@ -2213,11 +2213,11 @@ export default function Home() {
     if (r.requestType === 'avoid_shift') {
       return `🔴 غیبت در شیفت ${shiftLabel} [${timeLabel}]`;
     } else if (r.requestType === 'OFF') {
-      // پرسنل فقط «آف» را می‌بیند؛ تعیین سخت/نرم بودن در اختیار سرپرستار است
+      // پرسنل فقط «آف» را می‌بیند؛ تعیین قطعی/ترجیحی بودن در اختیار سرپرستار است
       const canSeeHardness = role === 'admin' || role === 'headnurse';
       const hardnessLabel = !canSeeHardness
         ? '⚫ آف'
-        : r.offHardness === 'hard' ? '🔴 آف سخت' : r.offHardness === 'soft' ? '🟡 آف نرم' : '🔴 آف قطعی';
+        : r.offHardness === 'hard' ? '🔴 آف قطعی' : r.offHardness === 'soft' ? '🟡 آف ترجیحی' : '🔴 آف قطعی';
       return `${hardnessLabel} [${timeLabel}]`;
     } else if (r.requestType === 'leave') {
       return `🟢 مرخصی [${timeLabel}]`;
@@ -3494,7 +3494,7 @@ export default function Home() {
         scope: quickSelectedScope,
       }];
 
-      // لانگ‌آف یعنی حضور ME یک‌روزدرمیان؛ برای روزهای مقابل، آف نرم ثبت می‌شود
+      // لانگ‌آف یعنی حضور ME یک‌روزدرمیان؛ برای روزهای مقابل، آف ترجیحی ثبت می‌شود
       // تا موتور زمان‌بندی ترجیح استراحت بین دو لانگ را بداند ولی در بن‌بست نشکند.
       if (quickSelectedTemplateId === 'long_off') {
         newRequests.push({
@@ -6846,7 +6846,7 @@ export default function Home() {
                       <h4 className="text-lg font-black text-white">کارت‌های درخواست پرسنل</h4>
                     </div>
                     <p className="text-xs text-slate-300 font-medium">
-                      برای هر نفر یک کارت درخواست صادر شده است. روی هر کارت کلیک کنید تا تمام جزئیات، ویرایش، اولویت‌بندی مجزا و آف سخت/نرم قابل مدیریت باشد.
+                      برای هر نفر یک کارت درخواست صادر شده است. روی هر کارت کلیک کنید تا تمام جزئیات، ویرایش، اولویت‌بندی مجزا و آف قطعی/ترجیحی قابل مدیریت باشد.
                     </p>
                   </div>
 
@@ -7046,7 +7046,7 @@ export default function Home() {
                                             <span className={`px-2.5 py-0.5 rounded-full font-black ${
                                               r.offHardness === 'hard' ? 'bg-rose-500 text-white' : 'bg-amber-500 text-slate-900'
                                             }`}>
-                                              {r.offHardness === 'hard' ? '🔴 آف سخت (قطعی)' : '🟡 آف نرم (پیشنهادی)'}
+                                              {r.offHardness === 'hard' ? '🔴 آف قطعی' : '🟡 آف ترجیحی'}
                                             </span>
                                           )}
                                           {r.isEssential && (
@@ -7072,7 +7072,7 @@ export default function Home() {
                                               {r.isEssential ? '★ اولویت بالا' : '☆ اولویت عادی'}
                                             </button>
 
-                                            {/* آف نرم/سخت مجزا برای همین درخواست */}
+                                            {/* آف ترجیحی/قطعی مجزا برای همین درخواست */}
                                             {r.requestType === 'OFF' && (
                                               <button
                                                 type="button"
@@ -7080,7 +7080,7 @@ export default function Home() {
                                                 className="px-3 py-1.5 rounded-xl font-black bg-amber-400 hover:bg-amber-500 text-slate-950 transition-all cursor-pointer"
                                                 title="تغییر نوع آف"
                                               >
-                                                {r.offHardness === 'hard' ? '🟡 آف نرم' : '🔴 آف سخت'}
+                                                {r.offHardness === 'hard' ? '🟡 آف ترجیحی' : '🔴 آف قطعی'}
                                               </button>
                                             )}
                                           </div>
@@ -7191,7 +7191,7 @@ export default function Home() {
                                   {formatRequestConversational(r)}
                                   {r.requestType === 'OFF' && (
                                     <span className="mr-1 text-[10px] font-black text-slate-600">
-                                      ({r.offHardness === 'hard' ? 'نوع: آف سخت 🔴' : 'نوع: آف نرم 🟡'})
+                                      ({r.offHardness === 'hard' ? 'نوع: آف قطعی 🔴' : 'نوع: آف ترجیحی 🟡'})
                                     </span>
                                   )}
                                   {r.isEssential && (
@@ -8604,11 +8604,11 @@ export default function Home() {
                 </div>
               )}
 
-              {/* ====== انتخاب نوع آف: Hard OFF / Soft OFF ====== */}
+              {/* ====== انتخاب نوع آف: قطعی / ترجیحی ====== */}
               {(role === 'admin' || role === 'headnurse') && reqType === 'OFF' && (
                 <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-3 space-y-2">
                   <div className="text-xs font-black text-amber-800">
-                    🔒 نوع آف قطعی: سرپرستار تعیین می‌کند که آف سخت (Hard OFF) یا نرم (Soft OFF) باشد.
+                    🔒 نوع آف: سرپرستار تعیین می‌کند که آف قطعی یا ترجیحی باشد.
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -8620,7 +8620,7 @@ export default function Home() {
                           : 'bg-white text-red-600 border-red-200 hover:bg-red-50'
                       }`}
                     >
-                      🔴 آف سخت (Hard OFF)
+                      🔴 آف قطعی (Hard OFF)
                       <div className={`text-[10px] mt-1 ${reqOffHardness === 'hard' ? 'text-white/80' : 'text-red-400'}`}>
                         Solver حق نقض ندارد — قطعی و غیرقابل تغییر
                       </div>
@@ -8634,7 +8634,7 @@ export default function Home() {
                           : 'bg-white text-amber-600 border-amber-200 hover:bg-amber-50'
                       }`}
                     >
-                      🟡 آف نرم (Soft OFF)
+                      🟡 آف ترجیحی (Soft OFF)
                       <div className={`text-[10px] mt-1 ${reqOffHardness === 'soft' ? 'text-white/80' : 'text-amber-400'}`}>
                         Solver می‌تواند در بن‌بست نقض کند — ترجیحی ولی قابل تغییر
                       </div>
@@ -8642,7 +8642,7 @@ export default function Home() {
                   </div>
                   {!reqOffHardness && (
                     <div className="text-[10px] font-bold text-amber-600 bg-amber-100 px-3 py-1.5 rounded-lg">
-                      ⚠️ لطفاً نوع آف را انتخاب کنید. بدون انتخاب، آف به‌صورت پیش‌فرض سخت (Hard OFF) تلقی می‌شود.
+                      ⚠️ لطفاً نوع آف را انتخاب کنید. بدون انتخاب، آف به‌صورت پیش‌فرض قطعی (Hard OFF) تلقی می‌شود.
                     </div>
                   )}
                 </div>
