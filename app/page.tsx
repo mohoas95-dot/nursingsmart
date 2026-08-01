@@ -5945,7 +5945,10 @@ export default function Home() {
                         </div>
                       </div>
                       <div className="flex shrink-0 items-baseline gap-1 rounded-xl bg-gradient-to-br from-emerald-50 to-sky-50 px-3 py-1.5 border border-emerald-100/70">
-                        <span className="font-mono text-2xl font-black leading-none bg-gradient-to-b from-emerald-600 to-teal-600 bg-clip-text text-transparent">
+                        <span
+                          className="text-2xl font-black leading-none bg-gradient-to-b from-emerald-600 to-teal-600 bg-clip-text text-transparent"
+                          style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
+                        >
                           {effectiveDutyHours[selectedPersonnelUser?.employmentType || 'official']}
                         </span>
                         <span className="text-[10px] font-extrabold text-emerald-700/70">ساعت</span>
@@ -7175,6 +7178,25 @@ export default function Home() {
                                           <Edit className="w-3.5 h-3.5" />
                                           <span>ویرایش</span>
                                         </button>
+
+                                        {/* حذف همین درخواست (در دسترس پرسنل و سرپرستار) */}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setExpandedCardPersonnelId(null);
+                                            setDeleteTarget({
+                                              id: r.id,
+                                              type: 'request',
+                                              label: formatRequestConversational(r),
+                                            });
+                                          }}
+                                          disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
+                                          className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-black bg-rose-500/20 hover:bg-rose-500 text-rose-200 hover:text-white transition-all cursor-pointer flex items-center gap-1 border border-rose-400/30 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                                          title="حذف این درخواست"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          <span>حذف</span>
+                                        </button>
                                       </div>
 
                                       {/* اولویت‌بندی مجزا برای همین درخواست + نوع آف */}
@@ -7247,7 +7269,7 @@ export default function Home() {
 
                               {/* دکمه‌های پایانی سرپرستار */}
                               <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-white/15">
-                                {(role === 'headnurse' || role === 'admin') && (
+                                {(role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.id === activePerson.id)) && (
                                   <button
                                     type="button"
                                     onClick={() => {
