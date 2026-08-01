@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="کاربر خانم">
+  <rect width="240" height="240" fill="#f7cbd8"/>
+  <path d="M63 115c0-44 27-73 58-73s58 29 58 73v48H63v-48Z" fill="#8a4c33"/>
+  <circle cx="120" cy="105" r="55" fill="#ffbd8e"/>
+  <path d="M69 91c11-32 33-48 55-48 28 0 48 20 53 55-29-22-61-27-108-7Z" fill="#9a5638"/>
+  <rect x="82" y="98" width="31" height="15" rx="5" fill="none" stroke="#fff" stroke-width="6"/>
+  <rect x="127" y="98" width="31" height="15" rx="5" fill="none" stroke="#fff" stroke-width="6"/>
+  <path d="M113 105h14" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+  <path d="M46 240c7-61 42-92 74-92s67 31 74 92H46Z" fill="#7667c9"/>
+  <path d="M88 151c14 13 50 13 64 0l-32 43-32-43Z" fill="#ffbd8e"/>
+  <path d="M71 56h98l-11 30H82L71 56Z" fill="#ffffff"/>
+  <path d="M120 61v18M111 70h18" stroke="#22b8b2" stroke-width="8" stroke-linecap="round"/>
+  <path d="M69 238c-3-43 2-73 28-89" fill="none" stroke="#1f2937" stroke-width="5" stroke-linecap="round"/>
+  <path d="M171 238c3-43-2-73-28-89" fill="none" stroke="#1f2937" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="67" cy="225" r="10" fill="none" stroke="#1f2937" stroke-width="5"/>
+</svg>

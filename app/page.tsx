@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import TehranDateTime from './components/TehranDateTime';
 import AnimatedCalendarIcon from './components/AnimatedCalendarIcon';
@@ -209,6 +210,82 @@ const QUICK_COMPLEMENT_SCOPE: Record<QuickRequestScope, QuickRequestScope> = {
   weekly_odd: 'weekly_even',
   weekly_even: 'weekly_odd',
 };
+
+
+type InferredGender = 'male' | 'female';
+
+type HeaderAvatarConfig = {
+  src: string;
+  alt: string;
+  ringClass: string;
+};
+
+const HEADER_AVATAR_BY_KIND = {
+  boss: {
+    src: '/avatars/boss.svg',
+    alt: 'تصویر پروفایل سرپرستار',
+    ringClass: 'ring-emerald-100',
+  },
+  male: {
+    src: '/avatars/man.svg',
+    alt: 'تصویر پروفایل کاربر آقا',
+    ringClass: 'ring-sky-100',
+  },
+  female: {
+    src: '/avatars/woman.svg',
+    alt: 'تصویر پروفایل کاربر خانم',
+    ringClass: 'ring-pink-100',
+  },
+} satisfies Record<string, HeaderAvatarConfig>;
+
+const PERSIAN_FEMALE_FIRST_NAMES = new Set([
+  'آتنا', 'آرزو', 'آزاده', 'آزیتا', 'آناهیتا', 'آنیتا', 'الهام', 'الهه', 'بهاره', 'پریسا',
+  'ترانه', 'حدیث', 'حدیثه', 'راضیه', 'ریحانه', 'زری', 'زهرا', 'سارا', 'سمانه', 'سحر',
+  'سپیده', 'شادی', 'شبنم', 'فاطمه', 'فرزانه', 'فرشته', 'فریبا', 'کتایون', 'کوثر', 'گلناز',
+  'لیلا', 'مائده', 'محبوبه', 'مریم', 'مرضیه', 'مژگان', 'معصومه', 'مهسا', 'مینا', 'نرگس',
+  'نسترن', 'نگار', 'نوشین', 'هانیه', 'یاسمن', 'یگانه', 'پرستو', 'رویا', 'شیما', 'طاهره',
+]);
+
+const PERSIAN_MALE_FIRST_NAMES = new Set([
+  'آرش', 'احسان', 'احمد', 'امیر', 'امیرحسین', 'امیر حسین', 'بهرام', 'حامد', 'حسن', 'حسین',
+  'حمید', 'حمیدرضا', 'حمید رضا', 'رضا', 'سعید', 'سجاد', 'سید', 'صادق', 'علی', 'علیرضا',
+  'علی رضا', 'فرهاد', 'کامران', 'کیان', 'محمد', 'محمدحسین', 'محمد حسین', 'محمدرضا', 'محمد رضا',
+  'محمدصادق', 'محمد صادق', 'محمدمهدی', 'محمد مهدی', 'مجید', 'محسن', 'مصطفی', 'مهدی', 'مبین',
+  'میلاد', 'هادی', 'وحید', 'یاسر', 'یوسف', 'مرتضی', 'جواد', 'کاظم', 'ناصر', 'رضوان',
+]);
+
+const PERSIAN_NAME_JOINERS = new Set(['سید', 'سیده', 'میر', 'میرزا', 'خانم', 'آقا', 'دکتر']);
+
+function normalizePersianName(value: string): string {
+  return value
+    .replace(/[يى]/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[‌ـ.،,()\-[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferGenderFromPersianName(firstName?: string, lastName?: string): InferredGender {
+  const normalizedFirstName = normalizePersianName(firstName || '');
+  const normalizedFullName = normalizePersianName(`${firstName || ''} ${lastName || ''}`);
+  const firstNameTokens = normalizedFirstName.split(' ').filter(Boolean);
+  const significantTokens = firstNameTokens.filter(token => !PERSIAN_NAME_JOINERS.has(token));
+
+  const candidateNames = [
+    normalizedFirstName,
+    significantTokens.slice(0, 3).join(' '),
+    significantTokens.slice(0, 2).join(' '),
+    ...significantTokens,
+    ...normalizedFullName.split(' ').filter(Boolean),
+  ].filter(Boolean);
+
+  if (candidateNames.some(name => PERSIAN_FEMALE_FIRST_NAMES.has(name))) return 'female';
+  if (candidateNames.some(name => PERSIAN_MALE_FIRST_NAMES.has(name))) return 'male';
+
+  // اگر نام در فهرست‌های رایج پیدا نشود، برای محیط پرستاری پیش‌فرض امن‌تر زنانه است.
+  // در صورت اضافه شدن فیلد جنسیت به مدل کاربر، همین تابع تنها نقطهٔ جایگزینی خواهد بود.
+  return 'female';
+}
 
 // خطای تداخل قفل خوش‌بینانه (ETag) — برای شناسایی داخلی و بازیابی خودکار در صف ذخیره‌سازی.
 class ConcurrencyConflictError extends Error {
@@ -495,6 +572,22 @@ export default function Home() {
     if (authenticatedUser?.role !== 'PERSONNEL' || !authenticatedUser.personnelId) return null;
     return personnel.find(person => person.id === authenticatedUser.personnelId) || null;
   }, [authenticatedUser, personnel]);
+  const headerAvatar = React.useMemo<HeaderAvatarConfig | null>(() => {
+    if (!authenticatedUser) return null;
+
+    if (role === 'headnurse') {
+      return HEADER_AVATAR_BY_KIND.boss;
+    }
+
+    if (role === 'personnel') {
+      const firstName = selectedPersonnelUser?.firstName || authenticatedUser.firstName;
+      const lastName = selectedPersonnelUser?.lastName || authenticatedUser.lastName;
+      const gender = inferGenderFromPersianName(firstName, lastName);
+      return gender === 'male' ? HEADER_AVATAR_BY_KIND.male : HEADER_AVATAR_BY_KIND.female;
+    }
+
+    return null;
+  }, [authenticatedUser, role, selectedPersonnelUser]);
   const [personnelSearchQuery, setPersonnelSearchQuery] = useState<string>('');
 
   const canManageHolidays = role === 'headnurse' || role === 'admin';
@@ -5409,8 +5502,8 @@ export default function Home() {
       <main className="flex-1 flex flex-col h-full overflow-hidden">
 
 
-        <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex items-center justify-between shrink-0 print:hidden transition-all duration-300">
-          <div className="flex items-center gap-4">
+        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-8 flex items-center justify-between shrink-0 print:hidden transition-all duration-300">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-4">
             <button
               onClick={() => setIsNavOpen(true)}
               className="p-2 sm:px-3 sm:py-2 bg-[#1e293b] text-white hover:bg-slate-800 rounded-xl transition-all cursor-pointer flex items-center gap-2 font-black text-xs shadow-md shadow-slate-900/10"
@@ -5420,8 +5513,8 @@ export default function Home() {
               <Menu className="w-4 h-4 text-white" />
               <span className="hidden sm:inline">منوی ناوبری</span>
             </button>
-            <h1 className="text-base sm:text-lg font-black text-slate-800 underline decoration-emerald-500 underline-offset-8">
-              برنامه‌ریزی شیفت {JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}
+            <h1 className="whitespace-nowrap text-[11px] min-[390px]:text-xs sm:text-lg font-black tracking-tight text-slate-800 underline decoration-emerald-500 underline-offset-8">
+              سامانه هوشمند مدیریت شیفت های پرستاری
             </h1>
             {role === 'admin' ? (
               <select
@@ -5454,9 +5547,23 @@ export default function Home() {
                 {role === 'admin' ? 'مدیر سراسری سامانه' : role === 'headnurse' ? 'مدیر و سرپرستار بخش' : 'کارشناس پرستاری'}
               </p>
             </div>
-            <div className="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center font-bold text-white shadow-md text-sm cursor-pointer select-none">
-              {authenticatedUser.firstName[0]}{authenticatedUser.lastName[0]}
-            </div>
+            {headerAvatar ? (
+              <div className={`w-10 h-10 overflow-hidden rounded-full bg-white shadow-md ring-2 ${headerAvatar.ringClass} cursor-pointer select-none`}>
+                <Image
+                  src={headerAvatar.src}
+                  alt={headerAvatar.alt}
+                  width={40}
+                  height={40}
+                  className="h-full w-full object-cover"
+                  priority
+                  unoptimized
+                />
+              </div>
+            ) : (
+              <div className="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-full flex items-center justify-center font-bold text-white shadow-md text-sm cursor-pointer select-none">
+                {authenticatedUser.firstName[0]}{authenticatedUser.lastName[0]}
+              </div>
+            )}
           </div>
         </header>
 
