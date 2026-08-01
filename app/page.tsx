@@ -107,6 +107,7 @@ import { PrintScheduleSheet } from '../features/scheduling/components/PrintSched
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
+import { PersianCalendar } from '../features/shared/components/PersianCalendar';
 import { EventLogPanel } from '../features/reports/components/EventLogPanel';
 import { useTaskProgress } from '../features/shared/hooks/useTaskProgress';
 import {
@@ -180,7 +181,7 @@ const QUICK_REQUEST_TEMPLATES: ReadonlyArray<{
   accentClass: string;
 }> = [
   { id: 'en', title: 'EN', subtitle: 'عصر و شب', accentClass: 'from-indigo-500 to-violet-600' },
-  { id: 'men', title: 'MEN', subtitle: 'شیفت ۲۴', accentClass: 'from-sky-500 to-cyan-600' },
+  { id: 'men', title: 'MEN', subtitle: '۲۴', accentClass: 'from-sky-500 to-cyan-600' },
   { id: 'long_off', title: 'لانگ آف', subtitle: 'ME یک‌روزدرمیان', accentClass: 'from-teal-500 to-emerald-600' },
   { id: 'off', title: 'OFF 😴', subtitle: 'آف با انتخاب روز', accentClass: 'from-slate-600 to-slate-800' },
   { id: 'leave', title: 'مرخصی 🏖', subtitle: 'انتخاب روزهای مرخصی', accentClass: 'from-amber-500 to-orange-600' },
@@ -2010,6 +2011,12 @@ export default function Home() {
   const [quickSelectedDays, setQuickSelectedDays] = useState<number[]>([]);
   const [quickPersonnelId, setQuickPersonnelId] = useState<string>('');
   const [isQuickRequestSubmitting, setIsQuickRequestSubmitting] = useState<boolean>(false);
+
+  // New: Calendar-based request registration (بند ۲)
+  const [openCalendarRequestPanel, setOpenCalendarRequestPanel] = useState<boolean>(false);
+  const [calendarReqActiveDay, setCalendarReqActiveDay] = useState<number | null>(null);
+  const [calendarReqSelectedShifts, setCalendarReqSelectedShifts] = useState<Record<number, string>>({});
+  const [calendarReqNotes, setCalendarReqNotes] = useState<string>('');
   // عملیات حساس مدیریت بخش: حذف دائمی بخش (با احراز هویت مجدد) و انتقال امن مدیریت
   const [showDeleteDeptModal, setShowDeleteDeptModal] = useState<boolean>(false);
   const [deleteDeptNationalId, setDeleteDeptNationalId] = useState<string>('');
@@ -2038,10 +2045,10 @@ export default function Home() {
     { code: 'M', label: 'صبح (M)', className: 'bg-sky-100 text-sky-800 border-sky-300' },
     { code: 'E', label: 'عصر (E)', className: 'bg-amber-100 text-amber-800 border-amber-300' },
     { code: 'N', label: 'شب (N)', className: 'bg-indigo-100 text-indigo-800 border-indigo-300' },
-    { code: 'ME', label: 'صبح-عصر (ME)', className: 'bg-teal-100 text-teal-800 border-teal-300' },
+    { code: 'ME', label: 'لانگ (ME)', className: 'bg-teal-100 text-teal-800 border-teal-300' },
     { code: 'EN', label: 'عصر-شب (EN)', className: 'bg-violet-100 text-violet-800 border-violet-300' },
     { code: 'MN', label: 'شب-صبح (MN)', className: 'bg-cyan-100 text-cyan-800 border-cyan-300' },
-    { code: 'MEN', label: '۲۴ ساعته (MEN)', className: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300' },
+    { code: 'MEN', label: '۲۴ (MEN)', className: 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300' },
     { code: 'OFF', label: 'آف 😴', className: 'bg-slate-200 text-slate-800 border-slate-400' },
     { code: 'L', label: 'مرخصی 🏖', className: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
   ];
@@ -5796,10 +5803,10 @@ export default function Home() {
                                         <option value="M">صبح (M)</option>
                                         <option value="E">عصر (E)</option>
                                         <option value="N">شب (N)</option>
-                                        <option value="ME">عصر-صبح (ME)</option>
+                                        <option value="ME">لانگ (ME)</option>
                                         <option value="EN">شب-عصر (EN)</option>
                                         <option value="MN">شب-صبح (MN)</option>
-                                        <option value="MEN">شیفت ۲۴ (MEN)</option>
+                                        <option value="MEN">۲۴ (MEN)</option>
                                         <option value="L">مرخصی</option>
                                       </select>
                                     ) : (
@@ -5830,8 +5837,8 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center rounded font-bold">صبح</span> صبح (M)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-purple-50 text-purple-700 border border-purple-200 flex items-center justify-center rounded font-bold">شب</span> شب (N)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> عصر-صبح (ME)</span>
-                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> شیفت ۲۴ (MEN)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-gradient-to-r from-blue-100 to-amber-100 text-slate-700 flex items-center justify-center rounded font-bold text-[10px]">ME</span> لانگ (ME)</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> ۲۴ (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
                 </div>
@@ -6182,42 +6189,27 @@ export default function Home() {
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-7 gap-1.5 max-h-[260px] overflow-y-auto p-2 scrollbar-thin rounded-2xl border border-slate-200 bg-white shadow-inner">
-                        {WEEKDAYS.map((weekday, index) => (
-                          <div key={`quick-weekday-${weekday}`} className={`sticky top-0 z-10 rounded-lg py-1 text-center text-[8px] font-black ${index === 6 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{weekday[0]}</div>
-                        ))}
-                        {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, index) => <span key={`quick-empty-${index}`} />)}
-                        {calendarDays.map(dayInfo => {
-                          const isSelected = quickSelectedDays.includes(dayInfo.day);
-                          return (
-                            <button
-                              type="button"
-                              key={`quick-custom-day-btn-${dayInfo.day}`}
-                              onClick={() => {
-                                if (isSelected) {
-                                  setQuickSelectedDays(quickSelectedDays.filter(day => day !== dayInfo.day));
-                                } else {
-                                  setQuickSelectedDays([...quickSelectedDays, dayInfo.day].sort((a, b) => a - b));
-                                }
-                              }}
-                              title={dayInfo.holidayTitle || (calendarOccasions[dayInfo.day] || []).join('، ')}
-                              className={`relative min-h-12 py-1.5 text-[11px] font-black rounded-xl border transition-all flex flex-col items-center justify-center cursor-pointer ${
-                                isSelected
-                                  ? dayInfo.isHoliday
-                                    ? 'bg-rose-600 text-white border-rose-700 shadow-md scale-105'
-                                    : 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-105'
-                                  : dayInfo.isHoliday
-                                    ? 'bg-rose-100 text-rose-700 border-rose-300 hover:bg-rose-200'
-                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
-                              }`}
-                            >
-                              {dayInfo.isHoliday && <span className={`absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full ${isSelected ? 'bg-white' : 'bg-rose-500'}`} />}
-                              <span className="text-xs font-mono font-extrabold">{dayInfo.day}</span>
-                              <span className="text-[8px] opacity-75">{WEEKDAYS[dayInfo.dayOfWeek][0]}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <PersianCalendar
+                        year={currentYear}
+                        month={currentMonth}
+                        setYear={setCurrentYear}
+                        setMonth={setCurrentMonth}
+                        calendarDays={calendarDays}
+                        holidays={customHolidays}
+                        occasions={calendarOccasions}
+                        selectedDay={null}
+                        onDayClick={(day) => {
+                          if (quickSelectedDays.includes(day)) {
+                            setQuickSelectedDays(quickSelectedDays.filter(d => d !== day));
+                          } else {
+                            setQuickSelectedDays([...quickSelectedDays, day].sort((a, b) => a - b));
+                          }
+                        }}
+                        interactive={true}
+                        showTodayButton={false}
+                        highlightOccasions={false}
+                        className="max-h-[280px] overflow-auto"
+                      />
 
                       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[10px] font-bold text-slate-500">
                         <span>تعداد انتخاب: <b className="text-indigo-700">{quickSelectedDays.length}</b> روز</span>
@@ -6257,6 +6249,182 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              )}
+
+              {/* ===== NEW: Collapsible "ثبت درخواست با انتخاب از روی تقویم" (بند ۲) ===== */}
+              <div className="grid grid-cols-1 gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenCalendarRequestPanel(!openCalendarRequestPanel);
+                    if (!openCalendarRequestPanel) {
+                      // reset when opening
+                      setCalendarReqSelectedShifts({});
+                      setCalendarReqActiveDay(null);
+                      setCalendarReqNotes('');
+                    }
+                  }}
+                  aria-expanded={openCalendarRequestPanel}
+                  className={`group relative overflow-hidden flex items-center justify-between gap-3 rounded-[1.75rem] border px-5 py-5 text-right transition-all duration-300 cursor-pointer ${
+                    openCalendarRequestPanel
+                      ? 'bg-gradient-to-bl from-emerald-500 via-teal-500 to-green-600 text-white border-emerald-600 shadow-xl shadow-emerald-200/60 scale-[1.01]'
+                      : 'bg-gradient-to-bl from-emerald-50 via-white to-teal-50 text-slate-800 border-emerald-200 hover:border-emerald-400 hover:shadow-lg hover:shadow-emerald-100 hover:-translate-y-0.5'
+                  }`}
+                >
+                  <span className="pointer-events-none absolute -left-10 -top-10 h-28 w-28 rounded-full bg-white/20 blur-2xl" />
+                  <span className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-gradient-to-l from-emerald-400 via-teal-400 to-green-500" />
+                  <span className="relative flex items-center gap-3 min-w-0">
+                    <span className={`shrink-0 flex h-11 w-11 items-center justify-center rounded-2xl shadow-sm transition-colors ${
+                      openCalendarRequestPanel ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      <CalendarIcon className="w-5 h-5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm sm:text-base font-black">ثبت درخواست با انتخاب از روی تقویم</span>
+                      <span className={`block text-[10px] sm:text-[11px] font-bold mt-1 leading-5 ${openCalendarRequestPanel ? 'text-emerald-50' : 'text-slate-500'}`}>
+                        انتخاب روزها روی تقویم زیبا + انتخاب شیفت + توضیحات
+                      </span>
+                    </span>
+                  </span>
+                  <span className={`relative shrink-0 flex h-8 w-8 items-center justify-center rounded-full transition-all ${
+                    openCalendarRequestPanel ? 'bg-white/20 text-white rotate-180' : 'bg-emerald-100 text-emerald-700 group-hover:bg-emerald-200'
+                  }`}>
+                    <ChevronDown className="w-4 h-4" />
+                  </span>
+                </button>
+              </div>
+
+              {openCalendarRequestPanel && (
+                <div className="bg-gradient-to-br from-emerald-50 via-white to-teal-50/60 border border-emerald-200 rounded-[2rem] shadow-sm overflow-hidden">
+                  <div className="p-5 sm:p-6 border-b border-emerald-100/70 bg-white/70">
+                    <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                      <div className="space-y-2">
+                        <div className="inline-flex items-center gap-2 bg-emerald-600 text-white px-3 py-1.5 rounded-full text-[11px] font-black shadow-md shadow-emerald-100">
+                          <CalendarIcon className="w-3.5 h-3.5" /> انتخاب از تقویم
+                        </div>
+                        <h4 className="text-xl font-black text-slate-900 leading-8">روزهای دلخواه را روی تقویم کلیک کنید و شیفت انتخاب کنید</h4>
+                        <p className="text-xs sm:text-sm font-extrabold text-slate-500">هر روز می‌تواند شیفت متفاوتی داشته باشد. توضیحات اضافه می‌شود.</p>
+                      </div>
+
+                      {role !== 'personnel' ? (
+                        <div className="w-full lg:w-80 bg-white border border-slate-200 rounded-2xl p-3 shadow-xs">
+                          <label className="block text-[11px] font-black text-slate-500 mb-1.5">متقاضی</label>
+                          <select
+                            value={quickPersonnelId}
+                            onChange={(event) => setQuickPersonnelId(event.target.value)}
+                            className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none"
+                          >
+                            <option value="">-- انتخاب پرسنل --</option>
+                            {personnel.map(person => (
+                              <option key={`cal-person-${person.id}`} value={person.id}>
+                                {person.firstName} {person.lastName} ({person.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-4 py-3 rounded-2xl text-xs font-black">
+                          متقاضی: {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-5 sm:p-6 space-y-5">
+                    <PersianCalendar
+                      year={currentYear}
+                      month={currentMonth}
+                      setYear={setCurrentYear}
+                      setMonth={setCurrentMonth}
+                      calendarDays={calendarDays}
+                      holidays={customHolidays}
+                      occasions={calendarOccasions}
+                      selectedDay={null}
+                      onDayClick={handleCalendarRequestDayClick}
+                      onDayShiftSelect={handleCalendarRequestDayShiftSelect}
+                      showShiftSubmenuForDay={calendarReqActiveDay}
+                      shiftOptions={EDITABLE_SHIFT_CODES}
+                      showTodayButton={true}
+                      onTodayClick={() => {
+                        const now = new Date();
+                        const parts = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).format(now).split('/');
+                        const cy = Number(parts[0]); const cm = Number(parts[1]);
+                        if (cy) setCurrentYear(cy);
+                        if (cm) setCurrentMonth(cm);
+                      }}
+                      interactive={true}
+                      className="shadow-md"
+                    />
+
+                    {/* Selected shifts summary + notes */}
+                    <div className="bg-white border border-emerald-200 rounded-3xl p-4 space-y-4">
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-emerald-700">روزهای انتخاب‌شده:</span>
+                          <span className="text-[10px] font-black px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">{Object.keys(calendarReqSelectedShifts).length} روز</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                          {Object.keys(calendarReqSelectedShifts).length === 0 && (
+                            <span className="text-slate-400 text-[10px]">هنوز روزی انتخاب نشده. روی روزهای تقویم کلیک کنید.</span>
+                          )}
+                          {Object.entries(calendarReqSelectedShifts).sort((a,b)=>Number(a[0])-Number(b[0])).map(([d, code]) => {
+                            const meta = EDITABLE_SHIFT_CODES.find(o => o.code === code);
+                            return (
+                              <span key={d} className="px-2 py-0.5 rounded-lg border text-emerald-700 bg-white font-bold border-emerald-200">
+                                {toPersianDigits(Number(d))}: {meta?.label || code}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-black text-emerald-700 mb-1">توضیحات (اختیاری — برای خودتان و سرپرستار قابل مشاهده)</label>
+                        <textarea
+                          value={calendarReqNotes}
+                          onChange={(e) => setCalendarReqNotes(e.target.value)}
+                          placeholder="مثلاً: فقط برای روزهای خاص، دلیل خاص..."
+                          className="w-full text-xs font-bold bg-white border border-emerald-200 rounded-2xl px-3 py-2.5 focus:border-emerald-500 focus:outline-none min-h-[72px] resize-y"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white border border-emerald-200 rounded-3xl p-4 shadow-xs">
+                      <div className="text-xs font-bold text-emerald-600 leading-6">
+                        آماده ثبت: {Object.keys(calendarReqSelectedShifts).length} روز با شیفت‌های انتخابی + توضیحات
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCalendarReqSelectedShifts({});
+                            setCalendarReqActiveDay(null);
+                            setCalendarReqNotes('');
+                          }}
+                          className="px-4 py-2 text-xs font-black rounded-2xl border border-slate-200 bg-white hover:bg-slate-50"
+                        >
+                          پاک کردن انتخاب‌ها
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isQuickRequestSubmitting || Object.keys(calendarReqSelectedShifts).length === 0}
+                          onClick={handleSubmitCalendarRequest}
+                          className="min-w-44 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black text-xs py-3 px-6 rounded-2xl shadow-lg shadow-emerald-100 transition-all cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          {isQuickRequestSubmitting ? (
+                            <>
+                              <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> در حال ثبت...
+                            </>
+                          ) : (
+                            <>
+                              <Check className="w-4 h-4" /> ثبت درخواست از تقویم
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
 
               <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden">
@@ -7152,49 +7320,27 @@ export default function Home() {
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-7 gap-1 text-center font-extrabold text-[9px]">
-                      {WEEKDAYS.map(w => (
-                        <div key={`grid-head-${w}`} className="py-1 text-slate-400 font-extrabold text-[9px]">{w[0]}</div>
-                      ))}
-
-                      {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, i) => (
-                        <div key={`pad-${i}`} className="p-2 bg-slate-100/20 rounded-lg text-transparent text-[10px]">-</div>
-                      ))}
-
-                      {calendarDays.map(d => {
-                        const isFriday = d.dayOfWeek === 6;
-                        const isHoliday = isFriday || isEffectiveHoliday(officialHolidays, holidayOverrides, d.day);
-                        const source = holidaySource(officialHolidays, holidayOverrides, d.day);
-                        const title = isFriday
-                          ? 'جمعه؛ تعطیل هفتگی (غیرقابل تغییر)'
-                          : (customHolidays[d.day] || (calendarOccasions[d.day] || []).join('، ') || 'روز کاری');
-
-                        return (
-                          <button
-                            type="button"
-                            key={`day-btn-${d.day}`}
-                            disabled={isFriday || !canManageHolidays}
-                            title={title}
-                            aria-pressed={isHoliday}
-                            onClick={() => handleToggleHoliday(d.day)}
-                            className={`p-1 rounded-lg border text-[10px] font-black transition-all flex flex-col items-center justify-center min-h-[42px] ${
-                              isHoliday
-                                ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                : 'bg-white text-slate-700 border-slate-200'
-                            } ${
-                              isFriday || !canManageHolidays
-                                ? 'cursor-not-allowed opacity-80'
-                                : `cursor-pointer ${isHoliday ? 'hover:bg-rose-100/60 hover:border-rose-300' : 'hover:bg-slate-100 hover:border-slate-300'}`
-                            }`}
-                          >
-                            <span className="font-mono text-xs">{d.day}</span>
-                            <span className="text-[7px] leading-none opacity-80 mt-0.5">
-                              {isFriday ? 'جمعه' : source === 'official' ? 'رسمی' : source === 'custom' ? 'تعطیل' : 'کاری'}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <PersianCalendar
+                      year={currentYear}
+                      month={currentMonth}
+                      setYear={setCurrentYear}
+                      setMonth={setCurrentMonth}
+                      calendarDays={calendarDays}
+                      holidays={customHolidays}
+                      occasions={calendarOccasions}
+                      selectedDay={null}
+                      onDayClick={(day) => { if (canManageHolidays) handleToggleHoliday(day); }}
+                      interactive={canManageHolidays}
+                      showTodayButton={true}
+                      onTodayClick={() => {
+                        const now = new Date();
+                        const parts = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).format(now).split('/');
+                        const cy = Number(parts[0]); const cm = Number(parts[1]);
+                        if (cy) setCurrentYear(cy);
+                        if (cm) setCurrentMonth(cm);
+                      }}
+                      className="shadow-md"
+                    />
 
                     <div className="flex flex-wrap gap-3 pt-1 text-[9px] font-bold text-slate-500">
                       <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded bg-rose-100 ring-1 ring-rose-300" /> تعطیل</span>
@@ -7772,10 +7918,10 @@ export default function Home() {
                         <option value="M">صبح (M)</option>
                         <option value="E">عصر (E)</option>
                         <option value="N">شب (N)</option>
-                        <option value="ME">عصر-صبح (ME)</option>
+                        <option value="ME">لانگ (ME)</option>
                         <option value="EN">شب-عصر (EN)</option>
                         <option value="MN">شب-صبح (MN)</option>
-                        <option value="MEN">شیفت ۲۴ (MEN)</option>
+                        <option value="MEN">۲۴ (MEN)</option>
                       </select>
                     </div>
                   )}
@@ -8018,85 +8164,33 @@ export default function Home() {
                   ویرایش تا پیش از اتمام مهلت، نامحدود قابل تکرار است.
                 </div>
 
-                <div className="grid grid-cols-7 gap-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-inner">
-                  {WEEKDAYS.map((weekday, index) => (
-                    <div key={`edit-weekday-${weekday}`} className={`rounded-lg py-1 text-center text-[8px] font-black ${index === 6 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>{weekday[0]}</div>
-                  ))}
-                  {Array.from({ length: calendarDays[0]?.dayOfWeek || 0 }).map((_, index) => <span key={`edit-empty-${index}`} />)}
-                  {calendarDays.map(dayInfo => {
-                    const assigned = requestEditDays[dayInfo.day];
-                    const isActive = requestEditActiveDay === dayInfo.day;
-                    const meta = EDITABLE_SHIFT_CODES.find(item => item.code === assigned);
-                    return (
-                      <React.Fragment key={`edit-day-${dayInfo.day}`}>
-                        <button
-                          type="button"
-                          onClick={() => setRequestEditActiveDay(prev => (prev === dayInfo.day ? null : dayInfo.day))}
-                          aria-expanded={isActive}
-                          className={`relative min-h-14 rounded-xl border px-1 py-1.5 text-[11px] font-black transition-all flex flex-col items-center justify-center cursor-pointer ${
-                            isActive
-                              ? 'bg-indigo-600 text-white border-indigo-700 shadow-md scale-105'
-                              : assigned
-                                ? `${meta?.className || 'bg-indigo-100 text-indigo-800 border-indigo-300'} shadow-xs`
-                                : dayInfo.isHoliday
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
-                          }`}
-                          title={dayInfo.holidayTitle || (calendarOccasions[dayInfo.day] || []).join('، ')}
-                        >
-                          <span className="font-mono text-xs font-extrabold">{dayInfo.day}</span>
-                          <span className="text-[8px] opacity-80">{assigned || WEEKDAYS[dayInfo.dayOfWeek][0]}</span>
-                        </button>
-
-                        {/* زیرشاخهٔ انواع شیفت، دقیقاً زیر همان ردیف تقویم */}
-                        {isActive && (
-                          <div className="col-span-7 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-2 animate-fadeIn">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] font-black text-slate-700">
-                                نوع شیفت روز {dayInfo.day} ({WEEKDAYS[dayInfo.dayOfWeek]})
-                              </span>
-                              {assigned && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setRequestEditDays(prev => {
-                                      const next = { ...prev };
-                                      delete next[dayInfo.day];
-                                      return next;
-                                    });
-                                    setRequestEditActiveDay(null);
-                                  }}
-                                  className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black text-rose-600 hover:bg-rose-50 cursor-pointer"
-                                >
-                                  حذف این روز
-                                </button>
-                              )}
-                            </div>
-                            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
-                              {EDITABLE_SHIFT_CODES.map(option => (
-                                <button
-                                  type="button"
-                                  key={`edit-${dayInfo.day}-${option.code}`}
-                                  onClick={() => {
-                                    setRequestEditDays(prev => ({ ...prev, [dayInfo.day]: option.code }));
-                                    setRequestEditActiveDay(null);
-                                  }}
-                                  className={`rounded-xl border px-2 py-2 text-[10px] font-black transition-all cursor-pointer ${
-                                    assigned === option.code
-                                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
-                                      : `${option.className} hover:brightness-95`
-                                  }`}
-                                >
-                                  {option.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </div>
+                <PersianCalendar
+                  year={currentYear}
+                  month={currentMonth}
+                  setYear={setCurrentYear}
+                  setMonth={setCurrentMonth}
+                  calendarDays={calendarDays}
+                  holidays={customHolidays}
+                  occasions={calendarOccasions}
+                  selectedDay={null}
+                  onDayClick={(day) => setRequestEditActiveDay(prev => prev === day ? null : day)}
+                  onDayShiftSelect={(day, code) => {
+                    setRequestEditDays(prev => ({ ...prev, [day]: code as any }));
+                    setRequestEditActiveDay(null);
+                  }}
+                  showShiftSubmenuForDay={requestEditActiveDay}
+                  shiftOptions={EDITABLE_SHIFT_CODES}
+                  showTodayButton={true}
+                  onTodayClick={() => {
+                    const now = new Date();
+                    const parts = new Intl.DateTimeFormat('fa-IR-u-nu-latn', { year: 'numeric', month: 'numeric', timeZone: 'Asia/Tehran' }).format(now).split('/');
+                    const cy = Number(parts[0]); const cm = Number(parts[1]);
+                    if (cy) setCurrentYear(cy);
+                    if (cm) setCurrentMonth(cm);
+                  }}
+                  interactive={true}
+                  className="shadow-md"
+                />
 
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600">
                   <span>روزهای ویرایش‌شده: <b className="text-indigo-700 font-mono">{selectedCount}</b></span>

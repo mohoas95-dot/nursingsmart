@@ -34,15 +34,15 @@ export function formatDayList(days: readonly number[] | undefined): string {
   return [...days].sort((a, b) => a - b).map(formatDayOrdinal).join("، ");
 }
 
-/** برچسب فارسی هر کد شیفت — «MEN» همیشه «شیفت ۲۴» است، نه «تمام روز». */
+/** برچسب فارسی هر کد شیفت — «MEN» همیشه «۲۴» است. */
 export const SHIFT_LABELS: Readonly<Record<string, string>> = {
   M: "صبح (M)",
   E: "عصر (E)",
   N: "شب (N)",
-  ME: "لانگ / صبح-عصر (ME)",
+  ME: "لانگ (ME)",
   EN: "عصر-شب (EN)",
   MN: "شب-صبح (MN)",
-  MEN: "شیفت ۲۴ (MEN)",
+  MEN: "۲۴ (MEN)",
   OFF: "آف",
   L: "مرخصی",
 };

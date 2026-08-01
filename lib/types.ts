@@ -101,6 +101,8 @@ export interface ShiftRequest {
   selectedDays?: number[];
   createdAt?: string;
   updatedAt?: string;
+  /** توضیحات اضافی کاربر برای این درخواست (قابل مشاهده برای پرسنل و سرپرستار) */
+  notes?: string;
 }
 
 export interface MonthlySchedule {
