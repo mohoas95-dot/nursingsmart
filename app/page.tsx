@@ -2186,18 +2186,18 @@ export default function Home() {
     const shiftName = getShiftLabel(r.preferredShift);
 
     if (r.requestType === 'shift') {
-      return `سلام سرپرستار محترم، لطفاً در ${datesText} من رو در شیفت ${shiftName} قرار بدید.`;
+      return `برای من شیفت ${shiftName} در ${datesText} لحاظ فرمایید.`;
     } else if (r.requestType === 'avoid_shift') {
-      return `سلام سرپرستار محترم، در ${datesText} امکان حضور در شیفت ${shiftName} رو ندارم.`;
+      return `برای من شیفت ${shiftName} در ${datesText} لحاظ نفرمایید.`;
     } else if (r.requestType === 'OFF') {
       const hardnessText = r.offHardness === 'hard' ? 'آف قطعی و ضروری (آف سخت)' : r.offHardness === 'soft' ? 'آف پیشنهادی (آف نرم)' : 'آف';
-      return `درخواست ${hardnessText} برای ${datesText} دارم.`;
+      return `درخواست ${hardnessText} برای ${datesText} لحاظ فرمایید.`;
     } else if (r.requestType === 'leave') {
-      return `درخواست مرخصی برای ${datesText} دارم.`;
+      return `درخواست مرخصی برای ${datesText} لحاظ فرمایید.`;
     } else if (r.requestType === 'pattern') {
-      return `درخواست اجرای الگوی شیفتی ${r.patternSteps?.join(' ➔ ') || 'سفارشی'} برای ${datesText} دارم.`;
+      return `درخواست اجرای الگوی شیفتی ${r.patternSteps?.join(' ➔ ') || 'سفارشی'} برای ${datesText} لحاظ فرمایید.`;
     }
-    return `درخواست شیفت برای ${datesText}`;
+    return `درخواست شیفت برای ${datesText} لحاظ فرمایید.`;
   };
 
   const getRequestSummaryText = (r: ShiftRequest): string => {
@@ -6886,48 +6886,45 @@ export default function Home() {
                       'from-fuchsia-600 via-pink-600 to-rose-600',
                     ];
 
+                    const activePerson = expandedCardPersonnelId
+                      ? personnel.find(per => per.id === expandedCardPersonnelId)
+                      : null;
+                    const activeReqs = expandedCardPersonnelId
+                      ? requests.filter(r => r.personnelId === expandedCardPersonnelId)
+                      : [];
+
                     return (
                       <div className="w-full">
-                        {/* کارت‌ها به‌صورت افقی و روی‌هم در موبایل و دسکتاپ (با امکان اسکرول به چپ و راست) */}
-                        <div className="flex flex-nowrap overflow-x-auto py-8 px-4 sm:px-8 scrollbar-thin -space-x-12 sm:-space-x-16 rtl:space-x-reverse snap-x justify-start items-start min-h-[360px] sm:min-h-[420px]">
+                        {/* کارت‌ها به‌صورت افقی با روی‌هم‌افتادگی زیاد در موبایل و دسکتاپ (با امکان اسکرول به چپ و راست) */}
+                        <div className="flex flex-nowrap overflow-x-auto py-10 px-6 sm:px-12 scrollbar-thin -space-x-28 sm:-space-x-36 md:-space-x-44 rtl:space-x-reverse snap-x justify-start items-start min-h-[360px] sm:min-h-[420px]">
                           {filteredGroupedPIds.map((pid, idx) => {
                             const p = personnel.find(per => per.id === pid);
                             if (!p) return null;
                             const pReqs = requests.filter(r => r.personnelId === pid);
                             const hasEssential = pReqs.some(r => r.isEssential);
-                            const isExpanded = expandedCardPersonnelId === pid;
 
                             const nameGradient = NAME_COLOR_GRADIENTS[idx % NAME_COLOR_GRADIENTS.length];
-                            const rotationDeg = (idx % 5 - 2) * 2; // -4deg, -2deg, 0deg, 2deg, 4deg
+                            const rotationDeg = (idx % 5 - 2) * 2.5; // -5deg, -2.5deg, 0deg, 2.5deg, 5deg
 
                             // تاریخ و ساعت ثبت و ویرایش
                             const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
-                            const updatedAtDates = pReqs.map(r => r.updatedAt).filter(Boolean);
                             const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
-                            const latestUpdated = updatedAtDates.length > 0 ? updatedAtDates.sort().reverse()[0] : undefined;
-
                             const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
 
                             return (
                               <div
                                 key={`fanned-card-${pid}`}
-                                onClick={() => setExpandedCardPersonnelId(isExpanded ? null : pid)}
-                                style={{ transform: isExpanded ? 'rotate(0deg)' : `rotate(${rotationDeg}deg)` }}
-                                className={`group shrink-0 relative w-[280px] sm:w-[340px] md:w-[380px] rounded-[2rem] border-2 transition-all duration-300 cursor-pointer overflow-hidden snap-center ${
-                                  isExpanded
-                                    ? 'bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 text-white border-amber-400 shadow-2xl scale-[1.04] z-40 ring-4 ring-amber-400/20 -translate-y-4'
-                                    : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-indigo-400 shadow-xl hover:shadow-2xl hover:-translate-y-8 hover:rotate-0 z-10'
-                                }`}
+                                onClick={() => setExpandedCardPersonnelId(pid)}
+                                style={{ transform: `rotate(${rotationDeg}deg)` }}
+                                className="group shrink-0 relative w-[280px] sm:w-[340px] md:w-[380px] rounded-[2rem] border-2 bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-indigo-400 shadow-xl hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden snap-center hover:-translate-y-10 hover:rotate-0 hover:z-40"
                               >
                                 {/* سربرگ کارت */}
-                                <div className={`p-5 border-b flex items-start justify-between gap-3 ${
-                                  isExpanded ? 'border-amber-400/30 bg-white/5' : 'border-slate-100 bg-slate-50/80'
-                                }`}>
+                                <div className="p-5 border-b border-slate-100 bg-slate-50/80 flex items-start justify-between gap-3">
                                   <div className="space-y-1">
                                     <h5 className={`text-base sm:text-lg font-black bg-gradient-to-r ${nameGradient} bg-clip-text text-transparent drop-shadow-xs`}>
                                       {p.firstName} {p.lastName}
                                     </h5>
-                                    <div className={`text-[11px] font-extrabold flex items-center gap-2 ${isExpanded ? 'text-slate-300' : 'text-slate-500'}`}>
+                                    <div className="text-[11px] font-extrabold text-slate-500 flex items-center gap-2">
                                       <span>کد پرسنلی: <span className="font-mono">{toPersianDigits(p.personalCode)}</span></span>
                                       <span>•</span>
                                       <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 font-bold border border-indigo-200/40">
@@ -6942,7 +6939,7 @@ export default function Home() {
                                         ★ دارای اولویت
                                       </span>
                                     ) : (
-                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isExpanded ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-600'}`}>
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
                                         عادی
                                       </span>
                                     )}
@@ -6952,144 +6949,191 @@ export default function Home() {
                                   </div>
                                 </div>
 
-                                {/* پیش‌نمایش در حالت کلیک‌نشده */}
-                                {!isExpanded ? (
-                                  <div className="p-5 space-y-4">
-                                    <div className="space-y-2">
-                                      <p className="text-xs font-bold text-slate-600 leading-6 line-clamp-2">
-                                        {pReqs.map(r => formatRequestConversational(r)).join(' — ')}
-                                      </p>
+                                {/* پیش‌نمایش در حالت غیرفعال */}
+                                <div className="p-5 space-y-4">
+                                  <div className="space-y-2">
+                                    <p className="text-xs font-bold text-slate-600 leading-6 line-clamp-2">
+                                      {pReqs.map(r => formatRequestConversational(r)).join(' — ')}
+                                    </p>
 
-                                      {notesList.length > 0 && (
-                                        <div className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded-xl line-clamp-1">
-                                          📝 {notesList[0]}
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] font-bold text-slate-400">
-                                      <span>ثبت: {formatJalaliDateTime(earliestCreated)}</span>
-                                      <span className="text-indigo-600 font-black group-hover:translate-x-1 transition-transform">
-                                        مشاهده جزئیات ◄
-                                      </span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  /* حالت کلیک‌شده با تمام جزئیات، ابزار ویرایش و تعیین اولویت مجزا */
-                                  <div className="p-5 space-y-5 animate-fadeIn">
-                                    <div className="space-y-3">
-                                      <div className="text-xs font-black text-amber-300 border-b border-amber-400/20 pb-2">
-                                        📜 متن کامل درخواست‌ها:
-                                      </div>
-
-                                      <ul className="space-y-3">
-                                        {pReqs.map((r) => (
-                                          <li key={`expanded-req-${r.id}`} className="bg-white/10 border border-white/15 p-3.5 rounded-2xl space-y-2 text-xs text-slate-100 leading-6">
-                                            <div className="font-extrabold text-amber-200 flex items-start justify-between gap-2">
-                                              <span className="flex-1">• {formatRequestConversational(r)}</span>
-
-                                              {/* دکمه ویرایش درخواست */}
-                                              <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  handleOpenRequestEditor(r);
-                                                }}
-                                                disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
-                                                className="shrink-0 px-2.5 py-1 rounded-xl text-[10px] font-black bg-sky-500/20 hover:bg-sky-500 text-sky-200 hover:text-white transition-all cursor-pointer flex items-center gap-1 border border-sky-400/30"
-                                                title="ویرایش این درخواست روی تقویم"
-                                              >
-                                                <Edit className="w-3 h-3" />
-                                                <span>ویرایش</span>
-                                              </button>
-                                            </div>
-
-                                            {/* اولویت‌بندی مجزا برای هر درخواست + تعیین آف نرم و سخت */}
-                                            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10 text-[10px]">
-                                              <div className="flex items-center gap-1.5">
-                                                {r.requestType === 'OFF' && (
-                                                  <span className={`px-2 py-0.5 rounded-full font-black ${
-                                                    r.offHardness === 'hard' ? 'bg-rose-500 text-white' : 'bg-amber-500 text-slate-900'
-                                                  }`}>
-                                                    {r.offHardness === 'hard' ? '🔴 آف سخت (قطعی)' : '🟡 آف نرم (پیشنهادی)'}
-                                                  </span>
-                                                )}
-                                              </div>
-
-                                              {(role === 'headnurse' || role === 'admin') && (
-                                                <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                                                  {/* تعیین اولویت مجزا برای همین درخواست */}
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => handleToggleSingleRequestPriority(r.id)}
-                                                    className={`px-2.5 py-1 rounded-xl font-black transition-all cursor-pointer ${
-                                                      r.isEssential
-                                                        ? 'bg-rose-500 text-white hover:bg-rose-600'
-                                                        : 'bg-white/15 text-slate-200 hover:bg-white/25 border border-white/20'
-                                                    }`}
-                                                    title="تغییر اولویت برای همین درخواست"
-                                                  >
-                                                    {r.isEssential ? '★ اولویت بالا' : '☆ اولویت عادی'}
-                                                  </button>
-
-                                                  {/* تعیین آف نرم/سخت مجزا برای همین درخواست */}
-                                                  {r.requestType === 'OFF' && (
-                                                    <button
-                                                      type="button"
-                                                      onClick={() => handleSetSingleRequestOffHardness(r.id, r.offHardness === 'hard' ? 'soft' : 'hard')}
-                                                      className="px-2.5 py-1 rounded-xl font-black bg-amber-400 hover:bg-amber-500 text-slate-950 transition-all cursor-pointer"
-                                                      title="تغییر نوع آف"
-                                                    >
-                                                      {r.offHardness === 'hard' ? '🟡 آف نرم' : '🔴 آف سخت'}
-                                                    </button>
-                                                  )}
-                                                </div>
-                                              )}
-                                            </div>
-                                          </li>
-                                        ))}
-                                      </ul>
-
-                                      {/* نمایش توضیحات اضافی پرسنل */}
-                                      {notesList.length > 0 && (
-                                        <div className="bg-amber-400/15 border border-amber-400/40 p-3.5 rounded-2xl space-y-1">
-                                          <div className="text-[11px] font-black text-amber-300">📝 توضیحات اضافی ثبت‌شده:</div>
-                                          <p className="text-xs font-bold text-amber-100 leading-6">{notesList.join(' — ')}</p>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* تاریخ و ساعت ثبت و ویرایش */}
-                                    <div className="bg-white/5 border border-white/10 p-3 rounded-2xl space-y-1 text-[10px] font-extrabold text-slate-300">
-                                      <div>📅 تاریخ و ساعت ثبت: <span className="font-mono text-white">{formatJalaliDateTime(earliestCreated)}</span></div>
-                                      <div>✏️ تاریخ و ساعت آخرین ویرایش: <span className="font-mono text-white">{formatJalaliDateTime(latestUpdated || earliestCreated)}</span></div>
-                                    </div>
-
-                                    {/* دکمه حذف کلی برای سرپرستار */}
-                                    {(role === 'headnurse' || role === 'admin') && (
-                                      <div className="pt-2 border-t border-white/15" onClick={e => e.stopPropagation()}>
-                                        <button
-                                          type="button"
-                                          onClick={() => handleDeleteAllPersonRequests(pid, `${p.firstName} ${p.lastName}`)}
-                                          className="w-full px-3 py-2 rounded-xl text-xs font-black bg-rose-500/20 text-rose-300 hover:bg-rose-500 hover:text-white border border-rose-500/40 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                          <span>حذف کامل درخواست‌های این فرد</span>
-                                        </button>
+                                    {notesList.length > 0 && (
+                                      <div className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded-xl line-clamp-1">
+                                        📝 {notesList[0]}
                                       </div>
                                     )}
-
-                                    <div className="text-center pt-2">
-                                      <span className="text-[10px] font-extrabold text-amber-400 hover:underline">
-                                        بستن کارت ▲
-                                      </span>
-                                    </div>
                                   </div>
-                                )}
+
+                                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] font-bold text-slate-400">
+                                    <span>ثبت: {formatJalaliDateTime(earliestCreated)}</span>
+                                    <span className="text-indigo-600 font-black group-hover:translate-x-1 transition-transform">
+                                      باز کردن تمام صفحه ◄
+                                    </span>
+                                  </div>
+                                </div>
                               </div>
                             );
                           })}
                         </div>
+
+                        {/* مودال تمام‌صفحه / وسط صفحه با تمام جزئیات کارت کلیک‌شده */}
+                        {activePerson && (
+                          <div
+                            className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/80 backdrop-blur-md animate-fadeIn"
+                            onClick={() => setExpandedCardPersonnelId(null)}
+                          >
+                            <div
+                              className="relative max-w-2xl w-full bg-slate-900 text-white border-2 border-amber-400/80 rounded-[2.5rem] shadow-2xl overflow-hidden p-6 sm:p-8 space-y-6 max-h-[90vh] overflow-y-auto animate-scaleUp"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              {/* سربرگ مودال */}
+                              <div className="flex items-start justify-between gap-4 border-b border-white/15 pb-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-xl sm:text-2xl font-black text-amber-300">
+                                    {activePerson.firstName} {activePerson.lastName}
+                                  </h3>
+                                  <p className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                                    <span>کد پرسنلی: <span className="font-mono text-white">{toPersianDigits(activePerson.personalCode)}</span></span>
+                                    <span>•</span>
+                                    <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-black border border-indigo-400/30">
+                                      {activePerson.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
+                                    </span>
+                                  </p>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedCardPersonnelId(null)}
+                                  className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition-colors shrink-0 cursor-pointer"
+                                  title="بستن"
+                                >
+                                  <X className="w-5 h-5" />
+                                </button>
+                              </div>
+
+                              {/* لیست کامل درخواست‌ها با دکمه ویرایش و اولویت مجزا */}
+                              <div className="space-y-3">
+                                <div className="text-xs font-black text-amber-300 flex items-center justify-between border-b border-amber-400/20 pb-2">
+                                  <span>📜 شرح کامل درخواست‌ها:</span>
+                                  <span className="text-[11px] text-slate-300 font-bold">{toPersianDigits(activeReqs.length)} مورد</span>
+                                </div>
+
+                                <ul className="space-y-3">
+                                  {activeReqs.map(r => (
+                                    <li key={`modal-req-${r.id}`} className="bg-white/10 border border-white/15 p-4 rounded-2xl space-y-3 text-xs text-slate-100 leading-6">
+                                      <div className="font-extrabold text-amber-200 flex items-start justify-between gap-3">
+                                        <span className="flex-1">• {formatRequestConversational(r)}</span>
+
+                                        {/* دکمه ویرایش درخواست رو تقویم */}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setExpandedCardPersonnelId(null);
+                                            handleOpenRequestEditor(r);
+                                          }}
+                                          disabled={role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)}
+                                          className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-black bg-sky-500/20 hover:bg-sky-500 text-sky-200 hover:text-white transition-all cursor-pointer flex items-center gap-1 border border-sky-400/30 active:scale-95"
+                                          title="ویرایش این درخواست روی تقویم"
+                                        >
+                                          <Edit className="w-3.5 h-3.5" />
+                                          <span>ویرایش</span>
+                                        </button>
+                                      </div>
+
+                                      {/* اولویت‌بندی مجزا برای همین درخواست + نوع آف */}
+                                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10 text-[11px]">
+                                        <div className="flex items-center gap-2">
+                                          {r.requestType === 'OFF' && (
+                                            <span className={`px-2.5 py-0.5 rounded-full font-black ${
+                                              r.offHardness === 'hard' ? 'bg-rose-500 text-white' : 'bg-amber-500 text-slate-900'
+                                            }`}>
+                                              {r.offHardness === 'hard' ? '🔴 آف سخت (قطعی)' : '🟡 آف نرم (پیشنهادی)'}
+                                            </span>
+                                          )}
+                                          {r.isEssential && (
+                                            <span className="bg-rose-500/80 text-white px-2.5 py-0.5 rounded-full font-black">
+                                              ★ اولویت بالا
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {(role === 'headnurse' || role === 'admin') && (
+                                          <div className="flex items-center gap-2">
+                                            {/* اولویت مجزای همین درخواست */}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleToggleSingleRequestPriority(r.id)}
+                                              className={`px-3 py-1.5 rounded-xl font-black transition-all cursor-pointer ${
+                                                r.isEssential
+                                                  ? 'bg-rose-500 text-white hover:bg-rose-600'
+                                                  : 'bg-white/15 text-slate-200 hover:bg-white/25 border border-white/20'
+                                              }`}
+                                              title="تغییر اولویت مجزا برای همین درخواست"
+                                            >
+                                              {r.isEssential ? '★ اولویت بالا' : '☆ اولویت عادی'}
+                                            </button>
+
+                                            {/* آف نرم/سخت مجزا برای همین درخواست */}
+                                            {r.requestType === 'OFF' && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleSetSingleRequestOffHardness(r.id, r.offHardness === 'hard' ? 'soft' : 'hard')}
+                                                className="px-3 py-1.5 rounded-xl font-black bg-amber-400 hover:bg-amber-500 text-slate-950 transition-all cursor-pointer"
+                                                title="تغییر نوع آف"
+                                              >
+                                                {r.offHardness === 'hard' ? '🟡 آف نرم' : '🔴 آف سخت'}
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </li>
+                                  ))}
+                                </ul>
+
+                                {/* نمایش توضیحات اضافی پرسنل */}
+                                {[...new Set(activeReqs.map(r => r.note?.trim()).filter(Boolean))].length > 0 && (
+                                  <div className="bg-amber-400/15 border border-amber-400/40 p-4 rounded-2xl space-y-1">
+                                    <div className="text-xs font-black text-amber-300">📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</div>
+                                    <p className="text-xs font-bold text-amber-100 leading-6">
+                                      {[...new Set(activeReqs.map(r => r.note?.trim()).filter(Boolean))].join(' — ')}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* تاریخ و ساعت ثبت و ویرایش */}
+                              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-1.5 text-xs font-extrabold text-slate-300">
+                                <div>📅 تاریخ و ساعت ثبت: <span className="font-mono text-white">{formatJalaliDateTime(activeReqs.map(r => r.createdAt).filter(Boolean).sort()[0])}</span></div>
+                                <div>✏️ تاریخ و ساعت آخرین ویرایش: <span className="font-mono text-white">{formatJalaliDateTime(activeReqs.map(r => r.updatedAt).filter(Boolean).sort().reverse()[0] || activeReqs.map(r => r.createdAt).filter(Boolean).sort()[0])}</span></div>
+                              </div>
+
+                              {/* دکمه‌های پایانی سرپرستار */}
+                              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-white/15">
+                                {(role === 'headnurse' || role === 'admin') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleDeleteAllPersonRequests(activePerson.id, `${activePerson.firstName} ${activePerson.lastName}`);
+                                      setExpandedCardPersonnelId(null);
+                                    }}
+                                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-black bg-rose-500/20 text-rose-300 hover:bg-rose-500 hover:text-white border border-rose-500/40 transition-all cursor-pointer flex items-center justify-center gap-2"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                    <span>حذف کامل کلیه درخواست‌ها</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedCardPersonnelId(null)}
+                                  className="w-full sm:w-auto mr-auto px-6 py-2.5 rounded-xl text-xs font-black bg-amber-400 text-slate-950 hover:bg-amber-300 transition-all cursor-pointer text-center"
+                                >
+                                  بستن و بازگشت
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
