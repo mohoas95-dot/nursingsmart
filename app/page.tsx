@@ -222,17 +222,17 @@ type HeaderAvatarConfig = {
 
 const HEADER_AVATAR_BY_KIND = {
   boss: {
-    src: '/avatars/boss.svg',
+    src: '/avatars/boss.png',
     alt: 'تصویر پروفایل سرپرستار',
     ringClass: 'ring-emerald-100',
   },
   male: {
-    src: '/avatars/man.svg',
+    src: '/avatars/man.png',
     alt: 'تصویر پروفایل کاربر آقا',
     ringClass: 'ring-sky-100',
   },
   female: {
-    src: '/avatars/woman.svg',
+    src: '/avatars/woman.png',
     alt: 'تصویر پروفایل کاربر خانم',
     ringClass: 'ring-pink-100',
   },
