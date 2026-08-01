@@ -14,15 +14,29 @@ import {
 } from '../lib/persian-vocabulary';
 
 // ============================================================================
-// «شیفت ۲۴» به‌جای «تمام روز»  (ایراد شمارهٔ ۳)
+// «۲۴» به‌جای «شیفت ۲۴ / تمام روز» و «لانگ» به‌جای «صبح-عصر»  (ایراد شمارهٔ ۳)
 // ============================================================================
 
-test('MEN همیشه «شیفت ۲۴» نامیده می‌شود، نه «تمام روز»', () => {
+test('MEN همیشه «۲۴» نامیده می‌شود، نه «شیفت ۲۴» یا «تمام روز»', () => {
   const label = getShiftLabel('MEN');
-  assert.ok(label.includes('شیفت ۲۴'), `انتظار «شیفت ۲۴» بود ولی «${label}» آمد`);
+  assert.equal(label, '۲۴ (MEN)');
+  assert.ok(!label.includes('شیفت ۲۴'));
   assert.ok(!label.includes('تمام روز'));
   assert.ok(!label.includes('کل روز'));
   assert.ok(!label.includes('ترکیبی'));
+});
+
+test('ME همیشه «لانگ» نامیده می‌شود، نه «صبح-عصر»', () => {
+  const label = getShiftLabel('ME');
+  assert.equal(label, 'لانگ (ME)');
+  assert.ok(!label.includes('صبح-عصر'));
+  assert.ok(!label.includes('عصر-صبح'));
+});
+
+test('هیچ برچسب شیفتی عبارت «صبح-عصر» یا «شیفت ۲۴» ندارد', () => {
+  for (const [code, label] of Object.entries(SHIFT_LABELS)) {
+    assert.ok(!/صبح-عصر|عصر-صبح|شیفت ۲۴|شیفت 24/.test(label), `برچسب ${code} واژگان قدیمی دارد: ${label}`);
+  }
 });
 
 test('هیچ برچسب شیفتی عبارت «تمام روز» یا «کل روز» ندارد', () => {
