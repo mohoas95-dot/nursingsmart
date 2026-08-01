@@ -197,7 +197,13 @@
 
 .tdt-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.16) !important;
+  box-shadow: 0 18px 40px rgba(15, 157, 122, 0.16) !important;
+}
+
+@media (max-width: 639px) {
+  .tdt-card:hover {
+    transform: none;
+  }
 }
 
 /* شناوری بسیار ملایم قاب ساعت */
@@ -211,45 +217,51 @@
   50% { transform: translateY(-4px); }
 }
 
-/* حرکت پیوستهٔ عقربهٔ ثانیه بین تیک‌های ۱ثانیه‌ای */
+/* حرکت پیوستهٔ عقربهٔ ثانیه — زاویهٔ تجمعی پس هرگز از ۳۵۴° به ۰° برنمی‌گردد */
 .tdt-second-hand {
   transition: transform 1s linear;
   will-change: transform;
 }
 
-/* موج‌های آرام پس‌زمینه — لایه‌های با سرعت متفاوت */
+/* موج‌های زنده و چشم‌نواز — لایه‌های با سرعت/مسیر متفاوت */
 .tdt-wave {
   will-change: transform;
 }
 
 .tdt-wave-1 {
-  animation: tdt-wave-drift-a 18s ease-in-out infinite alternate;
-  opacity: 1;
+  animation: tdt-wave-drift-a 10s ease-in-out infinite alternate;
 }
 
 .tdt-wave-2 {
-  animation: tdt-wave-drift-b 14s ease-in-out infinite alternate;
-  opacity: 1;
+  animation: tdt-wave-drift-b 8s ease-in-out infinite alternate;
 }
 
 .tdt-wave-3 {
-  animation: tdt-wave-drift-c 20s ease-in-out infinite alternate;
-  opacity: 1;
+  animation: tdt-wave-drift-c 12s ease-in-out infinite alternate;
+}
+
+.tdt-wave-4 {
+  animation: tdt-wave-drift-d 7s ease-in-out infinite alternate;
 }
 
 @keyframes tdt-wave-drift-a {
   0% { transform: translate3d(0, 0, 0) scale(1); }
-  100% { transform: translate3d(4%, -2%, 0) scale(1.03); }
+  100% { transform: translate3d(6%, -4%, 0) scale(1.05); }
 }
 
 @keyframes tdt-wave-drift-b {
-  0% { transform: translate3d(0, 0, 0) scale(1.02); }
-  100% { transform: translate3d(-5%, 3%, 0) scale(1); }
+  0% { transform: translate3d(0, 2%, 0) scale(1.02); }
+  100% { transform: translate3d(-7%, -3%, 0) scale(1.06); }
 }
 
 @keyframes tdt-wave-drift-c {
-  0% { transform: translate3d(0, 0, 0); }
-  100% { transform: translate3d(3%, 4%, 0); }
+  0% { transform: translate3d(-2%, 0, 0); }
+  100% { transform: translate3d(5%, 5%, 0) scale(1.04); }
+}
+
+@keyframes tdt-wave-drift-d {
+  0% { transform: translate3d(2%, 0, 0) scale(1); }
+  100% { transform: translate3d(-6%, 3%, 0) scale(1.05); }
 }
 
 /* دکمهٔ تقویم شیشه‌ای + ریپل کلیک */
@@ -320,7 +332,8 @@
   .tdt-clock,
   .tdt-wave-1,
   .tdt-wave-2,
-  .tdt-wave-3 {
+  .tdt-wave-3,
+  .tdt-wave-4 {
     animation: none !important;
   }
 

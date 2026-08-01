@@ -5461,34 +5461,34 @@ export default function Home() {
         </header>
 
         {/* ========== کارت پریمیوم انتخاب بازه برنامه‌ریزی (فقط UI) ========== */}
-        <div className="px-4 sm:px-6 py-4 print:hidden shrink-0 bg-[#F7FAF9] border-b border-[#E8F1EE]" dir="rtl">
+        <div className="px-3 sm:px-6 py-2 sm:py-4 print:hidden shrink-0 bg-[#F7FAF9] border-b border-[#E8F1EE]" dir="rtl">
           <section
             aria-label="انتخاب بازه برنامه‌ریزی"
             title={monthTheme.seasonLabel}
-            className="relative overflow-hidden rounded-[24px] border border-[#EEF2F5] bg-white px-6 py-6 sm:px-7 sm:py-7 shadow-[0_8px_30px_rgba(15,23,42,0.04)] animate-period-select"
+            className="relative overflow-hidden rounded-2xl sm:rounded-[24px] border border-[#EEF2F5] bg-white px-3 py-2.5 sm:px-7 sm:py-7 shadow-[0_4px_16px_rgba(15,23,42,0.04)] sm:shadow-[0_8px_30px_rgba(15,23,42,0.04)] animate-period-select"
           >
-            {/* هاله تزئینی بسیار ملایم گوشه */}
+            {/* هاله تزئینی — فقط دسکتاپ */}
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute -left-16 -top-16 h-40 w-40 rounded-full bg-gradient-to-br from-[#14B88A]/10 to-transparent blur-2xl"
+              className="pointer-events-none absolute -left-16 -top-16 hidden h-40 w-40 rounded-full bg-gradient-to-br from-[#14B88A]/10 to-transparent blur-2xl sm:block"
             />
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute -bottom-20 -right-10 h-44 w-44 rounded-full bg-gradient-to-tl from-[#0F9D7A]/08 to-transparent blur-2xl"
+              className="pointer-events-none absolute -bottom-20 -right-10 hidden h-44 w-44 rounded-full bg-gradient-to-tl from-[#0F9D7A]/08 to-transparent blur-2xl sm:block"
             />
 
-            {/* ردیف اصلی: عنوان (راست) | دراپ‌داون‌ها (وسط) | آیکون (چپ) */}
-            <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:gap-6 lg:gap-8">
-              {/* عنوان — راست در دسکتاپ */}
-              <div className="order-1 flex min-w-0 shrink-0 flex-col gap-3 md:max-w-[220px] lg:max-w-[260px]">
-                <div className="space-y-1.5 text-right">
+            {/* موبایل: یک ردیف فشرده شبیه نوار قبلی | دسکتاپ: چیدمان کامل */}
+            <div className="relative flex flex-col gap-2.5 sm:gap-5 md:flex-row md:items-center md:gap-6 lg:gap-8">
+              {/* عنوان */}
+              <div className="order-1 flex min-w-0 shrink-0 items-center justify-between gap-2 md:max-w-[220px] md:flex-col md:items-start md:gap-3 lg:max-w-[260px]">
+                <div className="min-w-0 space-y-0.5 sm:space-y-1.5 text-right">
                   <h2
-                    className="text-base sm:text-lg font-black tracking-tight text-[#1F2937]"
+                    className="text-xs sm:text-base lg:text-lg font-black tracking-tight text-[#1F2937] truncate"
                     style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
                   >
                     انتخاب بازه برنامه‌ریزی
                   </h2>
-                  <p className="text-xs sm:text-[13px] font-medium leading-6 text-slate-500">
+                  <p className="hidden sm:block text-xs sm:text-[13px] font-medium leading-6 text-slate-500">
                     سال و ماه مورد نظر را انتخاب کنید
                   </p>
                 </div>
@@ -5499,29 +5499,29 @@ export default function Home() {
                     handleCalendarNavigate(today.year, today.month);
                     setIsMonthDrawerOpen(false);
                   }}
-                  className="period-today-btn inline-flex w-fit items-center gap-1.5 rounded-full border border-[#E8F1EE] bg-white px-3.5 py-1.5 text-[11px] font-bold text-slate-600 cursor-pointer"
+                  className="period-today-btn inline-flex w-fit shrink-0 items-center gap-1 sm:gap-1.5 rounded-full border border-[#E8F1EE] bg-white px-2.5 py-1 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[11px] font-bold text-slate-600 cursor-pointer"
                   title="بازگشت به ماه جاری"
                   aria-label="پریدن به ماه جاری"
                 >
-                  <CalendarIcon className="h-3.5 w-3.5 text-[#0F9D7A]" strokeWidth={2} />
+                  <CalendarIcon className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-[#0F9D7A]" strokeWidth={2} />
                   امروز
                 </button>
               </div>
 
-              {/* دراپ‌داون‌ها — مرکز */}
-              <div className="order-2 flex min-w-0 flex-1 flex-col gap-3">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-3">
+              {/* دراپ‌داون‌ها + بج */}
+              <div className="order-2 flex min-w-0 flex-1 flex-col gap-2 sm:gap-3">
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
                   {/* سال */}
-                  <label className="flex min-w-0 flex-col gap-1.5">
+                  <label className="flex min-w-0 flex-col gap-1">
                     <span className="sr-only">سال</span>
                     <div className="relative">
-                      <span className="pointer-events-none absolute inset-y-0 right-3.5 z-[1] flex items-center text-[#0F9D7A]">
-                        <CalendarIcon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      <span className="pointer-events-none absolute inset-y-0 right-2.5 sm:right-3.5 z-[1] flex items-center text-[#0F9D7A]">
+                        <CalendarIcon className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" strokeWidth={1.75} />
                       </span>
                       <select
                         value={currentYear}
                         onChange={event => handleCalendarNavigate(Number(event.target.value), currentMonth)}
-                        className="period-select h-14 w-full cursor-pointer appearance-none rounded-2xl border border-[#E8F1EE] bg-white py-2 pr-11 pl-9 text-sm font-black text-[#1F2937] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        className="period-select h-9 sm:h-14 w-full cursor-pointer appearance-none rounded-xl sm:rounded-2xl border border-[#E8F1EE] bg-white py-1 pr-8 pl-7 sm:py-2 sm:pr-11 sm:pl-9 text-xs sm:text-sm font-black text-[#1F2937] shadow-[0_1px_4px_rgba(15,23,42,0.04)] sm:shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
                         aria-label="انتخاب سال"
                       >
                         {navYearOptions.map(option => (
@@ -5530,18 +5530,18 @@ export default function Home() {
                           </option>
                         ))}
                       </select>
-                      <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-slate-400">
-                        <ChevronDown className="h-4 w-4" />
+                      <span className="pointer-events-none absolute inset-y-0 left-2 sm:left-3.5 flex items-center text-slate-400">
+                        <ChevronDown className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                       </span>
                     </div>
                   </label>
 
                   {/* ماه */}
-                  <label className="flex min-w-0 flex-col gap-1.5">
+                  <label className="flex min-w-0 flex-col gap-1">
                     <span className="sr-only">ماه</span>
                     <div className="relative">
-                      <span className="pointer-events-none absolute inset-y-0 right-3.5 z-[1] flex items-center text-[#0F9D7A]">
-                        <CalendarIcon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      <span className="pointer-events-none absolute inset-y-0 right-2.5 sm:right-3.5 z-[1] flex items-center text-[#0F9D7A]">
+                        <CalendarIcon className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" strokeWidth={1.75} />
                       </span>
                       <select
                         value={currentMonth}
@@ -5549,7 +5549,7 @@ export default function Home() {
                           handleSelectMonth(Number(event.target.value));
                           setIsMonthDrawerOpen(false);
                         }}
-                        className="period-select h-14 w-full cursor-pointer appearance-none rounded-2xl border border-[#E8F1EE] bg-white py-2 pr-11 pl-9 text-sm font-black text-[#1F2937] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        className="period-select h-9 sm:h-14 w-full cursor-pointer appearance-none rounded-xl sm:rounded-2xl border border-[#E8F1EE] bg-white py-1 pr-8 pl-7 sm:py-2 sm:pr-11 sm:pl-9 text-xs sm:text-sm font-black text-[#1F2937] shadow-[0_1px_4px_rgba(15,23,42,0.04)] sm:shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
                         aria-label="انتخاب ماه"
                       >
                         {JALALI_MONTH_NAMES.map((name, idx) => (
@@ -5558,17 +5558,17 @@ export default function Home() {
                           </option>
                         ))}
                       </select>
-                      <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-slate-400">
-                        <ChevronDown className="h-4 w-4" />
+                      <span className="pointer-events-none absolute inset-y-0 left-2 sm:left-3.5 flex items-center text-slate-400">
+                        <ChevronDown className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                       </span>
                     </div>
                   </label>
                 </div>
 
-                {/* بج وضعیت — زیر دراپ‌داون‌ها */}
+                {/* بج وضعیت */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-2 rounded-full border border-[#E8F1EE] bg-[#F0FDF8] px-3.5 py-1.5 text-[12px] font-medium text-[#0F9D7A]">
-                    <CalendarIcon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                  <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E8F1EE] bg-[#F0FDF8] px-2.5 py-1 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[12px] font-medium text-[#0F9D7A]">
+                    <CalendarIcon className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" strokeWidth={2} />
                     <span>
                       در حال مشاهده برنامه{' '}
                       <b className="font-black">
@@ -5579,9 +5579,9 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* آیکون سه‌بعدی انیمیشنی — چپ در دسکتاپ */}
-              <div className="order-3 flex shrink-0 items-center justify-center self-center md:self-center">
-                <AnimatedCalendarIcon className="md:hidden" size={80} />
+              {/* آیکون — مخفی روی موبایل باریک، کوچک روی sm، کامل روی md+ */}
+              <div className="order-3 hidden sm:flex shrink-0 items-center justify-center self-center md:self-center">
+                <AnimatedCalendarIcon className="md:hidden" size={64} />
                 <AnimatedCalendarIcon className="hidden md:block lg:hidden" size={92} />
                 <AnimatedCalendarIcon className="hidden lg:block" size={108} />
               </div>
