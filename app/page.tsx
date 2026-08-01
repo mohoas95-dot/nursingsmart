@@ -5460,8 +5460,9 @@ export default function Home() {
           </div>
         </header>
 
+        <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
         {/* ========== کارت پریمیوم انتخاب بازه برنامه‌ریزی (فقط UI) ========== */}
-        <div className="px-3 sm:px-6 py-2 sm:py-4 print:hidden shrink-0 bg-[#F7FAF9] border-b border-[#E8F1EE]" dir="rtl">
+        <div className="print:hidden" dir="rtl">
           <section
             aria-label="انتخاب بازه برنامه‌ریزی"
             title={monthTheme.seasonLabel}
@@ -5589,7 +5590,6 @@ export default function Home() {
           </section>
         </div>
 
-        <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
           {/* کارت ساعت/تاریخ تهران فقط در داشبورد زمان‌بندی (همه نقش‌ها) نمایش داده می‌شود */}
           {activeTab === 'schedule' && <TehranDateTime lastSync={calendarSyncedAt} />}
           {officialCalendarState.status !== 'ready' && (

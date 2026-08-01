@@ -19,10 +19,20 @@ const datePartsFormatter = new Intl.DateTimeFormat('fa-IR', {
 const timeFormatter = new Intl.DateTimeFormat('fa-IR', {
   timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
 });
-/** نسخهٔ کوتاه تاریخ برای بج پایین (بدون نام روز هفته) */
-const shortDateFormatter = new Intl.DateTimeFormat('fa-IR', {
-  timeZone: 'Asia/Tehran', day: 'numeric', month: 'long', year: 'numeric'
+/** فقط سال و شمارهٔ ماه جلالی (ارقام لاتین برای محاسبات) */
+const jalaliMonthYearFormatter = new Intl.DateTimeFormat('fa-IR-u-nu-latn', {
+  timeZone: 'Asia/Tehran', month: 'numeric', year: 'numeric'
 });
+const jalaliYearFaFormatter = new Intl.DateTimeFormat('fa-IR', {
+  timeZone: 'Asia/Tehran', year: 'numeric'
+});
+
+const SEASON_BY_JALALI_MONTH: ReadonlyArray<{ label: string; emoji: string }> = [
+  /* 1–3 بهار */ { label: 'بهار', emoji: '🌸' }, { label: 'بهار', emoji: '🌸' }, { label: 'بهار', emoji: '🌸' },
+  /* 4–6 تابستان */ { label: 'تابستان', emoji: '☀️' }, { label: 'تابستان', emoji: '☀️' }, { label: 'تابستان', emoji: '☀️' },
+  /* 7–9 پاییز */ { label: 'پاییز', emoji: '🍂' }, { label: 'پاییز', emoji: '🍂' }, { label: 'پاییز', emoji: '🍂' },
+  /* 10–12 زمستان */ { label: 'زمستان', emoji: '❄️' }, { label: 'زمستان', emoji: '❄️' }, { label: 'زمستان', emoji: '❄️' },
+];
 
 /** خروجی ثابت: «شنبه، ١٠ مرداد ١۴٠۵» (روز هفته، روز ماه سال) */
 function formatPersianLongDate(date: Date): string {
@@ -36,12 +46,13 @@ function formatPersianLongDate(date: Date): string {
   return `${weekday}، ${day} ${month} ${year}`;
 }
 
-/** خروجی ثابت بج: «١٠ مرداد ١۴٠۵» */
-function formatPersianShortDate(date: Date): string {
-  const parts = shortDateFormatter.formatToParts(date);
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find(part => part.type === type)?.value ?? '';
-  return `${get('day')} ${get('month')} ${get('year')}`;
+/** خروجی بج فصل: «تابستان ١۴٠۵ ☀️» */
+function formatPersianSeasonChip(date: Date): string {
+  const parts = jalaliMonthYearFormatter.formatToParts(date);
+  const monthNum = Number(parts.find(part => part.type === 'month')?.value || '1');
+  const yearFa = jalaliYearFaFormatter.formatToParts(date).find(part => part.type === 'year')?.value ?? '';
+  const season = SEASON_BY_JALALI_MONTH[Math.min(11, Math.max(0, monthNum - 1))] ?? SEASON_BY_JALALI_MONTH[0];
+  return `${season.label} ${yearFa} ${season.emoji}`;
 }
 
 export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: string | null }) {
@@ -230,10 +241,9 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
             {now ? timeFormatter.format(now) : '--:--:--'}
           </p>
 
-          {/* بج تاریخ کوتاه — روی موبایل فشرده */}
-          <div className="mt-1.5 sm:mt-4 inline-flex items-center gap-1 sm:gap-2 rounded-full border border-[#C6EBD9] bg-white/80 px-2 py-0.5 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[12px] font-bold text-[#0F9D7A] shadow-[0_2px_8px_rgba(15,157,122,0.08)] backdrop-blur-sm">
-            <CalendarDays className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
-            <span>{now ? formatPersianShortDate(now) : '—'}</span>
+          {/* بج فصل جاری — مثلاً «تابستان ١۴٠۵ ☀️» */}
+          <div className="mt-1.5 sm:mt-4 inline-flex items-center gap-1 sm:gap-2 rounded-full border border-[#C6EBD9] bg-white/80 px-2.5 py-0.5 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[12px] font-bold text-[#0F9D7A] shadow-[0_2px_8px_rgba(15,157,122,0.08)] backdrop-blur-sm">
+            <span>{now ? formatPersianSeasonChip(now) : '—'}</span>
           </div>
         </div>
 
