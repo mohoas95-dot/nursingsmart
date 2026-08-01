@@ -11,6 +11,7 @@ import {
   getShiftLabel,
   SCOPE_LABELS,
   SCOPE_LABELS_SHORT,
+  toPersianDigits,
 } from '../lib/persian-vocabulary';
 import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
 import { isValidIranianNationalId, toEnglishDigits } from '../lib/auth/validation';
@@ -3388,6 +3389,87 @@ export default function Home() {
         detail: error instanceof Error ? error.message : String(error),
       });
       alert('خطا در ثبت درخواست فوری: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsQuickRequestSubmitting(false);
+    }
+  };
+
+  // ===== Calendar-based request handlers (بند ۲ — دقیقاً طبق اسکچ قبلی) =====
+  const handleCalendarRequestDayClick = (day: number) => {
+    setCalendarReqActiveDay(prev => (prev === day ? null : day));
+  };
+
+  const handleCalendarRequestDayShiftSelect = (day: number, code: string) => {
+    setCalendarReqSelectedShifts(prev => ({ ...prev, [day]: code }));
+    setCalendarReqActiveDay(null);
+  };
+
+  const handleSubmitCalendarRequest = async () => {
+    if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
+      alert('مهلت ثبت درخواست برای این ماه به پایان رسیده است.');
+      return;
+    }
+
+    const targetPersonnelId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : quickPersonnelId;
+    if (!targetPersonnelId) {
+      alert('لطفاً ابتدا پرسنل متقاضی را انتخاب کنید.');
+      return;
+    }
+    if (Object.keys(calendarReqSelectedShifts).length === 0) {
+      alert('لطفاً حداقل یک روز انتخاب کنید.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+
+    // گروه‌بندی روزها بر اساس کد شیفت
+    const groups: Record<string, number[]> = {};
+    Object.entries(calendarReqSelectedShifts).forEach(([d, code]) => {
+      if (!groups[code]) groups[code] = [];
+      groups[code].push(Number(d));
+    });
+
+    const newRequests: ShiftRequest[] = Object.entries(groups).map(([code, days]) => ({
+      id: `cal_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      personnelId: targetPersonnelId,
+      requestType: code === 'OFF' ? 'OFF' : (code === 'L' ? 'leave' : 'shift'),
+      preferredShift: code as any,
+      scope: 'custom_days',
+      selectedDays: [...days].sort((a, b) => a - b),
+      notes: calendarReqNotes.trim() || undefined,
+      isEssential: false,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    try {
+      setIsQuickRequestSubmitting(true);
+      const updatedRequests = [...requests, ...newRequests];
+      await saveState(personnel, updatedRequests, settings, customHolidays, {
+        mode: 'refresh_personnel',
+        personnelIds: [targetPersonnelId],
+      });
+      const requesterPerson = personnel.find(item => item.id === targetPersonnelId);
+      logEvent({
+        category: 'requests',
+        severity: 'success',
+        title: `${newRequests.length} درخواست از تقویم ثبت شد`,
+        detail: `پرسنل: ${requesterPerson ? `${requesterPerson.firstName} ${requesterPerson.lastName}` : targetPersonnelId} — ${Object.keys(calendarReqSelectedShifts).length} روز — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+      });
+      setCalendarReqSelectedShifts({});
+      setCalendarReqActiveDay(null);
+      setCalendarReqNotes('');
+      setOpenCalendarRequestPanel(false);
+      alert('درخواست(ها) با موفقیت از تقویم ثبت شد.');
+    } catch (error) {
+      console.error('Error submitting calendar request:', error);
+      logEvent({
+        category: 'requests',
+        severity: 'error',
+        title: 'ثبت درخواست از تقویم ناموفق بود',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      alert('خطا در ثبت درخواست از تقویم: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsQuickRequestSubmitting(false);
     }
