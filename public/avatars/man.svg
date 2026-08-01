@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="skin" x1="170" y1="85" x2="350" y2="360"><stop stop-color="#ffd092"/><stop offset="1" stop-color="#ff9d62"/></linearGradient>
+    <linearGradient id="hair" x1="125" y1="0" x2="400" y2="180"><stop stop-color="#b86e39"/><stop offset="1" stop-color="#6c351e"/></linearGradient>
+    <linearGradient id="scrub" x1="70" y1="360" x2="460" y2="520"><stop stop-color="#0475db"/><stop offset="1" stop-color="#034ea2"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#03101a" flood-opacity=".30"/></filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <circle cx="256" cy="258" r="216" fill="none" stroke="#fff" stroke-width="8" opacity=".94"/>
+    <path d="M55 512c30-89 105-140 201-140s171 51 201 140z" fill="url(#scrub)"/>
+    <path d="M206 374h100l-50 60z" fill="#fff"/>
+    <path d="M198 340c12 44 104 44 116 0v58c-31 29-85 29-116 0z" fill="#f5a064"/>
+    <path d="M117 180c-20 3-29 31-17 55 8 16 20 21 32 16zM395 180c20 3 29 31 17 55-8 16-20 21-32 16z" fill="url(#skin)"/>
+    <path d="M130 112c0-64 52-104 126-104s126 40 126 104v105c0 86-56 148-126 148s-126-62-126-148z" fill="url(#skin)"/>
+    <path d="M112 142c-9-35 4-64 27-74-5-25 16-55 51-51 20-24 62-26 82-5 32-19 70 1 69 31 35-3 54 30 39 57 26 15 30 55 3 78-3-41-18-62-45-70-44 11-83 4-112-19-19 26-50 39-89 39-10 11-17 26-25 14z" fill="url(#hair)"/>
+    <path d="M162 214c11-22 67-23 83-5v38c-17 21-70 21-83-5zM267 209c16-18 72-17 83 5v28c-13 26-66 26-83 5z" fill="none" stroke="#fff" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M245 223h22" stroke="#fff" stroke-width="10" stroke-linecap="round"/>
+    <path d="M362 447h66v65h-66z" fill="#fff" opacity=".98"/>
+    <rect x="387" y="437" width="34" height="15" rx="5" fill="#152356"/>
+  </g>
+</svg>
