@@ -1,16 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="کاربر خانم">
-  <rect width="240" height="240" fill="#f7cbd8"/>
-  <path d="M63 115c0-44 27-73 58-73s58 29 58 73v48H63v-48Z" fill="#8a4c33"/>
-  <circle cx="120" cy="105" r="55" fill="#ffbd8e"/>
-  <path d="M69 91c11-32 33-48 55-48 28 0 48 20 53 55-29-22-61-27-108-7Z" fill="#9a5638"/>
-  <rect x="82" y="98" width="31" height="15" rx="5" fill="none" stroke="#fff" stroke-width="6"/>
-  <rect x="127" y="98" width="31" height="15" rx="5" fill="none" stroke="#fff" stroke-width="6"/>
-  <path d="M113 105h14" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
-  <path d="M46 240c7-61 42-92 74-92s67 31 74 92H46Z" fill="#7667c9"/>
-  <path d="M88 151c14 13 50 13 64 0l-32 43-32-43Z" fill="#ffbd8e"/>
-  <path d="M71 56h98l-11 30H82L71 56Z" fill="#ffffff"/>
-  <path d="M120 61v18M111 70h18" stroke="#22b8b2" stroke-width="8" stroke-linecap="round"/>
-  <path d="M69 238c-3-43 2-73 28-89" fill="none" stroke="#1f2937" stroke-width="5" stroke-linecap="round"/>
-  <path d="M171 238c3-43-2-73-28-89" fill="none" stroke="#1f2937" stroke-width="5" stroke-linecap="round"/>
-  <circle cx="67" cy="225" r="10" fill="none" stroke="#1f2937" stroke-width="5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="پرستار خانم">
+  <defs>
+    <linearGradient id="womanBg" x1="28" y1="18" x2="214" y2="226" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffe1ec"/>
+      <stop offset="1" stop-color="#f5b5cf"/>
+    </linearGradient>
+    <linearGradient id="womanScrub" x1="70" y1="150" x2="172" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#6d5bd2"/>
+    </linearGradient>
+    <filter id="womanShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="7" stdDeviation="5" flood-color="#7c3aed" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <rect width="240" height="240" fill="url(#womanBg)"/>
+  <circle cx="190" cy="59" r="31" fill="#ffffff" opacity="0.45"/>
+  <circle cx="47" cy="171" r="42" fill="#ffffff" opacity="0.28"/>
+
+  <g filter="url(#womanShadow)">
+    <path d="M62 113c0-45 27-75 58-75s58 30 58 75v55H62v-55Z" fill="#8b4f37"/>
+    <path d="M46 240c7-58 40-91 74-91s67 33 74 91H46Z" fill="url(#womanScrub)"/>
+    <path d="M88 153c15 15 49 15 64 0l-32 45-32-45Z" fill="#f3b384"/>
+    <path d="M83 160 120 207 157 160" fill="none" stroke="#eadfff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+
+    <path d="M72 99c0-35 20-60 48-60s48 25 48 60c0 37-22 63-48 63S72 136 72 99Z" fill="#f6b98d"/>
+    <path d="M70 88c9-33 31-50 54-50 27 0 45 19 51 52-25-18-56-23-105-2Z" fill="#9b5a3b"/>
+    <path d="M91 105c6-4 13-4 19 0M130 105c6-4 13-4 19 0" stroke="#475569" stroke-width="4" stroke-linecap="round"/>
+    <path d="M106 131c8 7 21 7 29 0" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+
+    <path d="M72 56h96l-10 29H82L72 56Z" fill="#ffffff"/>
+    <path d="M120 60v17M112 68h16" stroke="#14b8a6" stroke-width="7" stroke-linecap="round"/>
+
+    <path d="M78 164c-13 19-16 44-12 69" fill="none" stroke="#f5f3ff" stroke-width="6" stroke-linecap="round"/>
+    <path d="M162 164c13 19 16 44 12 69" fill="none" stroke="#f5f3ff" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="66" cy="226" r="10" fill="#6d5bd2" stroke="#f5f3ff" stroke-width="5"/>
+    <circle cx="174" cy="226" r="10" fill="#6d5bd2" stroke="#f5f3ff" stroke-width="5"/>
+  </g>
 </svg>
