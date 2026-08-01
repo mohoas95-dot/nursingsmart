@@ -5949,7 +5949,7 @@ export default function Home() {
                           className="text-2xl font-black leading-none bg-gradient-to-b from-emerald-600 to-teal-600 bg-clip-text text-transparent"
                           style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
                         >
-                          {effectiveDutyHours[selectedPersonnelUser?.employmentType || 'official']}
+                          {toPersianDigits(effectiveDutyHours[selectedPersonnelUser?.employmentType || 'official'])}
                         </span>
                         <span className="text-[10px] font-extrabold text-emerald-700/70">ساعت</span>
                       </div>
