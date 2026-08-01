@@ -13,7 +13,7 @@
 import { CalendarDays } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-const dateFormatter = new Intl.DateTimeFormat('fa-IR', {
+const datePartsFormatter = new Intl.DateTimeFormat('fa-IR', {
   timeZone: 'Asia/Tehran', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
 });
 const timeFormatter = new Intl.DateTimeFormat('fa-IR', {
@@ -23,6 +23,26 @@ const timeFormatter = new Intl.DateTimeFormat('fa-IR', {
 const shortDateFormatter = new Intl.DateTimeFormat('fa-IR', {
   timeZone: 'Asia/Tehran', day: 'numeric', month: 'long', year: 'numeric'
 });
+
+/** خروجی ثابت: «شنبه، ١٠ مرداد ١۴٠۵» (روز هفته، روز ماه سال) */
+function formatPersianLongDate(date: Date): string {
+  const parts = datePartsFormatter.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find(part => part.type === type)?.value ?? '';
+  const weekday = get('weekday');
+  const day = get('day');
+  const month = get('month');
+  const year = get('year');
+  return `${weekday}، ${day} ${month} ${year}`;
+}
+
+/** خروجی ثابت بج: «١٠ مرداد ١۴٠۵» */
+function formatPersianShortDate(date: Date): string {
+  const parts = shortDateFormatter.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find(part => part.type === type)?.value ?? '';
+  return `${get('day')} ${get('month')} ${get('year')}`;
+}
 
 export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: string | null }) {
   const [now, setNow] = useState<Date | null>(null);
@@ -198,7 +218,7 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
             className="mt-0.5 sm:mt-2 text-xs sm:text-[26px] lg:text-[28px] leading-snug font-bold text-[#0B6B52] truncate max-w-full"
             style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
           >
-            {now ? dateFormatter.format(now) : 'در حال دریافت تاریخ…'}
+            {now ? formatPersianLongDate(now) : 'در حال دریافت تاریخ…'}
           </p>
 
           <p
@@ -213,7 +233,7 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
           {/* بج تاریخ کوتاه — روی موبایل فشرده */}
           <div className="mt-1.5 sm:mt-4 inline-flex items-center gap-1 sm:gap-2 rounded-full border border-[#C6EBD9] bg-white/80 px-2 py-0.5 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[12px] font-bold text-[#0F9D7A] shadow-[0_2px_8px_rgba(15,157,122,0.08)] backdrop-blur-sm">
             <CalendarDays className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
-            <span>{now ? shortDateFormatter.format(now) : '—'}</span>
+            <span>{now ? formatPersianShortDate(now) : '—'}</span>
           </div>
         </div>
 
