@@ -67,6 +67,8 @@ export const ShiftRequestSchema = z.object({
   startDate: z.string().max(20).optional(),
   endDate: z.string().max(20).optional(),
   selectedDays: z.array(z.number().int().min(1).max(31)).max(31).optional(),
+  /** توضیحات اختیاری پرسنل هنگام ثبت درخواست از روی تقویم */
+  note: z.string().max(500).optional(),
   createdAt: z.string().max(100).optional(),
   updatedAt: z.string().max(100).optional(),
 }).strict();

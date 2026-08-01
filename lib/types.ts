@@ -99,6 +99,11 @@ export interface ShiftRequest {
   startDate?: string;
   endDate?: string;
   selectedDays?: number[];
+  /**
+   * توضیحات اختیاری کاربر هنگام ثبت درخواست از روی تقویم.
+   * برای خود پرسنل و سرپرستار در فهرست درخواست‌ها قابل مشاهده است.
+   */
+  note?: string;
   createdAt?: string;
   updatedAt?: string;
 }
