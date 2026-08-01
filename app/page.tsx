@@ -14,6 +14,8 @@ import {
   SCOPE_LABELS_SHORT,
 } from '../lib/persian-vocabulary';
 import JalaliCalendar, { todayJalali } from '../features/calendar/JalaliCalendar';
+import DayShiftPicker from '../features/calendar/DayShiftPicker';
+import { filterImportantOccasions } from '../features/calendar/occasion-filter';
 import { getCalendarTheme } from '../features/calendar/theme';
 import type { AuthenticatedUser, LoginResult } from '../lib/auth/types';
 import { isValidIranianNationalId, toEnglishDigits } from '../lib/auth/validation';
@@ -1988,6 +1990,7 @@ export default function Home() {
   const [requestEditTarget, setRequestEditTarget] = useState<ShiftRequest | null>(null);
   const [requestEditDays, setRequestEditDays] = useState<Record<number, NonNullable<ShiftRequest['preferredShift']>>>({});
   const [requestEditActiveDay, setRequestEditActiveDay] = useState<number | null>(null);
+  const [requestEditNotes, setRequestEditNotes] = useState<Record<number, string>>({});
   const [isSavingRequestEdit, setIsSavingRequestEdit] = useState<boolean>(false);
   // editingCell now managed by useScheduleState hook
   const [reqPersonnelId, setReqPersonnelId] = useState<string>('');
@@ -2014,7 +2017,8 @@ export default function Home() {
   // ساختار داده دقیقاً مانند ویرایش درخواست است: نگاشت «روز → کد شیفت».
   const [calendarRequestDays, setCalendarRequestDays] = useState<Record<number, NonNullable<ShiftRequest['preferredShift']>>>({});
   const [calendarRequestActiveDay, setCalendarRequestActiveDay] = useState<number | null>(null);
-  const [calendarRequestNote, setCalendarRequestNote] = useState<string>('');
+  // توضیحات به تفکیک روز؛ کاربر همان‌جا در زیرشاخهٔ هر روز آن را می‌نویسد.
+  const [calendarRequestNotes, setCalendarRequestNotes] = useState<Record<number, string>>({});
   const [isCalendarRequestSubmitting, setIsCalendarRequestSubmitting] = useState<boolean>(false);
   const [quickSelectedScope, setQuickSelectedScope] = useState<QuickRequestScope>('odd');
   const [quickSelectedDays, setQuickSelectedDays] = useState<number[]>([]);
@@ -2057,61 +2061,41 @@ export default function Home() {
   ];
 
   /**
-   * زیرشاخهٔ انتخاب نوع شیفت که زیر سلول تقویم باز می‌شود.
-   * هم در «ویرایش درخواست روی تقویم» و هم در «ثبت درخواست با انتخاب از روی تقویم»
-   * از همین یک تابع استفاده می‌شود تا رفتار دو بخش دقیقاً یکسان بماند.
+   * زیرشاخهٔ یک روز تقویم: انتخاب نوع شیفت + توضیحات همان روز + دکمهٔ «تأیید این روز».
+   * انتخاب داخل پنل پیش‌نویس است و تنها با زدن تأیید روی تقویم می‌نشیند؛ به این
+   * ترتیب کاربر مطمئن می‌شود و بلافاصله سراغ روز بعدی می‌رود.
+   * هم «ویرایش درخواست» و هم «ثبت درخواست از روی تقویم» از همین یک تابع
+   * استفاده می‌کنند تا رفتار دو بخش دقیقاً یکسان بماند.
    */
   const renderShiftPickerPanel = (
     day: number,
     assigned: NonNullable<ShiftRequest['preferredShift']> | undefined,
-    onPick: (code: NonNullable<ShiftRequest['preferredShift']>) => void,
+    note: string,
+    onConfirm: (code: NonNullable<ShiftRequest['preferredShift']>, note: string) => void,
     onClear: () => void,
+    onCancel: () => void,
     keyPrefix: string,
   ) => {
     const dayInfo = calendarDays.find(item => item.day === day);
-    const dayOccasions = [
-      ...(calendarOccasions[day] || []),
-      ...(customHolidays[day] ? [customHolidays[day]] : []),
-    ];
+    const dayOccasions = filterImportantOccasions(
+      [...(calendarOccasions[day] || []), ...(customHolidays[day] ? [customHolidays[day]] : [])],
+      Boolean(customHolidays[day]),
+    );
     return (
-      <div className="rounded-2xl border-2 border-indigo-200 bg-indigo-50/70 p-3 space-y-2.5 shadow-inner">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-black text-slate-800">
-            نوع شیفت روز {toPersianDigits(day)} {JALALI_MONTH_NAMES[currentMonth - 1]}
-            {dayInfo ? ` (${WEEKDAYS[dayInfo.dayOfWeek]})` : ''}
-          </span>
-          {assigned && (
-            <button
-              type="button"
-              onClick={onClear}
-              className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-[10px] font-black text-rose-600 hover:bg-rose-50 cursor-pointer"
-            >
-              حذف این روز
-            </button>
-          )}
-        </div>
-
-        {dayOccasions.length > 0 && (
-          <p className="text-[10px] font-bold leading-5 text-indigo-700">🔖 {dayOccasions.join(' — ')}</p>
-        )}
-
-        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
-          {EDITABLE_SHIFT_CODES.map(option => (
-            <button
-              type="button"
-              key={`${keyPrefix}-${day}-${option.code}`}
-              onClick={() => onPick(option.code)}
-              className={`rounded-xl border px-2 py-2.5 text-[11px] font-black transition-all cursor-pointer ${
-                assigned === option.code
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md scale-[1.03]'
-                  : `${option.className} hover:brightness-95`
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <DayShiftPicker
+        key={`${keyPrefix}-panel-${day}-${assigned || 'none'}`}
+        day={day}
+        monthName={JALALI_MONTH_NAMES[currentMonth - 1]}
+        weekdayLabel={dayInfo ? WEEKDAYS[dayInfo.dayOfWeek] : undefined}
+        occasions={dayOccasions}
+        options={EDITABLE_SHIFT_CODES}
+        initialCode={assigned}
+        initialNote={note}
+        onConfirm={onConfirm}
+        onClear={assigned ? onClear : undefined}
+        onCancel={onCancel}
+        keyPrefix={keyPrefix}
+      />
     );
   };
 
@@ -3483,8 +3467,9 @@ export default function Home() {
 
   /**
    * ثبت درخواست‌هایی که کاربر مستقیماً روی تقویم انتخاب کرده است.
-   * هر کد شیفت به یک درخواست `custom_days` جداگانه تبدیل می‌شود — دقیقاً همان
-   * منطق «ویرایش درخواست روی تقویم» — و توضیحات کاربر روی همهٔ آن‌ها می‌نشیند.
+   * روزها بر اساس «کد شیفت + متن توضیحات» گروه می‌شوند و هر گروه یک درخواست
+   * `custom_days` جداگانه می‌سازد — دقیقاً همان منطق «ویرایش درخواست روی تقویم».
+   * بدین ترتیب توضیحی که کاربر برای یک روز خاص نوشته، فقط به همان روز(ها) می‌چسبد.
    */
   const handleSubmitCalendarRequest = async () => {
     if (role === 'personnel' && requestsLockedMonths.includes(`${currentYear}_${currentMonth}`)) {
@@ -3507,16 +3492,19 @@ export default function Home() {
       return;
     }
 
-    const grouped = new Map<NonNullable<ShiftRequest['preferredShift']>, number[]>();
+    // کلید گروه‌بندی: کد شیفت + توضیحات، تا توضیح هر روز فقط روی همان روز بنشیند
+    const grouped = new Map<string, { code: NonNullable<ShiftRequest['preferredShift']>; note: string; days: number[] }>();
     entries.forEach(({ day, code }) => {
-      const list = grouped.get(code) || [];
-      list.push(day);
-      grouped.set(code, list);
+      const dayNote = (calendarRequestNotes[day] || '').trim();
+      const key = `${code}__${dayNote}`;
+      const bucket = grouped.get(key) || { code, note: dayNote, days: [] };
+      bucket.days.push(day);
+      grouped.set(key, bucket);
     });
 
     const now = new Date().toISOString();
-    const note = calendarRequestNote.trim();
-    const newRequests: ShiftRequest[] = Array.from(grouped.entries()).map(([code, days], index) => ({
+    const allNotes = Object.values(calendarRequestNotes).map(item => item.trim()).filter(Boolean);
+    const newRequests: ShiftRequest[] = Array.from(grouped.values()).map(({ code, note, days }, index) => ({
       id: `cal_req_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
       personnelId: targetPersonnelId,
       requestType: code === 'OFF' ? 'OFF' : code === 'L' ? 'leave' : 'shift',
@@ -3543,11 +3531,11 @@ export default function Home() {
         category: 'requests',
         severity: 'success',
         title: `${newRequests.length} درخواست از روی تقویم ثبت شد`,
-        detail: `پرسنل: ${requesterPerson ? `${requesterPerson.firstName} ${requesterPerson.lastName}` : targetPersonnelId} — ${entries.length} روز — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}${note ? ` — توضیحات: ${note}` : ''}`,
+        detail: `پرسنل: ${requesterPerson ? `${requesterPerson.firstName} ${requesterPerson.lastName}` : targetPersonnelId} — ${entries.length} روز — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}${allNotes.length ? ` — توضیحات: ${allNotes.join(' | ')}` : ''}`,
       });
       setCalendarRequestDays({});
       setCalendarRequestActiveDay(null);
-      setCalendarRequestNote('');
+      setCalendarRequestNotes({});
       alert('درخواست شما از روی تقویم با موفقیت ثبت شد.');
     } catch (error) {
       console.error('Error submitting calendar request:', error);
@@ -3742,15 +3730,22 @@ export default function Home() {
       : r.requestType === 'leave' ? 'L'
       : (r.preferredShift || 'M');
     const map: Record<number, NonNullable<ShiftRequest['preferredShift']>> = {};
-    days.forEach(day => { map[day] = defaultCode; });
+    const noteMap: Record<number, string> = {};
+    days.forEach(day => {
+      map[day] = defaultCode;
+      // توضیحات ثبت‌شدهٔ درخواست روی همان روزها بازیابی می‌شود تا کاربر بتواند ویرایشش کند
+      if (r.note?.trim()) noteMap[day] = r.note.trim();
+    });
     setRequestEditTarget(r);
     setRequestEditDays(map);
+    setRequestEditNotes(noteMap);
     setRequestEditActiveDay(null);
   };
 
   const handleCloseRequestEditor = () => {
     setRequestEditTarget(null);
     setRequestEditDays({});
+    setRequestEditNotes({});
     setRequestEditActiveDay(null);
   };
 
@@ -3771,16 +3766,18 @@ export default function Home() {
       return;
     }
 
-    // گروه‌بندی روزها بر اساس کد شیفت انتخابی
-    const grouped = new Map<NonNullable<ShiftRequest['preferredShift']>, number[]>();
+    // گروه‌بندی روزها بر اساس «کد شیفت + توضیحات» تا توضیح هر روز فقط به همان روز بچسبد
+    const grouped = new Map<string, { code: NonNullable<ShiftRequest['preferredShift']>; note: string; days: number[] }>();
     entries.forEach(({ day, code }) => {
-      const list = grouped.get(code) || [];
-      list.push(day);
-      grouped.set(code, list);
+      const dayNote = (requestEditNotes[day] || '').trim();
+      const key = `${code}__${dayNote}`;
+      const bucket = grouped.get(key) || { code, note: dayNote, days: [] };
+      bucket.days.push(day);
+      grouped.set(key, bucket);
     });
 
     const now = new Date().toISOString();
-    const rebuilt: ShiftRequest[] = Array.from(grouped.entries()).map(([code, days], index) => ({
+    const rebuilt: ShiftRequest[] = Array.from(grouped.values()).map(({ code, note, days }, index) => ({
       ...requestEditTarget,
       id: index === 0 ? requestEditTarget.id : `req_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
       requestType: code === 'OFF' ? 'OFF' : code === 'L' ? 'leave' : 'shift',
@@ -3795,6 +3792,7 @@ export default function Home() {
       startDate: undefined,
       endDate: undefined,
       selectedDays: days.sort((a, b) => a - b),
+      note: note || undefined,
       createdAt: requestEditTarget.createdAt || now,
       updatedAt: now,
     }));
@@ -6158,6 +6156,49 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* ====== متقاضی درخواست: یک‌بار و بالای همهٔ کادرها ====== */}
+              {/* پیش‌تر داخل هر کادر تکرار می‌شد؛ حالا یک انتخاب مشترک برای هر دو روش ثبت است. */}
+              {role !== 'personnel' ? (
+                <div className="flex flex-col gap-3 rounded-[1.75rem] border border-slate-200 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-700">
+                      <User className="h-5 w-5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-slate-900">متقاضی درخواست</p>
+                      <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                        این انتخاب برای هر دو روش ثبت (پرکاربرد و تقویمی) اعمال می‌شود.
+                      </p>
+                    </div>
+                  </div>
+                  <select
+                    value={quickPersonnelId}
+                    onChange={(event) => setQuickPersonnelId(event.target.value)}
+                    className="w-full sm:w-96 text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-2xl px-3 py-3 focus:border-indigo-500 focus:outline-none cursor-pointer"
+                    aria-label="انتخاب پرسنل متقاضی"
+                  >
+                    <option value="">-- انتخاب پرسنل --</option>
+                    {personnel.map(person => (
+                      <option key={`requester-person-${person.id}`} value={person.id}>
+                        {person.firstName} {person.lastName} ({person.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 rounded-[1.75rem] border border-emerald-200 bg-emerald-50 px-5 py-4 shadow-sm">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+                    <User className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-emerald-600">متقاضی درخواست</p>
+                    <p className="text-sm font-black text-emerald-900 truncate">
+                      {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* بخش «درخواست‌های پرکاربرد» به‌صورت آکاردئونی و در ابتدا بسته است */}
               <div className="grid grid-cols-1 gap-4">
                 <button
@@ -6238,28 +6279,6 @@ export default function Home() {
                       <h4 className="text-xl font-black text-slate-900 leading-8">اگر درخواست‌ روتین داری همیجا فوری وارد کن!</h4>
                       <p className="text-xs sm:text-sm font-extrabold text-slate-500">اگر درخواستت طولانیه برو به 🤩 !CHAT BOX</p>
                     </div>
-
-                    {role !== 'personnel' ? (
-                      <div className="w-full lg:w-80 bg-white border border-slate-200 rounded-2xl p-3 shadow-xs">
-                        <label className="block text-[11px] font-black text-slate-500 mb-1.5">متقاضی درخواست فوری</label>
-                        <select
-                          value={quickPersonnelId}
-                          onChange={(event) => setQuickPersonnelId(event.target.value)}
-                          className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                        >
-                          <option value="">-- انتخاب پرسنل --</option>
-                          {personnel.map(person => (
-                            <option key={`quick-person-${person.id}`} value={person.id}>
-                              {person.firstName} {person.lastName} ({person.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-4 py-3 rounded-2xl text-xs font-black">
-                        متقاضی: {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -6446,28 +6465,6 @@ export default function Home() {
                         با کلیک روی هر سلول، زیرشاخهٔ انواع شیفت همان‌جا باز می‌شود؛ برای هر روز می‌توانی نوع متفاوتی ثبت کنی.
                       </p>
                     </div>
-
-                    {role !== 'personnel' ? (
-                      <div className="w-full lg:w-80 bg-white border border-slate-200 rounded-2xl p-3 shadow-xs">
-                        <label className="block text-[11px] font-black text-slate-500 mb-1.5">متقاضی درخواست</label>
-                        <select
-                          value={quickPersonnelId}
-                          onChange={(event) => setQuickPersonnelId(event.target.value)}
-                          className="w-full text-xs font-extrabold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none"
-                        >
-                          <option value="">-- انتخاب پرسنل --</option>
-                          {personnel.map(person => (
-                            <option key={`calendar-person-${person.id}`} value={person.id}>
-                              {person.firstName} {person.lastName} ({person.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <div className="bg-indigo-50 text-indigo-800 border border-indigo-200 px-4 py-3 rounded-2xl text-xs font-black">
-                        متقاضی: {selectedPersonnelUser?.firstName} {selectedPersonnelUser?.lastName}
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -6497,8 +6494,15 @@ export default function Home() {
                     renderDayPanel={day => renderShiftPickerPanel(
                       day,
                       calendarRequestDays[day],
-                      code => {
+                      calendarRequestNotes[day] || '',
+                      (code, note) => {
                         setCalendarRequestDays(prev => ({ ...prev, [day]: code }));
+                        setCalendarRequestNotes(prev => {
+                          const next = { ...prev };
+                          if (note) next[day] = note;
+                          else delete next[day];
+                          return next;
+                        });
                         setCalendarRequestActiveDay(null);
                       },
                       () => {
@@ -6507,41 +6511,104 @@ export default function Home() {
                           delete next[day];
                           return next;
                         });
+                        setCalendarRequestNotes(prev => {
+                          const next = { ...prev };
+                          delete next[day];
+                          return next;
+                        });
                         setCalendarRequestActiveDay(null);
                       },
+                      () => setCalendarRequestActiveDay(null),
                       'calendar-request',
                     )}
                   />
 
-                  {/* ====== توضیحات اختیاری کاربر ====== */}
-                  <div className="bg-white border border-slate-200 rounded-3xl p-4 space-y-2 shadow-xs">
-                    <label htmlFor="calendar-request-note" className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black text-slate-800">توضیحات (اختیاری)</span>
-                      <span className="text-[10px] font-bold text-slate-400">
-                        {toPersianDigits(calendarRequestNote.length)} / {toPersianDigits(500)}
+                  {/* ====== خلاصهٔ انتخاب‌های کاربر، پیش از تأیید نهایی ====== */}
+                  <div className="bg-white border border-slate-200 rounded-3xl p-4 space-y-3 shadow-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                      <h5 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                        <CalendarIcon className="w-4 h-4 text-indigo-600" /> نتیجهٔ انتخاب‌های شما
+                      </h5>
+                      <span className="rounded-full bg-indigo-50 border border-indigo-200 px-3 py-1 text-[10px] font-black text-indigo-700">
+                        {toPersianDigits(Object.keys(calendarRequestDays).length)} روز تأییدشده
                       </span>
-                    </label>
-                    <textarea
-                      id="calendar-request-note"
-                      rows={3}
-                      maxLength={500}
-                      value={calendarRequestNote}
-                      onChange={event => setCalendarRequestNote(event.target.value)}
-                      placeholder="اگر توضیح اضافه‌ای دربارهٔ این درخواست داری اینجا بنویس؛ برای خودت و سرپرستار قابل مشاهده خواهد بود."
-                      className="w-full resize-y rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-xs font-bold leading-6 text-slate-700 focus:border-indigo-500 focus:bg-white focus:outline-none"
-                    />
+                    </div>
+
+                    {Object.keys(calendarRequestDays).length === 0 ? (
+                      <p className="py-3 text-center text-[11px] font-bold text-slate-400">
+                        هنوز روزی تأیید نشده است؛ روی سلول‌های تقویم کلیک کنید، نوع شیفت را انتخاب و «تأیید این روز» را بزنید.
+                      </p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {Object.entries(calendarRequestDays)
+                          .sort((a, b) => Number(a[0]) - Number(b[0]))
+                          .map(([dayKey, code]) => {
+                            const dayNumber = Number(dayKey);
+                            const dayInfo = calendarDays.find(item => item.day === dayNumber);
+                            const meta = EDITABLE_SHIFT_CODES.find(item => item.code === code);
+                            return (
+                              <li
+                                key={`calendar-summary-${dayKey}`}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-150 bg-slate-50/70 px-3 py-2"
+                              >
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className="shrink-0 rounded-lg bg-white border border-slate-200 px-2 py-1 font-mono text-xs font-black text-slate-800">
+                                    {toPersianDigits(dayNumber)}
+                                  </span>
+                                  <span className="shrink-0 text-[10px] font-bold text-slate-400">
+                                    {dayInfo ? WEEKDAYS[dayInfo.dayOfWeek] : ''}
+                                  </span>
+                                  <span className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black ${meta?.className || 'bg-indigo-100 text-indigo-800 border-indigo-300'}`}>
+                                    {meta?.label || code}
+                                  </span>
+                                  {calendarRequestNotes[dayNumber] && (
+                                    <span className="truncate text-[10px] font-bold text-amber-700" title={calendarRequestNotes[dayNumber]}>
+                                      📝 {calendarRequestNotes[dayNumber]}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setCalendarRequestActiveDay(dayNumber)}
+                                    className="rounded-lg border border-indigo-200 bg-white px-2 py-1 text-[10px] font-black text-indigo-600 hover:bg-indigo-50 cursor-pointer"
+                                  >
+                                    ویرایش
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCalendarRequestDays(prev => {
+                                        const next = { ...prev };
+                                        delete next[dayNumber];
+                                        return next;
+                                      });
+                                      setCalendarRequestNotes(prev => {
+                                        const next = { ...prev };
+                                        delete next[dayNumber];
+                                        return next;
+                                      });
+                                    }}
+                                    className="rounded-lg border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50 cursor-pointer"
+                                    title="حذف این روز"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                      </ul>
+                    )}
                   </div>
 
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white border border-slate-200 rounded-3xl p-4 shadow-xs">
                     <div className="text-xs font-bold text-slate-500 leading-6">
-                      <span className="font-black text-slate-800">روزهای انتخاب‌شده: </span>
+                      <span className="font-black text-slate-800">آمادهٔ ثبت: </span>
                       <b className="text-indigo-700">{toPersianDigits(Object.keys(calendarRequestDays).length)}</b> روز
-                      {Object.keys(calendarRequestDays).length > 0 && (
-                        <span className="block text-[10px] font-bold text-slate-400 mt-1">
-                          {Object.entries(calendarRequestDays)
-                            .sort((a, b) => Number(a[0]) - Number(b[0]))
-                            .map(([day, code]) => `${toPersianDigits(day)}: ${getShiftLabel(code)}`)
-                            .join(' • ')}
+                      {Object.keys(calendarRequestNotes).length > 0 && (
+                        <span className="mr-2 text-[10px] font-bold text-amber-700">
+                          ({toPersianDigits(Object.keys(calendarRequestNotes).length)} روز دارای توضیحات)
                         </span>
                       )}
                     </div>
@@ -6551,7 +6618,7 @@ export default function Home() {
                         onClick={() => {
                           setCalendarRequestDays({});
                           setCalendarRequestActiveDay(null);
-                          setCalendarRequestNote('');
+                          setCalendarRequestNotes({});
                         }}
                         className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-xs font-black text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
                       >
@@ -6569,7 +6636,7 @@ export default function Home() {
                           </>
                         ) : (
                           <>
-                            <Check className="w-4 h-4" /> ثبت نهایی درخواست
+                            <Check className="w-4 h-4" /> تأیید نهایی و ثبت همهٔ درخواست‌ها
                           </>
                         )}
                       </button>
@@ -8318,8 +8385,8 @@ export default function Home() {
               <div className="p-4 sm:p-5 space-y-4">
                 <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-[11px] font-bold text-sky-800 leading-6">
                   روی هر روز کلیک کن تا زیرشاخهٔ انواع شیفت (M / E / N / ME / EN / MN / MEN و همچنین آف و مرخصی) همان‌جا باز شود.
-                  با انتخاب نوع شیفت، آن روز رنگی می‌شود. برای حذف یک روز، دوباره روی همان نوع انتخاب‌شده کلیک کن.
-                  ویرایش تا پیش از اتمام مهلت، نامحدود قابل تکرار است.
+                  نوع شیفت را انتخاب کن، در صورت نیاز توضیحات همان روز را بنویس و «تأیید این روز» را بزن تا سراغ روز بعد بروی.
+                  در پایان با «ثبت نهایی ویرایش» همهٔ تغییرات ذخیره می‌شوند. ویرایش تا پیش از اتمام مهلت نامحدود است.
                 </div>
 
                 <JalaliCalendar
@@ -8347,8 +8414,15 @@ export default function Home() {
                   renderDayPanel={day => renderShiftPickerPanel(
                     day,
                     requestEditDays[day],
-                    code => {
+                    requestEditNotes[day] || '',
+                    (code, note) => {
                       setRequestEditDays(prev => ({ ...prev, [day]: code }));
+                      setRequestEditNotes(prev => {
+                        const next = { ...prev };
+                        if (note) next[day] = note;
+                        else delete next[day];
+                        return next;
+                      });
                       setRequestEditActiveDay(null);
                     },
                     () => {
@@ -8357,15 +8431,45 @@ export default function Home() {
                         delete next[day];
                         return next;
                       });
+                      setRequestEditNotes(prev => {
+                        const next = { ...prev };
+                        delete next[day];
+                        return next;
+                      });
                       setRequestEditActiveDay(null);
                     },
+                    () => setRequestEditActiveDay(null),
                     'edit',
                   )}
                 />
 
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-bold text-slate-600">
-                  <span>روزهای ویرایش‌شده: <b className="text-indigo-700 font-mono">{selectedCount}</b></span>
-                  <span className="text-slate-400">در صورت نیاز، هر روز می‌تواند نوع شیفت متفاوتی داشته باشد.</span>
+                {/* خلاصهٔ روزهای تأییدشده، پیش از ثبت نهایی */}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-slate-600">
+                    <span>روزهای ویرایش‌شده: <b className="text-indigo-700 font-mono">{selectedCount}</b></span>
+                    <span className="text-slate-400">در صورت نیاز، هر روز می‌تواند نوع شیفت متفاوتی داشته باشد.</span>
+                  </div>
+                  {selectedCount > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(requestEditDays)
+                        .sort((a, b) => Number(a[0]) - Number(b[0]))
+                        .map(([dayKey, code]) => {
+                          const meta = EDITABLE_SHIFT_CODES.find(item => item.code === code);
+                          return (
+                            <button
+                              type="button"
+                              key={`edit-summary-${dayKey}`}
+                              onClick={() => setRequestEditActiveDay(Number(dayKey))}
+                              className={`rounded-xl border px-2 py-1 text-[10px] font-black transition-all hover:brightness-95 cursor-pointer ${meta?.className || 'bg-indigo-100 text-indigo-800 border-indigo-300'}`}
+                              title={requestEditNotes[Number(dayKey)] || 'برای ویرایش کلیک کنید'}
+                            >
+                              {toPersianDigits(dayKey)}: {meta?.label || code}
+                              {requestEditNotes[Number(dayKey)] ? ' 📝' : ''}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

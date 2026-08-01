@@ -26,6 +26,7 @@ import type { JalaliDateInfo } from '../../lib/types';
 import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../lib/jalali';
 import { toPersianDigits } from '../../lib/persian-vocabulary';
 import { getCalendarTheme, HOLIDAY_TONE } from './theme';
+import { filterImportantOccasions } from './occasion-filter';
 
 /** تاریخ امروز به وقت تهران در تقویم شمسی. */
 export function todayJalali(): { year: number; month: number; day: number } {
@@ -155,14 +156,19 @@ export default function JalaliCalendar({
     onMonthChange(nextYear, nextMonth);
   };
 
-  /** فهرست مناسبت‌های ماه؛ عنوان تعطیلی هم به‌عنوان مناسبت شمرده می‌شود. */
+  /**
+   * فهرست مناسبت‌های ماه برای نمایش زیر تقویم.
+   * فقط مناسبت‌های تعطیل و رویدادهای ملی/مذهبی درجه‌یک نگه داشته می‌شوند تا فهرست
+   * زیر تقویم کوتاه و خوانا بماند (مناسبت‌های ریز مانند «روز عسل» حذف می‌شوند).
+   */
   const occasionEntries = useMemo(() => {
     return days
       .map(dayInfo => {
-        const titles = [...new Set([
+        const isOfficialHoliday = Boolean(holidays[dayInfo.day]);
+        const titles = filterImportantOccasions([
           ...(occasions[dayInfo.day] || []),
           ...(holidays[dayInfo.day] ? [holidays[dayInfo.day]] : []),
-        ].map(item => item.trim()).filter(Boolean))];
+        ], isOfficialHoliday);
         return { day: dayInfo.day, titles, isHoliday: dayInfo.isHoliday && !dayInfo.isFriday };
       })
       .filter(entry => entry.titles.length > 0);
