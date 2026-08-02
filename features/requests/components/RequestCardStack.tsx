@@ -1,24 +1,25 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Layers } from 'lucide-react';
 import type { Personnel, ShiftRequest } from '../../../lib/types';
 import { toPersianDigits } from '../../../lib/persian-vocabulary';
 
 /**
  * RequestCardStack — چیدمان «استک‌کارت» سه‌بعدی کارت‌های درخواست پرسنل
  *
- * به‌جای چینش افقی (Fanned)، کارت‌ها مانند یک دسته ورق روی هم قرار می‌گیرند:
+ * کارت‌ها مانند یک دسته ورق روی هم قرار می‌گیرند:
  *  - کارت فعال در جلو، کارت‌های بعدی با translateZ در عمق صحنه عقب می‌روند و
  *    لبه‌ی بالایشان از پشت کارت جلویی دیده می‌شود (حس واقعی دسته کارت روی میز
  *    با ترکیب perspective و چرخش جزئی دور محور X).
- *  - جابه‌جایی با اسکرول عمودی روان و scroll-snap اجباری انجام می‌شود؛
- *    در هر توقف دقیقاً یک کارت در جلو قرار می‌گیرد.
  *  - کارتِ عبورشده به‌سمت دوربین پرتاب و محو می‌شود (translateZ مثبت).
- *  - پیمایش: چرخ موس، تاچ، کشیدن اسکرول‌بار، پیکان‌های کیبورد، دکمه‌های قبلی/بعدی
- *    و کلیک روی لبه‌ی کارت‌های عقبی.
+ *  - جابه‌جایی فقط با «لمس/کشیدن خود کارت‌ها»: درگ عمودی روی هر نقطه از دسته
+ *    حرکت ۱:۱ زیر انگشت/موس دارد و با رهاشدن، دسته با momentum روان روی
+ *    نزدیک‌ترین کارت می‌نشیند (scroll-snap اجباری).
+ *  - کلیک روی لبه‌ی کارت‌های عقبی آن‌ها را به جلو می‌آورد؛ ضربه (بدون درگ) روی
+ *    کارت جلویی همان مودال جزئیات قبلی را باز می‌کند.
+ *  - بدون هیچ دکمه‌ی پیمایش — فقط نشانگر کوچک «n از N» روی صحنه.
  * تمام جزئیات کارت (نام، نقش، اولویت، تعداد، متن درخواست‌ها، توضیحات، تاریخ ثبت و
- * دکمه‌ی «باز کردن تمام صفحه») و رفتار بازشدن مودال جزئیات، بدون تغییر حفظ شده است.
+ * دکمه‌ی «باز کردن تمام صفحه») حفظ شده و رنگ‌بندی کارت‌ها ظریف‌تر شده است.
  */
 
 export interface RequestCardStackProps {
@@ -42,14 +43,44 @@ const NAME_COLOR_GRADIENTS = [
   'from-fuchsia-600 via-pink-600 to-rose-600',
 ];
 
+/** پس‌زمینه‌ی ملایم هر کارت — گرادیان پاستلی به‌جای سفیدِ خالص (شکیل‌تر و کم‌خیره‌کننده‌تر) */
+const CARD_BACKGROUNDS = [
+  'bg-gradient-to-br from-indigo-50/90 via-white/95 to-purple-100/70',
+  'bg-gradient-to-br from-emerald-50/90 via-white/95 to-teal-100/70',
+  'bg-gradient-to-br from-rose-50/90 via-white/95 to-orange-100/70',
+  'bg-gradient-to-br from-amber-50/90 via-white/95 to-yellow-100/70',
+  'bg-gradient-to-br from-sky-50/90 via-white/95 to-violet-100/70',
+  'bg-gradient-to-br from-fuchsia-50/90 via-white/95 to-pink-100/70',
+];
+
+/** حاشیه‌ی هم‌رنگ خانواده‌ی هر کارت */
+const CARD_BORDERS = [
+  'border-indigo-200/90 hover:border-indigo-400',
+  'border-emerald-200/90 hover:border-emerald-400',
+  'border-rose-200/90 hover:border-rose-400',
+  'border-amber-200/90 hover:border-amber-400',
+  'border-sky-200/90 hover:border-sky-400',
+  'border-fuchsia-200/90 hover:border-fuchsia-400',
+];
+
+/** رنگ سربرگ هر کارت هماهنگ با خانواده‌ی رنگی‌اش */
+const CARD_HEADER_TINTS = [
+  'bg-indigo-50/60',
+  'bg-emerald-50/60',
+  'bg-rose-50/60',
+  'bg-amber-50/60',
+  'bg-sky-50/60',
+  'bg-fuchsia-50/60',
+];
+
 /** هاله‌ی سایه‌ی رنگی هماهنگ با گرادیان هر کارت */
 const CARD_GLOW_SHADOWS = [
-  'rgba(99, 102, 241, 0.28)',
-  'rgba(16, 185, 129, 0.26)',
-  'rgba(244, 63, 94, 0.26)',
-  'rgba(245, 158, 11, 0.28)',
-  'rgba(59, 130, 246, 0.26)',
-  'rgba(217, 70, 239, 0.26)',
+  'rgba(99, 102, 241, 0.30)',
+  'rgba(16, 185, 129, 0.28)',
+  'rgba(244, 63, 94, 0.28)',
+  'rgba(245, 158, 11, 0.30)',
+  'rgba(59, 130, 246, 0.28)',
+  'rgba(217, 70, 239, 0.28)',
 ];
 
 /* ===== هندسه‌ی دسته کارت ===== */
@@ -62,6 +93,10 @@ const MAX_VISIBLE_DEPTH = 3;
 /** زمان و منحنی حرکت — فنری و نرم */
 const STACK_TRANSITION =
   'transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.4s ease, filter 0.55s ease';
+/** حداقل جابه‌جایی (پیکسل) تا ژستِ لمس «درگ» محسوب شود، نه «ضربه/کلیک» */
+const DRAG_THRESHOLD_PX = 6;
+/** پنجره‌ی زمانی اینرسی پس از رهاشدن درگ (میلی‌ثانیه × سرعت) */
+const FLING_MOMENTUM_MS = 140;
 
 export const RequestCardStack: React.FC<RequestCardStackProps> = ({
   personnelIds,
@@ -73,6 +108,7 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
 }) => {
   const count = personnelIds.length;
   const [rawActiveIndex, setActiveIndex] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(
     () =>
       typeof window !== 'undefined' &&
@@ -80,6 +116,18 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
   );
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  /** وضعیت درگ جاری (حرکت انگشت/موس روی خود کارت‌ها) */
+  const dragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startScroll: number;
+    maxMoved: number;
+    lastY: number;
+    lastT: number;
+    velocity: number;
+  } | null>(null);
+  /** وقتی true باشد، کلیکِ بلافاصله‌ی بعدی (پایان درگ) نباید عمل کند */
+  const suppressClickRef = useRef(false);
 
   /** ایندکس فعال همیشه در محدوده‌ی معتبر — بدون نیاز به افکتِ تصحیحی */
   const activeIndex = Math.min(rawActiveIndex, Math.max(0, count - 1));
@@ -92,13 +140,11 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  /** ارتفاع هر پله‌ی اسکرول (پیکسل) */
+  /** ارتفاع هر پله‌ی اسکرول (پیکسل) — محتوای اسکرول: N اسپیسر %45 + دُم %55 */
   const stepHeight = useCallback((): number => {
     const el = scrollerRef.current;
-    if (!el || count === 0) return 0;
-    // محتوای اسکرول: N اسپیسر %45 + دُم %55 → محدوده‌ی اسکرول = (N-1)×step
-    const scrollable = el.scrollHeight - el.clientHeight;
-    return count > 1 ? scrollable / (count - 1) : scrollable;
+    if (!el || count <= 1) return 0;
+    return (el.scrollHeight - el.clientHeight) / (count - 1);
   }, [count]);
 
   const scrollToCard = useCallback(
@@ -126,11 +172,90 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
     setActiveIndex((prev) => (prev === idx ? prev : idx));
   }, [count]);
 
-  /**
-   * چرخ موس/ترک‌پد روی ناحیه‌ی صحنه: تا وقتی دسته جا دارد، اسکرول به دسته
-   * اختصاص می‌یابد؛ در انتهای دسته، کنترل به اسکرول خود صفحه پس داده می‌شود.
-   * (lystener غیر passive تا preventDefault واقعی اعمال شود)
-   */
+  /* ===== درگ مستقیم روی خود کارت‌ها (لمس/موس/قلم — Pointer Events) ===== */
+  const handlePointerDown = (e: React.PointerEvent) => {
+    const scroller = scrollerRef.current;
+    if (count <= 1 || !scroller) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // درگ انیمیشن روانِ درحال اجرا را هم می‌گیرد
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      startScroll: scroller.scrollTop,
+      maxMoved: 0,
+      lastY: e.clientY,
+      lastT: e.timeStamp,
+      velocity: 0,
+    };
+    try {
+      stageRef.current?.setPointerCapture(e.pointerId);
+    } catch {
+      /* برخی مرورگرهای قدیمی capture ندارند */
+    }
+    // در طول درگ، اسنپ را موقتاً خاموش می‌کنیم تا حرکت کاملاً نرم و ۱:۱ بماند
+    scroller.style.scrollSnapType = 'none';
+    setIsDragging(true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const drag = dragRef.current;
+    const scroller = scrollerRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || !scroller) return;
+
+    // کشیدن به بالا → حرکت به داخل دسته (طبیعی مانند ورق‌زدن کارت‌ها)
+    const deltaY = drag.startY - e.clientY;
+    drag.maxMoved = Math.max(drag.maxMoved, Math.abs(e.clientY - drag.startY));
+    scroller.scrollTop = drag.startScroll + deltaY;
+
+    // سرعت هموارشده برای پرتاب نرم هنگام رهاشدن
+    const dt = e.timeStamp - drag.lastT;
+    if (dt > 0) {
+      const v = (drag.lastY - e.clientY) / dt;
+      drag.velocity = drag.velocity * 0.7 + v * 0.3;
+    }
+    drag.lastY = e.clientY;
+    drag.lastT = e.timeStamp;
+  };
+
+  const endDrag = (e: React.PointerEvent, cancelled: boolean) => {
+    const drag = dragRef.current;
+    const scroller = scrollerRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || !scroller) return;
+
+    const wasDrag = drag.maxMoved > DRAG_THRESHOLD_PX;
+    suppressClickRef.current = wasDrag;
+    dragRef.current = null;
+    setIsDragging(false);
+    scroller.style.scrollSnapType = '';
+
+    if (wasDrag && !cancelled) {
+      // اینرسی: پیش‌بینی نقطه‌ی توقف و نشستن روان روی نزدیک‌ترین کارت
+      const step = stepHeight();
+      if (step > 0) {
+        const predicted = scroller.scrollTop + drag.velocity * FLING_MOMENTUM_MS;
+        const idx = Math.min(Math.max(Math.round(predicted / step), 0), count - 1);
+        scroller.scrollTo({ top: idx * step, behavior: reducedMotion ? 'auto' : 'smooth' });
+      }
+    }
+    // پس از پردازش رویداد کلیک (که بلافاصله پس از pointerup می‌آید) پرچم ریست شود
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+  };
+
+  /** گارد مشترک کلیک: اگر ژست «درگ» بود نه «ضربه»، کلیک عمل نکند */
+  const guardClick = (e: React.MouseEvent, action: () => void) => {
+    if (suppressClickRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    action();
+  };
+
+  // چرخ موس/ترک‌پد روی ناحیه‌ی صحنه: تا وقتی دسته جا دارد، اسکرول به دسته
+  // اختصاص می‌یابد؛ در انتهای دسته، کنترل به اسکرول خود صفحه پس داده می‌شود.
+  // (lystener غیر passive تا preventDefault واقعی اعمال شود)
   useEffect(() => {
     const stage = stageRef.current;
     const scroller = scrollerRef.current;
@@ -147,37 +272,11 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
       scroller.scrollTop += e.deltaY;
     };
 
-    // کشیدن لمسی روی کارت‌ها هم باید دسته را بچرخاند (تا آستانه‌ی انتها/ابتدا)
-    let lastTouchY: number | null = null;
-    const onTouchStart = (e: TouchEvent) => {
-      lastTouchY = e.touches[0]?.clientY ?? null;
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (count <= 1 || lastTouchY === null) return;
-      const y = e.touches[0]?.clientY;
-      if (typeof y !== 'number') return;
-      const delta = lastTouchY - y;
-      lastTouchY = y;
-      const max = scroller.scrollHeight - scroller.clientHeight;
-      const atTop = scroller.scrollTop <= 0.5;
-      const atBottom = scroller.scrollTop >= max - 0.5;
-      const goingDown = delta > 0;
-      if ((goingDown && atBottom) || (!goingDown && atTop)) return;
-      e.preventDefault();
-      scroller.scrollTop += delta;
-    };
-
     stage.addEventListener('wheel', onWheel, { passive: false });
-    stage.addEventListener('touchstart', onTouchStart, { passive: true });
-    stage.addEventListener('touchmove', onTouchMove, { passive: false });
-    return () => {
-      stage.removeEventListener('wheel', onWheel);
-      stage.removeEventListener('touchstart', onTouchStart);
-      stage.removeEventListener('touchmove', onTouchMove);
-    };
+    return () => stage.removeEventListener('wheel', onWheel);
   }, [count]);
 
-  // پیمایش با کیبورد
+  // پیمایش با کیبورد (دسترس‌پذیری)
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'PageDown') {
       e.preventDefault();
@@ -205,8 +304,21 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
   return (
     <div className="w-full select-none">
       {/* ===== صحنه‌ی استک + اسکرول‌درایور نامرئی ===== */}
-      <div ref={stageRef} className="relative h-[470px] sm:h-[560px]" dir="rtl">
-        {/* لایه‌ی اسکرول: اسپیسرهای snap — نامرئی ولی فعال برای اسکرول/لمس/اسکرول‌نگار */}
+      <div
+        ref={stageRef}
+        className="relative h-[470px] sm:h-[560px] rounded-[2rem]"
+        dir="rtl"
+        style={{
+          background:
+            'radial-gradient(58% 54% at 50% 40%, rgba(99, 102, 241, 0.10), rgba(148, 163, 184, 0.07) 58%, transparent 78%)',
+          touchAction: 'none',
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={(e) => endDrag(e, false)}
+        onPointerCancel={(e) => endDrag(e, true)}
+      >
+        {/* لایه‌ی اسکرول: اسپیسرهای snap — نامرئی ولی موتور فیزیک/اسنپ دسته است */}
         <div
           ref={scrollerRef}
           onScroll={handleScroll}
@@ -220,12 +332,21 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
           <div style={{ height: '55%' }} />
         </div>
 
+        {/* نشانگر کوچک محتوایی (غیرتعاملی) */}
+        {count > 1 && (
+          <div className="absolute left-3 top-3 z-30 pointer-events-none">
+            <span className="inline-flex items-center gap-1 text-[10px] font-black text-slate-500 bg-white/85 backdrop-blur border border-slate-200/80 rounded-full px-2.5 py-1 shadow-xs tabular-nums">
+              {activePerson ? `${activePerson.firstName} ${activePerson.lastName}` : 'کارت'} — {toPersianDigits(activeIndex + 1)} از {toPersianDigits(count)}
+            </span>
+          </div>
+        )}
+
         {/* صحنه‌ی سه‌بعدی — رو هم قرار دارد ولی رویدادها را عبور می‌دهد مگر روی کارت‌ها */}
         <div
           className="absolute inset-0 z-20 outline-none"
-          style={{ perspective: '1500px' }}
+          style={{ perspective: '1500px', pointerEvents: 'none' }}
           role="group"
-          aria-label={`استک کارت‌های درخواست — کارت ${toPersianDigits(activeIndex + 1)} از ${toPersianDigits(count)}؛ برای جابه‌جایی اسکرول کنید یا از پیکان‌ها استفاده کنید`}
+          aria-label={`استک کارت‌های درخواست — کارت ${toPersianDigits(activeIndex + 1)} از ${toPersianDigits(count)}؛ با کشیدن کارت‌ها جابه‌جا شوید`}
           tabIndex={0}
           onKeyDown={handleKeyDown}
         >
@@ -243,6 +364,9 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
               const hasEssential = pReqs.some((r) => r.isEssential);
               const gradientIdx = idx % NAME_COLOR_GRADIENTS.length;
               const nameGradient = NAME_COLOR_GRADIENTS[gradientIdx];
+              const cardBackground = CARD_BACKGROUNDS[gradientIdx];
+              const cardBorder = CARD_BORDERS[gradientIdx];
+              const headerTint = CARD_HEADER_TINTS[gradientIdx];
               const glowShadow = CARD_GLOW_SHADOWS[gradientIdx];
 
               const createdAtDates = pReqs.map((r) => r.createdAt).filter(Boolean);
@@ -288,7 +412,11 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
                     pointerEvents,
                     willChange: d >= -1 && d <= MAX_VISIBLE_DEPTH ? 'transform, opacity' : 'auto',
                   }}
-                  onClick={d > 0 && d <= 2 ? () => scrollToCard(idx) : undefined}
+                  onClick={
+                    d > 0 && d <= 2
+                      ? (e) => guardClick(e, () => scrollToCard(idx))
+                      : undefined
+                  }
                   aria-hidden={d !== 0}
                 >
                   {/* بدنه‌ی کارت — تمام جزئیات قبلی حفظ شده است */}
@@ -306,11 +434,9 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
                           }
                         : undefined
                     }
-                    onClick={d === 0 ? () => onOpenCard(pid) : undefined}
-                    className={`group relative flex h-[280px] sm:h-[330px] w-full flex-col rounded-[2rem] border-2 bg-white text-slate-800 overflow-hidden transition-[transform,border-color,box-shadow] duration-300 ${
-                      d === 0
-                        ? 'cursor-pointer border-indigo-200 hover:border-indigo-400 hover:-translate-y-2'
-                        : 'border-slate-200'
+                    onClick={d === 0 ? (e) => guardClick(e, () => onOpenCard(pid)) : undefined}
+                    className={`group relative flex h-[280px] sm:h-[330px] w-full flex-col rounded-[2rem] border-2 ${cardBackground} text-slate-800 overflow-hidden transition-[transform,border-color,box-shadow] duration-300 ${cardBorder} ${
+                      d === 0 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''
                     }`}
                     style={{
                       boxShadow:
@@ -320,8 +446,11 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
                       transitionProperty: reducedMotion ? 'none' : undefined,
                     }}
                   >
+                    {/* نوار رنگی بالای کارت — هماهنگ با گرادیان نام */}
+                    <div className={`h-1.5 w-full bg-gradient-to-r ${nameGradient} shrink-0`} />
+
                     {/* سربرگ کارت */}
-                    <div className="p-5 border-b border-slate-100 bg-slate-50/80 flex items-start justify-between gap-3">
+                    <div className={`p-5 border-b border-white/70 ${headerTint} flex items-start justify-between gap-3`}>
                       <div className="space-y-1">
                         <h5
                           className={`text-base sm:text-lg font-black bg-gradient-to-r ${nameGradient} bg-clip-text text-transparent drop-shadow-xs`}
@@ -341,11 +470,11 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
                             ★ دارای اولویت
                           </span>
                         ) : (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/80 text-slate-500 border border-slate-200/60">
                             عادی
                           </span>
                         )}
-                        <span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                        <span className="text-[10px] font-extrabold text-indigo-600 bg-white/80 px-2 py-0.5 rounded-md border border-indigo-100">
                           {toPersianDigits(pReqs.length)} درخواست
                         </span>
                       </div>
@@ -365,7 +494,7 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] font-bold text-slate-400 mt-auto">
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-200/70 text-[10px] font-bold text-slate-400 mt-auto">
                         <span>ثبت: {formatDate(earliestCreated)}</span>
                         {d === 0 && (
                           <span className="text-indigo-600 font-black group-hover:-translate-x-1 transition-transform">
@@ -381,50 +510,6 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
           </div>
         </div>
       </div>
-
-      {/* ===== کنترل‌های پیمایش (پایین صحنه) ===== */}
-      {count > 1 && (
-        <div className="mt-1 flex items-center justify-center gap-3">
-          <button
-            type="button"
-            onClick={() => scrollToCard(activeIndex - 1)}
-            disabled={activeIndex <= 0}
-            className="flex items-center gap-1 px-3.5 py-2 rounded-xl text-[11px] font-black bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer shadow-xs active:scale-95"
-            aria-label="کارت قبلی"
-          >
-            <ChevronRight className="w-3.5 h-3.5" />
-            قبلی
-          </button>
-
-          <div className="flex items-center gap-2.5">
-            <Layers className="w-3.5 h-3.5 text-indigo-400" />
-            <div className="w-24 sm:w-36 h-1.5 rounded-full bg-slate-200 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"
-                style={{
-                  width: `${((activeIndex + 1) / count) * 100}%`,
-                  transition: reducedMotion ? 'none' : 'width 0.45s cubic-bezier(0.22, 1, 0.36, 1)',
-                }}
-              />
-            </div>
-            <span className="text-[11px] font-black text-slate-500 tabular-nums">
-              {activePerson ? `${activePerson.firstName} ${activePerson.lastName} — ` : ''}
-              {toPersianDigits(activeIndex + 1)} / {toPersianDigits(count)}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => scrollToCard(activeIndex + 1)}
-            disabled={activeIndex >= count - 1}
-            className="flex items-center gap-1 px-3.5 py-2 rounded-xl text-[11px] font-black bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer shadow-xs active:scale-95"
-            aria-label="کارت بعدی"
-          >
-            بعدی
-            <ChevronLeft className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
     </div>
   );
 };
