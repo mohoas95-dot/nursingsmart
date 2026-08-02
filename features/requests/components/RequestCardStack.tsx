@@ -85,9 +85,12 @@ const CARD_GLOW_SHADOWS = [
 
 /* ===== هندسه‌ی دسته کارت ===== */
 /** عمق هر پله به‌سمت عقب (پیکسل) */
-const DEPTH_Z_PX = 120;
-/** مقدار شکاف بالای هر کارت عقبی (پیکسل) تا لبه‌اش بیرون بزند */
-const DEPTH_Y_PX = -36;
+const DEPTH_Z_PX = 95;
+/**
+ * فاصله‌ی عمودی هر کارت عقبی از کارت جلویی (پیکسل) —
+ * کارت‌ها به‌صورت آبشاری از بالا به پایین پشت سر هم دیده می‌شوند، نه روی‌هم‌خوابیده
+ */
+const DEPTH_Y_PX = -58;
 /** حداکثر تعداد کارت‌های عقبی که قابل‌مشاهده‌اند */
 const MAX_VISIBLE_DEPTH = 3;
 /** زمان و منحنی حرکت — فنری و نرم */
@@ -401,7 +404,7 @@ export const RequestCardStack: React.FC<RequestCardStackProps> = ({
               return (
                 <div
                   key={`stack-card-${pid}`}
-                  className="absolute left-1/2 top-[54%] w-[300px] sm:w-[380px]"
+                  className="absolute left-1/2 top-[56%] w-[300px] sm:w-[380px]"
                   style={{
                     transform,
                     opacity,
