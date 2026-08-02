@@ -110,7 +110,7 @@ import type { SchedulePersistence, ScheduleUIFeedback } from '../features/schedu
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
-import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
+
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
@@ -4861,38 +4861,14 @@ export default function Home() {
     document.body.removeChild(link);
   };
 
-  // گروه شغلی هدف برای چاپ (null = هر دو گروه)
-  const [printJobGroup, setPrintJobGroup] = useState<JobGroup | null>(null);
-  // هدف چاپ: 'schedule' (جدول چینش) یا 'requests' (کارت‌های درخواست) — پیش‌فرض جدول
-  const [printTarget, setPrintTarget] = useState<'schedule' | 'requests'>('schedule');
-  // منوی کرکره‌ای خروجی‌ها (PDF پرستاران / PDF کمک‌بهیاران / اکسل)
-  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
-  const exportMenuRef = React.useRef<HTMLDivElement | null>(null);
-
-  React.useEffect(() => {
-    if (!showExportMenu) return;
-    const onClickOutside = (event: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
-        setShowExportMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
-  }, [showExportMenu]);
-
-  const handlePrint = (jobGroup: JobGroup | null = null) => {
-    setPrintJobGroup(jobGroup);
-    setPrintTarget('schedule');
-    // یک تیک صبر می‌کنیم تا برگه چاپ با گروه انتخابی رندر شود
-    window.setTimeout(() => window.print(), 60);
-  };
-
+  // هدف چاپ: 'requests' (کارت‌های درخواست) — فقط برای چاپ درخواست‌ها استفاده می‌شود
+  const [printTarget, setPrintTarget] = useState<'requests' | null>(null);
   const handlePrintRequests = () => {
     setPrintTarget('requests');
     window.setTimeout(() => {
       window.print();
       // پس از چاپ، هدف را به حالت پیش‌فرض برگردان
-      window.setTimeout(() => setPrintTarget('schedule'), 300);
+      window.setTimeout(() => setPrintTarget(null), 300);
     }, 60);
   };
 
@@ -6091,43 +6067,15 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  <div className="relative" ref={exportMenuRef}>
-                    <button
-                      onClick={() => setShowExportMenu(v => !v)}
-                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-                      id="btn-export-menu"
-                      title="خروجی‌های چاپ و اکسل"
-                    >
-                      <FileSpreadsheet className="w-4 h-4 text-emerald-600"/>
-                      خروجی و چاپ
-                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
-                    </button>
-                    {showExportMenu && (
-                      <div className="absolute left-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl z-40 overflow-hidden animate-fade-in" id="export-menu">
-                        <button
-                          onClick={() => { setShowExportMenu(false); handlePrint('nurse'); }}
-                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors cursor-pointer"
-                          id="btn-print-nurses"
-                        >
-                          <Printer className="w-4 h-4 text-emerald-600"/> چاپ PDF پرستاران
-                        </button>
-                        <button
-                          onClick={() => { setShowExportMenu(false); handlePrint('assistant'); }}
-                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-sky-50 hover:text-sky-700 border-t border-slate-100 transition-colors cursor-pointer"
-                          id="btn-print-assistants"
-                        >
-                          <Printer className="w-4 h-4 text-sky-600"/> چاپ PDF کمک‌بهیاران
-                        </button>
-                        <button
-                          onClick={() => { setShowExportMenu(false); exportToExcel(); }}
-                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 border-t border-slate-100 transition-colors cursor-pointer"
-                          id="btn-export-excel"
-                        >
-                          <FileSpreadsheet className="w-4 h-4 text-slate-500"/> خروجی فایل اکسل
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => { exportToExcel(); }}
+                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                    id="btn-export-excel"
+                    title="خروجی فایل اکسل"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600"/>
+                    خروجی اکسل
+                  </button>
                 </div>
               </div>
 
@@ -6360,7 +6308,7 @@ export default function Home() {
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">گروه شغلی / سمت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نوع استخدام</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">روتین کاری</th>
-                        <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">سابقهکار (سال)</th>
+                        <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">سابقه کار (سال)</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">قابلیت سرشیفت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">وضعیت کاربر</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center w-28">عملیات</th>
@@ -7309,88 +7257,7 @@ export default function Home() {
                   })()}
                 </div>
 
-                {/* ====== نسخهٔ چاپی PDF جهت خروجی چاپ کارت‌های درخواست ====== */}
-                <div className={`${printTarget === 'requests' ? 'print:block' : 'print:hidden'} ${printTarget === 'requests' ? 'block' : 'hidden'} space-y-6 text-slate-900 p-6 bg-white dir-rtl`} dir="rtl">
-                  <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
-                    <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
-                    <p className="text-xs font-bold text-slate-600">
-                      برنامه‌ریزی {JALALI_MONTH_NAMES[currentMonth - 1]} سال {toPersianDigits(currentYear)} — تمامی درخواست‌های ثبت‌شده بدون ابهام
-                    </p>
-                  </div>
-
-                  <div className="space-y-6">
-                    {Array.from(new Set(requests.map(r => r.personnelId))).map(pid => {
-                      const p = personnel.find(per => per.id === pid);
-                      if (!p) return null;
-                      const pReqs = requests.filter(r => r.personnelId === pid);
-                      const hasEssential = pReqs.some(r => r.isEssential);
-                      const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
-
-                      const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
-                      const updatedAtDates = pReqs.map(r => r.updatedAt).filter(Boolean);
-                      const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
-                      const latestUpdated = updatedAtDates.length > 0 ? updatedAtDates.sort().reverse()[0] : undefined;
-
-                      return (
-                        <div key={`print-card-${pid}`} className="border-2 border-slate-800 rounded-2xl p-5 space-y-3 break-inside-avoid bg-slate-50/50">
-                          <div className="flex items-center justify-between border-b border-slate-300 pb-2">
-                            <div>
-                              <h3 className="text-base font-black text-slate-900">
-                                {p.firstName} {p.lastName} <span className="text-xs font-bold text-slate-600">({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})</span>
-                              </h3>
-                            </div>
-                            <div>
-                              {hasEssential ? (
-                                <span className="border-2 border-rose-600 text-rose-700 bg-rose-50 font-black text-xs px-3 py-1 rounded-full">
-                                  ★ دارای اولویت بالا
-                                </span>
-                              ) : (
-                                <span className="border border-slate-300 text-slate-700 font-bold text-xs px-3 py-1 rounded-full">
-                                  عادی
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            <h4 className="text-xs font-black text-slate-800">📌 شرح دقیق درخواست‌ها:</h4>
-                            <ul className="list-disc list-inside space-y-1.5 text-xs font-bold leading-6 text-slate-800">
-                              {pReqs.map(r => (
-                                <li key={`print-req-${r.id}`}>
-                                  {formatRequestConversational(r)}
-                                  {r.requestType === 'OFF' && (
-                                    <span className="mr-1 text-[10px] font-black text-slate-600">
-                                      ({r.offHardness === 'hard' ? 'نوع: آف قطعی 🔴' : 'نوع: آف ترجیحی 🟡'})
-                                    </span>
-                                  )}
-                                  {r.isEssential && (
-                                    <span className="mr-1 text-[10px] font-black text-rose-700">
-                                      [اولویت بالا ★]
-                                    </span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-
-                          {notesList.length > 0 && (
-                            <div className="border border-amber-300 bg-amber-50/80 p-3 rounded-xl text-xs font-bold text-amber-900">
-                              <b>📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</b>
-                              <p className="mt-1 leading-6">{notesList.join(' — ')}</p>
-                            </div>
-                          )}
-
-                          <div className="text-[10px] font-bold text-slate-500 border-t border-slate-200 pt-2 flex flex-wrap items-center justify-between gap-2">
-                            <span>📅 تاریخ و ساعت ثبت: {formatJalaliDateTime(earliestCreated)}</span>
-                            <span>✏️ تاریخ و ساعت آخرین ویرایش: {formatJalaliDateTime(latestUpdated || earliestCreated)}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
-
             </div>
           )}
 
@@ -7403,8 +7270,8 @@ export default function Home() {
                 </div>
 
                 <div className="flex gap-2">
-                  <button onClick={() => { exportToExcel(); handlePrint(null); }} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
-                    <FileSpreadsheet className="w-4 h-4"/> دریافت همزمان اکسل و چاپ کارنامه‌ها
+                  <button onClick={() => { exportToExcel(); }} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer">
+                    <FileSpreadsheet className="w-4 h-4"/> دریافت فایل اکسل کارنامه‌ها
                   </button>
                 </div>
               </div>
@@ -8278,18 +8145,89 @@ export default function Home() {
             <ProfileSection user={authenticatedUser} />
           )}
 
-          <div className={`${printTarget === 'schedule' ? 'print:block' : 'print:hidden'} ${printTarget === 'schedule' ? 'block' : 'hidden'} w-full bg-white text-slate-900`} id="print-schedule-sheet">
-            <PrintScheduleSheet
-              personnel={personnel}
-              schedule={displayedSchedule || schedule}
-              reports={reports}
-              calendarDays={calendarDays}
-              year={currentYear}
-              month={currentMonth}
-              departmentName={departments.find(d => d.id === selectedDepartmentId)?.name}
-              dutyHours={effectiveDutyHours}
-              jobGroupFilter={printJobGroup}
-            />
+          {/* ====== نسخهٔ چاپی درخواست‌های پرسنل — در بالاترین سطح برای چاپ صحیح ====== */}
+          <div
+            className={`${printTarget === 'requests' ? '' : 'hidden'} space-y-6 text-slate-900 p-6 bg-white dir-rtl`}
+            dir="rtl"
+            id="print-request-cards"
+          >
+            <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
+              <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
+              <p className="text-xs font-bold text-slate-600">
+                برنامه‌ریزی {JALALI_MONTH_NAMES[currentMonth - 1]} سال {toPersianDigits(currentYear)} — تمامی درخواست‌های ثبت‌شده بدون ابهام
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {Array.from(new Set(requests.map(r => r.personnelId))).map(pid => {
+                const p = personnel.find(per => per.id === pid);
+                if (!p) return null;
+                const pReqs = requests.filter(r => r.personnelId === pid);
+                const hasEssential = pReqs.some(r => r.isEssential);
+                const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
+
+                const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
+                const updatedAtDates = pReqs.map(r => r.updatedAt).filter(Boolean);
+                const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
+                const latestUpdated = updatedAtDates.length > 0 ? updatedAtDates.sort().reverse()[0] : undefined;
+
+                return (
+                  <div key={`print-card-${pid}`} className="border-2 border-slate-800 rounded-2xl p-5 space-y-3 break-inside-avoid bg-slate-50/50">
+                    <div className="flex items-center justify-between border-b border-slate-300 pb-2">
+                      <div>
+                        <h3 className="text-base font-black text-slate-900">
+                          {p.firstName} {p.lastName} <span className="text-xs font-bold text-slate-600">({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})</span>
+                        </h3>
+                      </div>
+                      <div>
+                        {hasEssential ? (
+                          <span className="border-2 border-rose-600 text-rose-700 bg-rose-50 font-black text-xs px-3 py-1 rounded-full">
+                            ★ دارای اولویت بالا
+                          </span>
+                        ) : (
+                          <span className="border border-slate-300 text-slate-700 font-bold text-xs px-3 py-1 rounded-full">
+                            عادی
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-black text-slate-800">📌 شرح دقیق درخواست‌ها:</h4>
+                      <ul className="list-disc list-inside space-y-1.5 text-xs font-bold leading-6 text-slate-800">
+                        {pReqs.map(r => (
+                          <li key={`print-req-${r.id}`}>
+                            {formatRequestConversational(r)}
+                            {r.requestType === 'OFF' && (
+                              <span className="mr-1 text-[10px] font-black text-slate-600">
+                                ({r.offHardness === 'hard' ? 'نوع: آف قطعی 🔴' : 'نوع: آف ترجیحی 🟡'})
+                              </span>
+                            )}
+                            {r.isEssential && (
+                              <span className="mr-1 text-[10px] font-black text-rose-700">
+                                [اولویت بالا ★]
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    {notesList.length > 0 && (
+                      <div className="border border-amber-300 bg-amber-50/80 p-3 rounded-xl text-xs font-bold text-amber-900">
+                        <b>📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</b>
+                        <p className="mt-1 leading-6">{notesList.join(' — ')}</p>
+                      </div>
+                    )}
+
+                    <div className="text-[10px] font-bold text-slate-500 border-t border-slate-200 pt-2 flex flex-wrap items-center justify-between gap-2">
+                      <span>📅 تاریخ و ساعت ثبت: {formatJalaliDateTime(earliestCreated)}</span>
+                      <span>✏️ تاریخ و ساعت آخرین ویرایش: {formatJalaliDateTime(latestUpdated || earliestCreated)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
         </div>

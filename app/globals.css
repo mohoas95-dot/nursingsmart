@@ -6,9 +6,8 @@
 
 @media print {
   @page {
-    size: A4 landscape;
-    /* حاشیه حداقلی تا جدول کل عرض برگه را بگیرد */
-    margin: 4mm;
+    size: A4 portrait;
+    margin: 10mm;
   }
 
   html,
@@ -22,17 +21,17 @@
     print-color-adjust: exact;
   }
 
-  /* فقط برگه چاپ نمایش داده شود؛ بقیه رابط کاربری حذف شود */
+  /* فقط بخش چاپ درخواست‌ها نمایش داده شود؛ بقیه رابط کاربری حذف شود */
   body * {
     visibility: hidden !important;
   }
 
-  #print-schedule-sheet,
-  #print-schedule-sheet * {
+  #print-request-cards,
+  #print-request-cards * {
     visibility: visible !important;
   }
 
-  #print-schedule-sheet {
+  #print-request-cards {
     position: absolute !important;
     inset: 0 auto auto 0;
     right: 0;
@@ -42,13 +41,12 @@
     margin: 0 !important;
     padding: 0 !important;
     box-shadow: none !important;
+    display: block !important;
+    visibility: visible !important;
   }
 
-  /* جلوگیری از شکستن جدول بین دو صفحه */
-  #print-schedule-sheet table,
-  #print-schedule-sheet tr,
-  #print-schedule-sheet thead,
-  #print-schedule-sheet tbody {
+  /* جلوگیری از شکستن کارت‌ها بین دو صفحه */
+  #print-request-cards > div > div {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
