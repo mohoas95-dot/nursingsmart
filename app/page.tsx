@@ -4863,12 +4863,34 @@ export default function Home() {
 
   // هدف چاپ: 'requests' (کارت‌های درخواست) — فقط برای چاپ درخواست‌ها استفاده می‌شود
   const [printTarget, setPrintTarget] = useState<'requests' | null>(null);
-  const handlePrintRequests = () => {
+  // فیلتر گروه شغلی برای چاپ درخواست‌ها (null = همه، 'nurse' = فقط پرستاران، 'assistant' = فقط کمک‌بهیاران)
+  const [printJobGroupFilter, setPrintJobGroupFilter] = useState<'nurse' | 'assistant' | null>(null);
+  // منوی کرکره‌ای خروجی‌ها
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
+  const exportMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!showExportMenu) return;
+    const onClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [showExportMenu]);
+
+  const handlePrintRequests = (jobGroup: 'nurse' | 'assistant' | null = null) => {
+    setPrintJobGroupFilter(jobGroup);
     setPrintTarget('requests');
+    setShowExportMenu(false);
     window.setTimeout(() => {
       window.print();
-      // پس از چاپ، هدف را به حالت پیش‌فرض برگردان
-      window.setTimeout(() => setPrintTarget(null), 300);
+      // پس از چاپ، هدف و فیلتر را به حالت پیش‌فرض برگردان
+      window.setTimeout(() => {
+        setPrintTarget(null);
+        setPrintJobGroupFilter(null);
+      }, 300);
     }, 60);
   };
 
@@ -6067,15 +6089,43 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  <button
-                    onClick={() => { exportToExcel(); }}
-                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-                    id="btn-export-excel"
-                    title="خروجی فایل اکسل"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 text-emerald-600"/>
-                    خروجی اکسل
-                  </button>
+                  <div className="relative" ref={exportMenuRef}>
+                    <button
+                      onClick={() => setShowExportMenu(v => !v)}
+                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                      id="btn-export-menu"
+                      title="خروجی‌های چاپ و اکسل"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-600"/>
+                      خروجی و چاپ
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showExportMenu && (
+                      <div className="absolute left-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl z-40 overflow-hidden animate-fade-in" id="export-menu">
+                        <button
+                          onClick={() => handlePrintRequests('nurse')}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors cursor-pointer"
+                          id="btn-print-nurses"
+                        >
+                          <Printer className="w-4 h-4 text-emerald-600"/> چاپ لیست پرستاران
+                        </button>
+                        <button
+                          onClick={() => handlePrintRequests('assistant')}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-sky-50 hover:text-sky-700 border-t border-slate-100 transition-colors cursor-pointer"
+                          id="btn-print-assistants"
+                        >
+                          <Printer className="w-4 h-4 text-sky-600"/> چاپ لیست کمک‌بهیاران
+                        </button>
+                        <button
+                          onClick={() => { setShowExportMenu(false); exportToExcel(); }}
+                          className="w-full text-right flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 border-t border-slate-100 transition-colors cursor-pointer"
+                          id="btn-export-excel"
+                        >
+                          <FileSpreadsheet className="w-4 h-4 text-slate-500"/> خروجی فایل اکسل
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -8152,14 +8202,26 @@ export default function Home() {
             id="print-request-cards"
           >
             <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
-              <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
+              <h2 className="text-xl font-black">
+                {printJobGroupFilter === 'nurse' ? 'گزارش درخواست‌های پرستاران' :
+                 printJobGroupFilter === 'assistant' ? 'گزارش درخواست‌های کمک‌بهیاران' :
+                 'گزارش کامل درخواست‌های پرسنل بخش'}
+              </h2>
               <p className="text-xs font-bold text-slate-600">
                 برنامه‌ریزی {JALALI_MONTH_NAMES[currentMonth - 1]} سال {toPersianDigits(currentYear)} — تمامی درخواست‌های ثبت‌شده بدون ابهام
               </p>
             </div>
 
             <div className="space-y-6">
-              {Array.from(new Set(requests.map(r => r.personnelId))).map(pid => {
+              {Array.from(new Set(requests.map(r => r.personnelId)))
+                .filter(pid => {
+                  const p = personnel.find(per => per.id === pid);
+                  if (!p) return false;
+                  if (printJobGroupFilter === 'nurse') return p.jobGroup === 'nurse';
+                  if (printJobGroupFilter === 'assistant') return p.jobGroup === 'assistant';
+                  return true;
+                })
+                .map(pid => {
                 const p = personnel.find(per => per.id === pid);
                 if (!p) return null;
                 const pReqs = requests.filter(r => r.personnelId === pid);
