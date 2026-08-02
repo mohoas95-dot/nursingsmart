@@ -6212,9 +6212,14 @@ export default function Home() {
                                 const currentShift = pAssignments[d.day] || 'OFF';
                                 const cellId = `cell-${p.id}-${d.day}`;
 
-                                const isShiftLeaderM = displayedSchedule?.shiftLeaders?.[d.day]?.morning === p.id;
-                                const isShiftLeaderE = displayedSchedule?.shiftLeaders?.[d.day]?.afternoon === p.id;
-                                const isShiftLeaderN = displayedSchedule?.shiftLeaders?.[d.day]?.night === p.id;
+                                const leaderFor = (group: 'M' | 'E' | 'N') => personnel.find(candidate => {
+                                  if (!candidate.active || candidate.jobGroup !== 'nurse' || !(candidate.position === 'supervisor' || candidate.position === 'staff' || (candidate.position === 'general' && candidate.canBeShiftLeader))) return false;
+                                  const shift = displayedSchedule?.assignments?.[candidate.id]?.[d.day] || 'OFF';
+                                  return group === 'M' ? ['M', 'ME', 'MN', 'MEN'].includes(shift) : group === 'E' ? ['E', 'ME', 'EN', 'MEN'].includes(shift) : ['N', 'EN', 'MN', 'MEN'].includes(shift);
+                                })?.id;
+                                const isShiftLeaderM = leaderFor('M') === p.id;
+                                const isShiftLeaderE = leaderFor('E') === p.id;
+                                const isShiftLeaderN = leaderFor('N') === p.id;
 
                                 const isShiftLeaderCell =
                                   (currentShift === 'M' && isShiftLeaderM) ||
@@ -6350,7 +6355,7 @@ export default function Home() {
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">گروه شغلی / سمت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نوع استخدام</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">روتین کاری</th>
-                        <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">سابقهکار (سال)</th>
+                        <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">سابقه کار (سال)</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">قابلیت سرشیفت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center">وضعیت کاربر</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500 text-center w-28">عملیات</th>
@@ -6993,7 +6998,7 @@ export default function Home() {
 
                   {(role === 'headnurse' || role === 'admin') && <button
                     type="button"
-                    onClick={() => { document.documentElement.classList.add('printing-requests'); const cleanup = () => { document.documentElement.classList.remove('printing-requests'); window.removeEventListener('afterprint', cleanup); }; window.addEventListener('afterprint', cleanup); window.print(); }}
+                    onClick={() => { const report = document.getElementById('print-requests-sheet'); const printWindow = window.open('', '_blank', 'width=900,height=700'); if (!report || !printWindow) return; const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style')).map(node => node.outerHTML).join(''); printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8">${styles}<style>@page{size:A4 portrait;margin:10mm}body{background:#fff!important}</style></head><body>${report.innerHTML}</body></html>`); printWindow.document.close(); printWindow.onload = () => { printWindow.focus(); printWindow.print(); printWindow.onafterprint = () => printWindow.close(); }; }}
                     className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs px-6 py-3.5 rounded-2xl shadow-lg shadow-emerald-900/40 transition-all cursor-pointer shrink-0 active:scale-95"
                     id="btn-print-all-requests-pdf"
                   >
