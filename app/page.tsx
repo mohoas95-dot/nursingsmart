@@ -4881,27 +4881,43 @@ export default function Home() {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [showExportMenu]);
 
-  // چاپ جدول ماهانه شیفت (برای پرستاران یا کمک‌بهیاران)
+  // چاپ جدول ماهانه شیفت (برای پرستاران یا کمک‌بهیاران) — A4 Landscape
   const handlePrintSchedule = (jobGroup: 'nurse' | 'assistant') => {
     setPrintJobGroupFilter(jobGroup);
     setPrintTarget('schedule');
     setShowExportMenu(false);
+    // تزریق استایل موقت برای تنظیم A4 landscape
+    const styleEl = document.createElement('style');
+    styleEl.id = 'print-page-orientation';
+    styleEl.textContent = '@media print { @page { size: A4 landscape; margin: 4mm; } }';
+    document.head.appendChild(styleEl);
     window.setTimeout(() => {
       window.print();
+      // پاکسازی استایل موقت و بازگشت state
       window.setTimeout(() => {
+        const el = document.getElementById('print-page-orientation');
+        if (el) el.remove();
         setPrintTarget(null);
         setPrintJobGroupFilter(null);
       }, 500);
     }, 150);
   };
 
-  // چاپ کارت‌های درخواست پرسنل
+  // چاپ کارت‌های درخواست پرسنل — A4 Portrait
   const handlePrintRequests = () => {
     setPrintTarget('requests');
     setShowExportMenu(false);
+    // تزریق استایل موقت برای تنظیم A4 portrait
+    const styleEl = document.createElement('style');
+    styleEl.id = 'print-page-orientation';
+    styleEl.textContent = '@media print { @page { size: A4 portrait; margin: 10mm; } }';
+    document.head.appendChild(styleEl);
     window.setTimeout(() => {
       window.print();
+      // پاکسازی استایل موقت و بازگشت state
       window.setTimeout(() => {
+        const el = document.getElementById('print-page-orientation');
+        if (el) el.remove();
         setPrintTarget(null);
       }, 500);
     }, 150);

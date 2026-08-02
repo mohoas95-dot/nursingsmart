@@ -6,8 +6,8 @@
 
 @media print {
   @page {
-    size: A4 landscape;
-    margin: 4mm;
+    size: A4;
+    margin: 8mm;
   }
 
   html,
@@ -25,6 +25,8 @@
   body * {
     visibility: hidden !important;
   }
+
+  /* اندازه صفحه به‌صورت دینامیک توسط JavaScript تنظیم می‌شود (landscape برای جدول، portrait برای درخواست‌ها) */
 
   /* جدول ماهانه شیفت — هنگام چاپ لیست پرستاران/کمک‌بهیاران */
   #print-schedule-sheet,
