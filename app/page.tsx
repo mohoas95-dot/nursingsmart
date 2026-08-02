@@ -4891,8 +4891,8 @@ export default function Home() {
       window.setTimeout(() => {
         setPrintTarget(null);
         setPrintJobGroupFilter(null);
-      }, 300);
-    }, 60);
+      }, 500);
+    }, 150);
   };
 
   // چاپ کارت‌های درخواست پرسنل
@@ -4903,8 +4903,8 @@ export default function Home() {
       window.print();
       window.setTimeout(() => {
         setPrintTarget(null);
-      }, 300);
-    }, 60);
+      }, 500);
+    }, 150);
   };
 
   // Generate current calendar array — یکپارچه با تعطیلات انتخابی بخش و روز آغاز هفته (Requirement 4)

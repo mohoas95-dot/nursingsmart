@@ -42,7 +42,6 @@
     margin: 0 !important;
     padding: 0 !important;
     box-shadow: none !important;
-    display: block !important;
   }
 
   /* کارت‌های درخواست — هنگام چاپ درخواست‌ها */
@@ -61,8 +60,6 @@
     margin: 0 !important;
     padding: 0 !important;
     box-shadow: none !important;
-    display: block !important;
-    visibility: visible !important;
   }
 
   /* جلوگیری از شکستن آیتم‌ها بین دو صفحه */
