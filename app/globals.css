@@ -6,8 +6,8 @@
 
 @media print {
   @page {
-    size: A4 portrait;
-    margin: 10mm;
+    size: A4;
+    margin: 8mm;
   }
 
   html,
@@ -21,11 +21,31 @@
     print-color-adjust: exact;
   }
 
-  /* فقط بخش چاپ درخواست‌ها نمایش داده شود؛ بقیه رابط کاربری حذف شود */
+  /* فقط بخش چاپ‌شونده نمایش داده شود؛ بقیه رابط کاربری حذف شود */
   body * {
     visibility: hidden !important;
   }
 
+  /* جدول ماهانه شیفت — هنگام چاپ لیست پرستاران/کمک‌بهیاران */
+  #print-schedule-sheet,
+  #print-schedule-sheet * {
+    visibility: visible !important;
+  }
+
+  #print-schedule-sheet {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    right: 0;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    display: block !important;
+  }
+
+  /* کارت‌های درخواست — هنگام چاپ درخواست‌ها */
   #print-request-cards,
   #print-request-cards * {
     visibility: visible !important;
@@ -45,7 +65,15 @@
     visibility: visible !important;
   }
 
-  /* جلوگیری از شکستن کارت‌ها بین دو صفحه */
+  /* جلوگیری از شکستن آیتم‌ها بین دو صفحه */
+  #print-schedule-sheet table,
+  #print-schedule-sheet tr,
+  #print-schedule-sheet thead,
+  #print-schedule-sheet tbody {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
   #print-request-cards > div > div {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
