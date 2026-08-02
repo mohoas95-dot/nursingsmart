@@ -6,9 +6,8 @@
 
 @media print {
   @page {
-    size: A4 landscape;
-    /* حاشیه حداقلی تا جدول کل عرض برگه را بگیرد */
-    margin: 4mm;
+    size: A4;
+    margin: 8mm;
   }
 
   html,
@@ -22,11 +21,14 @@
     print-color-adjust: exact;
   }
 
-  /* فقط برگه چاپ نمایش داده شود؛ بقیه رابط کاربری حذف شود */
+  /* فقط بخش چاپ‌شونده نمایش داده شود؛ بقیه رابط کاربری حذف شود */
   body * {
     visibility: hidden !important;
   }
 
+  /* اندازه صفحه به‌صورت دینامیک توسط JavaScript تنظیم می‌شود (landscape برای جدول، portrait برای درخواست‌ها) */
+
+  /* جدول ماهانه شیفت — هنگام چاپ لیست پرستاران/کمک‌بهیاران */
   #print-schedule-sheet,
   #print-schedule-sheet * {
     visibility: visible !important;
@@ -44,11 +46,34 @@
     box-shadow: none !important;
   }
 
-  /* جلوگیری از شکستن جدول بین دو صفحه */
+  /* کارت‌های درخواست — هنگام چاپ درخواست‌ها */
+  #print-request-cards,
+  #print-request-cards * {
+    visibility: visible !important;
+  }
+
+  #print-request-cards {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    right: 0;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* جلوگیری از شکستن آیتم‌ها بین دو صفحه */
   #print-schedule-sheet table,
   #print-schedule-sheet tr,
   #print-schedule-sheet thead,
   #print-schedule-sheet tbody {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  #print-request-cards > div > div {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
@@ -350,4 +375,39 @@
   .tdt-cal-btn:active .tdt-ripple {
     animation: none !important;
   }
+}
+
+/* ===== Ribbon: گوشهٔ تا شده (سرشیفت) ===== */
+.shift-ribbon {
+  position: relative;
+  overflow: hidden;
+}
+.shift-ribbon::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 10px 10px 0;
+  border-color: transparent #d4a017 transparent transparent;
+  filter: drop-shadow(-0.5px 0.5px 1px rgba(0,0,0,0.18));
+  pointer-events: none;
+  z-index: 2;
+}
+/* Triangle fold shadow line for a "folded" look */
+.shift-ribbon::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 10px 10px 0;
+  border-color: transparent rgba(0,0,0,0.10) transparent transparent;
+  transform: translate(0.5px, 0.5px);
+  pointer-events: none;
+  z-index: 1;
 }

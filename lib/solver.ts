@@ -702,7 +702,7 @@ export function solveNursingSchedule(
     }
   });
 
-  // مرتب‌سازی پرسنل بر اساس جایگاه تعریف‌شده در لیست (orderIndex) برای انتخاب سرشیفت
+  // مرتب‌سازی پرسنل بر اساس جایگاه تعریف‌شده در لیست (orderIndex) برای انتخاب سرشیفت — نفر بالاتر در چینش انتخاب می‌شود
   const byOrder = (a: Personnel, b: Personnel) => (a.orderIndex ?? 99999) - (b.orderIndex ?? 99999);
   const staffs = [...activePersonnel.filter(p => p.position === 'staff')].sort(byOrder);
   const supervisor = [...activePersonnel.filter(p => p.position === 'supervisor')].sort(byOrder)[0];
@@ -1431,7 +1431,11 @@ export function solveNursingSchedule(
     }
   });
 
-  // 7. Select and Assign Shift Leaders — یک سرشیفت برای هر شیفت عصر/شب، صبح فقط روزهای تعطیل، نزدیک‌ترین به ابتدای لیست
+  // 7. Select and Assign Shift Leaders — منطق جدید:
+  //    • شیفت صبح روزهای کاری: بدون سرشیفت
+  //    • سایر روزها (تعطیلات/جمعه‌ها): هر سه شیفت M، E، N هرکدام مستقل سرشیفت دارند
+  //    • روزهای کاری: عصر و شب سرشیفت مستقل دارند (صبح بدون سرشیفت)
+  //    • هر شیفت M، E، N کاملاً مستقل است؛ اگر ۲ نفر صلاحیت داشتند، نفر بالاتر در چینش انتخاب می‌شود
   const eligibleForLeader = (p: Personnel, shiftGroup: 'M' | 'E' | 'N', day: number) => {
     if (p.jobGroup !== 'nurse') return false;
     const s = assignments[p.id]?.[day];
@@ -1447,7 +1451,8 @@ export function solveNursingSchedule(
 
   for (let d = 1; d <= totalDays; d++) {
     const isHolidayDay = calendar[d - 1].isHoliday;
-    // صبح: فقط روزهای تعطیل نیاز به سرشیفت دارد (درخواست کاربر: صبح روز غیرتعطیل 👑 ندارد)
+
+    // شیفت صبح: فقط روزهای تعطیل سرشیفت دارد (روز کاری = بدون سرشیفت)
     if (isHolidayDay) {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'M', d)).sort(byOrder);
       if (candidates.length > 0) {
@@ -1457,7 +1462,7 @@ export function solveNursingSchedule(
       }
     }
 
-    // عصر — یک سرشیفت کافی است، نزدیک‌ترین به ابتدای لیست
+    // شیفت عصر: همیشه سرشیفت مستقل دارد (هم روز کاری و هم تعطیل)
     {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'E', d)).sort(byOrder);
       if (candidates.length > 0) {
@@ -1467,15 +1472,7 @@ export function solveNursingSchedule(
       }
     }
 
-    // شب — اگر سرشیفت عصر EN باشد، همان فرد شب را هم پوشش می‌دهد (یک سرشیفت کافی است)
-    const afternoonLeaderId = shiftLeaders[d].afternoon;
-    if (afternoonLeaderId) {
-      const afterS = assignments[afternoonLeaderId][d];
-      if (afterS === 'EN') {
-        shiftLeaders[d].night = afternoonLeaderId;
-        continue;
-      }
-    }
+    // شیفت شب: همیشه سرشیفت مستقل دارد (بدون shortcut از عصر)
     {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'N', d)).sort(byOrder);
       if (candidates.length > 0) {
@@ -1578,8 +1575,8 @@ export function verifyCoverageAndLeaders(
     if (eAssignedNurse > demand.afternoonNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت E`);
     if (nAssignedNurse > demand.nightNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت N`);
 
-    // انتخاب سرشیفت بر اساس نزدیک‌ترین به ابتدای لیست (orderIndex)
-    // صبح فقط روزهای تعطیل 👑 دارد (درخواست کاربر)
+    // انتخاب سرشیفت — منطق جدید:
+    // صبح فقط روزهای تعطیل؛ عصر و شب همیشه؛ هر شیفت M/E/N کاملاً مستقل
     const eligibleForLeaderVerify = (p: Personnel, shiftGroup: 'M' | 'E' | 'N') => {
       if (p.jobGroup !== 'nurse') return false;
       const s = assignments[p.id]?.[d];
@@ -1599,17 +1596,14 @@ export function verifyCoverageAndLeaders(
       if (candidates.length > 0) shiftLeaders[d].morning = candidates[0].id;
       else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
     }
-    // عصر
+    // عصر — همیشه سرشیفت مستقل
     {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'E'));
       if (candidates.length > 0) shiftLeaders[d].afternoon = candidates[0].id;
       else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
     }
-    // شب — اگر عصر EN باشد همان فرد
-    const afternoonLeaderId = shiftLeaders[d].afternoon;
-    if (afternoonLeaderId && assignments[afternoonLeaderId]?.[d] === 'EN') {
-      shiftLeaders[d].night = afternoonLeaderId;
-    } else {
+    // شب — همیشه سرشیفت مستقل (بدون shortcut از عصر)
+    {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'N'));
       if (candidates.length > 0) shiftLeaders[d].night = candidates[0].id;
       else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
