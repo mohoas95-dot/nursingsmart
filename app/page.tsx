@@ -6156,7 +6156,6 @@ export default function Home() {
                                   <div>
                                     <div className="font-extrabold text-slate-900 text-sm leading-tight">{p.firstName} {p.lastName}</div>
                                     <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-400 font-serif">
-                                      <span>{p.personalCode} •</span>
                                       <span className="font-bold text-slate-500">{report?.positionText}</span>
                                     </div>
                                   </div>
@@ -6240,7 +6239,7 @@ export default function Home() {
                                   displayVal = isShiftLeaderCell ? 'شب 👑' : 'شب';
                                 } else if (currentShift === 'ME') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-amber-50 text-slate-700 font-black border-indigo-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'ME 👑' : 'ME';
+                                  displayVal = 'ME';
                                 } else if (currentShift === 'EN') {
                                   badgeClass = "bg-gradient-to-r from-amber-50 to-purple-50 text-slate-700 font-black border-violet-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? 'EN 👑' : 'EN';
@@ -6292,7 +6291,8 @@ export default function Home() {
                                         title={`${p.firstName} ${p.lastName} • روز ${d.day} \nکلیک برای ویرایش دستی`}
                                         id={cellId}
                                       >
-                                        {displayVal}
+                                        <span>{displayVal}</span>
+                                        {isShiftLeaderCell && <span className="shift-leader-ribbon" aria-label="سرشیفت" title="سرشیفت" />}
                                       </button>
                                     )}
                                   </td>
@@ -6307,7 +6307,9 @@ export default function Home() {
               </div>
 
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs font-semibold print:hidden">
+                <span className="sr-only">گوشهٔ مثلثی طلایی در گوشهٔ بالا سمت راست هر سلول، نشان‌دهندهٔ سرشیفت است.</span>
                 <span className="text-slate-500">راهنمای نوبت‌های کاری:</span>
+                <span className="flex items-center gap-1.5"><span className="relative w-5 h-5 rounded border border-slate-300 bg-white"><span className="shift-leader-ribbon" /></span> گوشهٔ طلایی: سرشیفت</span>
                 <div className="flex flex-wrap gap-4">
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center rounded font-bold">صبح</span> صبح (M)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center rounded font-bold">عصر</span> عصر (E)</span>
@@ -6390,8 +6392,7 @@ export default function Home() {
                               </button>
                             </div>
                           </td>
-                          <td className="px-6 py-3.5 font-mono text-xs font-bold text-slate-500">{p.personalCode}</td>
-                          <td className="px-6 py-3.5 font-bold text-slate-800">{p.firstName} {p.lastName}</td>
+                                                    <td className="px-6 py-3.5 font-bold text-slate-800">{p.firstName} {p.lastName}</td>
                           <td className="px-6 py-3.5 text-slate-600">
                             {p.jobGroup === 'assistant' ? (
                               <span className="bg-orange-50 text-orange-700 px-2 py-0.5 rounded-md text-xs font-bold">کمک بهیار</span>
@@ -6991,15 +6992,15 @@ export default function Home() {
                     </p>
                   </div>
 
-                  <button
+                  {(role === 'headnurse' || role === 'admin') && <button
                     type="button"
-                    onClick={() => window.print()}
+                    onClick={() => { document.documentElement.classList.add('printing-requests'); window.print(); window.setTimeout(() => document.documentElement.classList.remove('printing-requests'), 1000); }}
                     className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs px-6 py-3.5 rounded-2xl shadow-lg shadow-emerald-900/40 transition-all cursor-pointer shrink-0 active:scale-95"
                     id="btn-print-all-requests-pdf"
                   >
                     <Printer className="w-4 h-4" />
                     <span>چاپ همه درخواست‌ها (PDF)</span>
-                  </button>
+                  </button>}
                 </div>
 
                 {/* چیدمان افقی و روی‌هم کارت‌ها (Fanned Cards Layout) */}
@@ -7066,8 +7067,7 @@ export default function Home() {
                                       {p.firstName} {p.lastName}
                                     </h5>
                                     <div className="text-[11px] font-extrabold text-slate-500 flex items-center gap-2">
-                                      <span>کد پرسنلی: <span className="font-mono">{toPersianDigits(p.personalCode)}</span></span>
-                                      <span>•</span>
+                                                                            <span>•</span>
                                       <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 font-bold border border-indigo-200/40">
                                         {p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
                                       </span>
@@ -7133,8 +7133,7 @@ export default function Home() {
                                     {activePerson.firstName} {activePerson.lastName}
                                   </h3>
                                   <p className="text-xs font-bold text-slate-300 flex items-center gap-2">
-                                    <span>کد پرسنلی: <span className="font-mono text-white">{toPersianDigits(activePerson.personalCode)}</span></span>
-                                    <span>•</span>
+                                                                        <span>•</span>
                                     <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-black border border-indigo-400/30">
                                       {activePerson.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
                                     </span>
@@ -7302,7 +7301,7 @@ export default function Home() {
                 </div>
 
                 {/* ====== نسخهٔ چاپی PDF جهت خروجی چاپ عامیانه ====== */}
-                <div className="hidden print:block space-y-6 text-slate-900 p-6 bg-white dir-rtl" dir="rtl">
+                <div id="print-requests-sheet" className="hidden print:block space-y-6 text-slate-900 p-6 bg-white dir-rtl" dir="rtl">
                   <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
                     <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
                     <p className="text-xs font-bold text-slate-600">
@@ -7330,8 +7329,7 @@ export default function Home() {
                               <h3 className="text-base font-black text-slate-900">
                                 {p.firstName} {p.lastName} <span className="text-xs font-bold text-slate-600">({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})</span>
                               </h3>
-                              <p className="text-xs font-bold text-slate-500">کد پرسنلی: {toPersianDigits(p.personalCode)}</p>
-                            </div>
+                                                          </div>
                             <div>
                               {hasEssential ? (
                                 <span className="border-2 border-rose-600 text-rose-700 bg-rose-50 font-black text-xs px-3 py-1 rounded-full">

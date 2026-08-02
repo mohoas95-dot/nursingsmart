@@ -131,17 +131,6 @@ export function AddPersonnelModal(props: AddPersonnelModalProps) {
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-500 mb-1">کد پرسنلی (اختیاری)</label>
-            <input
-              type="text"
-              value={formPersonalCode}
-              onChange={(e) => setFormPersonalCode(e.target.value)}
-              className="w-full text-xs font-bold bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 focus:border-indigo-500 focus:outline-none font-mono"
-              id="input-form-code"
-              placeholder="در صورت وجود وارد کنید"
-            />
-          </div>
 
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-1">کد ملی برای ورود به سامانه</label>
