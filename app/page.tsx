@@ -111,6 +111,8 @@ import { AddPersonnelModal } from '../features/personnel/components/AddPersonnel
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
 import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
+import { RequestCardStack } from '../features/requests/components/RequestCardStack';
+import { printHtmlSnapshot } from '../lib/print/print-snapshot';
 
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
@@ -4881,46 +4883,64 @@ export default function Home() {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [showExportMenu]);
 
+  // اجرای امن یک کار چاپ (جدول شیفت یا کارت‌های درخواست)
+  //
+  // علت ریشه‌ای باگ «PDF ذخیره‌شده خالی و سفید»:
+  // نسخه‌های قبلی مستقیماً از DOM زنده‌ی صفحه‌ی اصلی چاپ می‌گرفتند و پس از
+  // window.print() باید state چاپ را پاکسازی می‌کردند (با تایمر یا afterprint).
+  // دیالوگ «Save as PDF» مرورگر اجرای جاوااسکریپت صفحه را متوقف نمی‌کند و پیش‌نمایش
+  // یک بار رندر می‌شود، اما رندر PDF نهایی ممکن است دوباره و از روی DOM همان لحظه
+  // انجام شود؛ هر تغییری در این فاصله (پاکسازی state، ری‌رندر React، intervalهای صفحه)
+  // کانتینر چاپی را display:none می‌کند و خروجی نهایی صفحه‌ای کاملاً خالی می‌شود.
+  //
+  // راه‌حل ریشه‌ای: چاپ اصلاً از صفحه‌ی اصلی انجام نمی‌شود. ابتدا نسخه‌ی چاپی در
+  // DOM رندر می‌شود، سپس از کانتینر یک «اسنپ‌شات ایستای HTML» به‌همراه تمام
+  // stylesheetها گرفته و داخل یک iframe مخفیِ بدون جاوااسکریپت چاپ می‌شود. آن سند
+  // هرگز تغییر نمی‌کند؛ بنابراین سندی که پیش‌نمایش می‌بیند دقیقاً همان سندی است که
+  // Save می‌شود — به‌ازای هر مدت‌زمان بازماندن دیالوگ و در هر مرورگر.
+  const runPrintJob = (
+    target: 'schedule' | 'requests',
+    pageCss: string,
+    jobGroup: 'nurse' | 'assistant' | null = null
+  ) => {
+    setPrintJobGroupFilter(jobGroup);
+    setPrintTarget(target);
+    setShowExportMenu(false);
+
+    // کمی صبر تا React نسخه‌ی چاپی را کامل رندر و مرورگر آن را paint کند
+    window.setTimeout(() => {
+      const containerId = target === 'schedule' ? 'print-schedule-sheet' : 'print-request-cards';
+      const container = document.getElementById(containerId);
+      const bodyHtml = container?.outerHTML;
+
+      // state چاپ صفحه‌ی اصلی بلافاصله آزاد می‌شود؛ خروجی از این لحظه به‌هیچ‌وجه
+      // به DOM یا state صفحه‌ی اصلی وابسته نیست و داخل سند مستقل iframe چاپ می‌شود
+      setPrintTarget(null);
+      setPrintJobGroupFilter(null);
+
+      if (!bodyHtml) return;
+      printHtmlSnapshot({
+        bodyHtml,
+        pageCss,
+        // کلاس‌های html/body و stylesheetها داخل printHtmlSnapshot کپی می‌شوند تا
+        // متغیرهای فونت (next/font) و قواعد Tailwind/styled-jsx/@media print دقیقاً
+        // مثل صفحه‌ی اصلی در سند چاپ اعمال شوند
+        htmlClassName: document.documentElement.className,
+        bodyClassName: document.body.className,
+        dir: 'rtl',
+        lang: 'fa',
+      });
+    }, 150);
+  };
+
   // چاپ جدول ماهانه شیفت (برای پرستاران یا کمک‌بهیاران) — A4 Landscape
   const handlePrintSchedule = (jobGroup: 'nurse' | 'assistant') => {
-    setPrintJobGroupFilter(jobGroup);
-    setPrintTarget('schedule');
-    setShowExportMenu(false);
-    // تزریق استایل موقت برای تنظیم A4 landscape
-    const styleEl = document.createElement('style');
-    styleEl.id = 'print-page-orientation';
-    styleEl.textContent = '@media print { @page { size: A4 landscape; margin: 4mm; } }';
-    document.head.appendChild(styleEl);
-    window.setTimeout(() => {
-      window.print();
-      // پاکسازی استایل موقت و بازگشت state
-      window.setTimeout(() => {
-        const el = document.getElementById('print-page-orientation');
-        if (el) el.remove();
-        setPrintTarget(null);
-        setPrintJobGroupFilter(null);
-      }, 500);
-    }, 150);
+    runPrintJob('schedule', '@page { size: A4 landscape; margin: 4mm; }', jobGroup);
   };
 
   // چاپ کارت‌های درخواست پرسنل — A4 Portrait
   const handlePrintRequests = () => {
-    setPrintTarget('requests');
-    setShowExportMenu(false);
-    // تزریق استایل موقت برای تنظیم A4 portrait
-    const styleEl = document.createElement('style');
-    styleEl.id = 'print-page-orientation';
-    styleEl.textContent = '@media print { @page { size: A4 portrait; margin: 10mm; } }';
-    document.head.appendChild(styleEl);
-    window.setTimeout(() => {
-      window.print();
-      // پاکسازی استایل موقت و بازگشت state
-      window.setTimeout(() => {
-        const el = document.getElementById('print-page-orientation');
-        if (el) el.remove();
-        setPrintTarget(null);
-      }, 500);
-    }, 150);
+    runPrintJob('requests', '@page { size: A4 portrait; margin: 10mm; }');
   };
 
   // Generate current calendar array — یکپارچه با تعطیلات انتخابی بخش و روز آغاز هفته (Requirement 4)
@@ -7057,15 +7077,6 @@ export default function Home() {
                       );
                     }
 
-                    const NAME_COLOR_GRADIENTS = [
-                      'from-indigo-600 via-purple-600 to-pink-600',
-                      'from-emerald-600 via-teal-600 to-cyan-600',
-                      'from-rose-600 via-red-600 to-orange-600',
-                      'from-amber-600 via-orange-600 to-yellow-600',
-                      'from-blue-600 via-indigo-600 to-violet-600',
-                      'from-fuchsia-600 via-pink-600 to-rose-600',
-                    ];
-
                     const activePerson = expandedCardPersonnelId
                       ? personnel.find(per => per.id === expandedCardPersonnelId)
                       : null;
@@ -7075,83 +7086,15 @@ export default function Home() {
 
                     return (
                       <div className="w-full">
-                        {/* کارت‌ها به‌صورت افقی با روی‌هم‌افتادگی زیاد در موبایل و دسکتاپ (با امکان اسکرول به چپ و راست) */}
-                        <div className="flex flex-nowrap overflow-x-auto py-10 px-6 sm:px-12 scrollbar-thin -space-x-28 sm:-space-x-36 md:-space-x-44 rtl:space-x-reverse snap-x justify-start items-start min-h-[360px] sm:min-h-[420px]">
-                          {filteredGroupedPIds.map((pid, idx) => {
-                            const p = personnel.find(per => per.id === pid);
-                            if (!p) return null;
-                            const pReqs = requests.filter(r => r.personnelId === pid);
-                            const hasEssential = pReqs.some(r => r.isEssential);
-
-                            const nameGradient = NAME_COLOR_GRADIENTS[idx % NAME_COLOR_GRADIENTS.length];
-                            const rotationDeg = (idx % 5 - 2) * 2.5; // -5deg, -2.5deg, 0deg, 2.5deg, 5deg
-
-                            // تاریخ و ساعت ثبت و ویرایش
-                            const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
-                            const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
-                            const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
-
-                            return (
-                              <div
-                                key={`fanned-card-${pid}`}
-                                onClick={() => setExpandedCardPersonnelId(pid)}
-                                style={{ transform: `rotate(${rotationDeg}deg)` }}
-                                className="group shrink-0 relative w-[280px] sm:w-[340px] md:w-[380px] rounded-[2rem] border-2 bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-indigo-400 shadow-xl hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden snap-center hover:-translate-y-10 hover:rotate-0 hover:z-40"
-                              >
-                                {/* سربرگ کارت */}
-                                <div className="p-5 border-b border-slate-100 bg-slate-50/80 flex items-start justify-between gap-3">
-                                  <div className="space-y-1">
-                                    <h5 className={`text-base sm:text-lg font-black bg-gradient-to-r ${nameGradient} bg-clip-text text-transparent drop-shadow-xs`}>
-                                      {p.firstName} {p.lastName}
-                                    </h5>
-                                    <div className="text-[11px] font-extrabold text-slate-500 flex items-center gap-2">
-                                      <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 font-bold border border-indigo-200/40">
-                                        {p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  <div className="flex flex-col items-end gap-1">
-                                    {hasEssential ? (
-                                      <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-rose-500 text-white shadow-xs">
-                                        ★ دارای اولویت
-                                      </span>
-                                    ) : (
-                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
-                                        عادی
-                                      </span>
-                                    )}
-                                    <span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
-                                      {toPersianDigits(pReqs.length)} درخواست
-                                    </span>
-                                  </div>
-                                </div>
-
-                                {/* پیش‌نمایش در حالت غیرفعال */}
-                                <div className="p-5 space-y-4">
-                                  <div className="space-y-2">
-                                    <p className="text-xs font-bold text-slate-600 leading-6 line-clamp-2">
-                                      {pReqs.map(r => formatRequestConversational(r)).join(' — ')}
-                                    </p>
-
-                                    {notesList.length > 0 && (
-                                      <div className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded-xl line-clamp-1">
-                                        📝 {notesList[0]}
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] font-bold text-slate-400">
-                                    <span>ثبت: {formatJalaliDateTime(earliestCreated)}</span>
-                                    <span className="text-indigo-600 font-black group-hover:translate-x-1 transition-transform">
-                                      باز کردن تمام صفحه ◄
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                        {/* چیدمان استک‌کارت سه‌بعدی — جابه‌جایی کارت‌ها با اسکرول روان و اسنپ‌اسکرول */}
+                        <RequestCardStack
+                          personnelIds={filteredGroupedPIds}
+                          personnel={personnel}
+                          requests={requests}
+                          formatRequest={formatRequestConversational}
+                          formatDate={formatJalaliDateTime}
+                          onOpenCard={setExpandedCardPersonnelId}
+                        />
 
                         {/* مودال تمام‌صفحه / وسط صفحه با تمام جزئیات کارت کلیک‌شده */}
                         {activePerson && (
