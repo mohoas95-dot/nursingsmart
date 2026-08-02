@@ -27,8 +27,7 @@ import { JALALI_MONTH_NAMES, WEEKDAYS } from '../../../lib/jalali';
  */
 const WEEKDAY_FULL = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
 
-/** نشانهٔ «مسئول شیفت» — مثلث طلایی گوشه (Ribbon) */
-const LEADER_MARK = '◤';
+
 
 /** پیشوند فارسی «مرخصی» که پیش از حروف شیفت می‌آید */
 const LEAVE_MARK = 'م';
@@ -303,9 +302,6 @@ export const PrintScheduleSheet: React.FC<PrintScheduleSheetProps> = ({
             )}
 
             <div className="ps-legend" aria-label="راهنمای علائم چاپی">
-              <span className="ps-legend-leader">
-                <span className="ps-legend-dot" aria-hidden="true">{LEADER_MARK}</span> : سرشیفت (گوشهٔ طلایی)
-              </span>
               <span className="ps-legend-holiday">
                 <span className="ps-legend-hatch" aria-hidden="true" /> تعطیل / جمعه
               </span>
