@@ -27,12 +27,29 @@
     visibility: hidden !important;
   }
 
-  #print-schedule-sheet,
-  #print-schedule-sheet * {
+  body.print-schedule-mode #print-schedule-sheet,
+  body.print-schedule-mode #print-schedule-sheet * {
+    visibility: visible !important;
+  }
+
+  body.print-requests-mode #print-requests-sheet,
+  body.print-requests-mode #print-requests-sheet * {
     visibility: visible !important;
   }
 
   #print-schedule-sheet {
+    position: absolute !important;
+    inset: 0 auto auto 0;
+    right: 0;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #print-requests-sheet {
     position: absolute !important;
     inset: 0 auto auto 0;
     right: 0;

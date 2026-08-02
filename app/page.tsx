@@ -111,6 +111,7 @@ import { AddPersonnelModal } from '../features/personnel/components/AddPersonnel
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
 import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
+import ShiftLeaderIcon from './components/ShiftLeaderIcon';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
@@ -3401,9 +3402,9 @@ export default function Home() {
 
   const handleSavePersonnel = async (e: React.FormEvent) => {
     e.preventDefault();
-    // کد پرسنلی اختیاری است؛ فقط نام، نام خانوادگی و (برای پرسنل جدید) کد ملی الزامی هستند.
+    // فقط نام، نام خانوادگی و (برای پرسنل جدید) کد ملی الزامی هستند.
     if (!formFirstName.trim() || !formLastName.trim() || !formNationalId.trim()) {
-      alert('لطفاً نام، نام خانوادگی و کد ملی فرد را وارد کنید. کد پرسنلی اختیاری است.');
+      alert('لطفاً نام، نام خانوادگی و کد ملی فرد را وارد کنید.');
       return;
     }
     if (isLoadingPersonnelNationalId) {
@@ -4867,6 +4868,9 @@ export default function Home() {
   const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
   const exportMenuRef = React.useRef<HTMLDivElement | null>(null);
 
+  // نوع سند در حال چاپ: schedule یا requests
+  const [printType, setPrintType] = useState<'schedule' | 'requests'>('schedule');
+
   React.useEffect(() => {
     if (!showExportMenu) return;
     const onClickOutside = (event: MouseEvent) => {
@@ -4878,9 +4882,44 @@ export default function Home() {
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, [showExportMenu]);
 
+  useEffect(() => {
+    const handleAfterPrint = () => {
+      document.body.classList.remove('print-schedule-mode', 'print-requests-mode');
+      document.getElementById('print-portrait-style')?.remove();
+      document.getElementById('print-landscape-style')?.remove();
+    };
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => {
+      window.removeEventListener('afterprint', handleAfterPrint);
+    };
+  }, []);
+
   const handlePrint = (jobGroup: JobGroup | null = null) => {
+    document.body.classList.add('print-schedule-mode');
+    document.body.classList.remove('print-requests-mode');
+    setPrintType('schedule');
     setPrintJobGroup(jobGroup);
-    // یک تیک صبر می‌کنیم تا برگه چاپ با گروه انتخابی رندر شود
+
+    // Add landscape style to override default portrait
+    const style = document.createElement('style');
+    style.id = 'print-landscape-style';
+    style.innerHTML = '@page { size: A4 landscape; margin: 4mm; }';
+    document.head.appendChild(style);
+
+    window.setTimeout(() => window.print(), 60);
+  };
+
+  const handlePrintRequests = () => {
+    document.body.classList.add('print-requests-mode');
+    document.body.classList.remove('print-schedule-mode');
+    setPrintType('requests');
+
+    // Add portrait style to override default landscape
+    const style = document.createElement('style');
+    style.id = 'print-portrait-style';
+    style.innerHTML = '@page { size: A4 portrait; margin: 10mm; }';
+    document.head.appendChild(style);
+
     window.setTimeout(() => window.print(), 60);
   };
 
@@ -6156,7 +6195,6 @@ export default function Home() {
                                   <div>
                                     <div className="font-extrabold text-slate-900 text-sm leading-tight">{p.firstName} {p.lastName}</div>
                                     <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-400 font-serif">
-                                      <span>{p.personalCode} •</span>
                                       <span className="font-bold text-slate-500">{report?.positionText}</span>
                                     </div>
                                   </div>
@@ -6227,29 +6265,57 @@ export default function Home() {
                                   (currentShift === 'MEN' && (isShiftLeaderM || isShiftLeaderE || isShiftLeaderN));
 
                                 let badgeClass = "bg-slate-100 text-slate-400 text-[10px]";
-                                let displayVal: string = currentShift;
+                                let displayVal: React.ReactNode = currentShift;
 
                                 if (currentShift === 'M') {
                                   badgeClass = "bg-blue-50 text-blue-700 font-bold border-blue-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'صبح 👑' : 'صبح';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      صبح <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'صبح';
                                 } else if (currentShift === 'E') {
                                   badgeClass = "bg-amber-50 text-amber-700 font-bold border-amber-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'عصر 👑' : 'عصر';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      عصر <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'عصر';
                                 } else if (currentShift === 'N') {
                                   badgeClass = "bg-purple-50 text-purple-700 font-bold border-purple-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'شب 👑' : 'شب';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      شب <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'شب';
                                 } else if (currentShift === 'ME') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-amber-50 text-slate-700 font-black border-indigo-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'ME 👑' : 'ME';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      ME <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'ME';
                                 } else if (currentShift === 'EN') {
                                   badgeClass = "bg-gradient-to-r from-amber-50 to-purple-50 text-slate-700 font-black border-violet-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'EN 👑' : 'EN';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      EN <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'EN';
                                 } else if (currentShift === 'MN') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-purple-50 text-indigo-700 font-black border-indigo-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'MN 👑' : 'MN';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      MN <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'MN';
                                 } else if (currentShift === 'MEN') {
                                   badgeClass = "bg-indigo-600 text-white font-black text-xs";
-                                  displayVal = isShiftLeaderCell ? 'MEN 👑' : 'MEN';
+                                  displayVal = isShiftLeaderCell ? (
+                                    <span className="inline-flex items-center gap-0.5">
+                                      MEN <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    </span>
+                                  ) : 'MEN';
                                 } else if (currentShift === 'OFF') {
                                   badgeClass = "bg-slate-50 text-slate-300 font-medium text-xs";
                                   displayVal = 'آف';
@@ -6316,6 +6382,7 @@ export default function Home() {
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-indigo-600 text-white flex items-center justify-center rounded font-bold text-[9px]">MEN</span> ۲۴ (MEN)</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center rounded font-bold">۱</span> شماره روزهای متوالی مرخصی</span>
                   <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-rose-100 border border-rose-300 w-3.5 h-3.5 inline-block rounded"></span> جمعه‌ها و تعطیلات رسمی</span>
+                  <span className="flex items-center gap-1.5"><span className="w-5 h-5 bg-slate-100 border border-slate-300 flex items-center justify-center rounded"><ShiftLeaderIcon className="w-3.5 h-3.5 text-slate-700" /></span> مسئول شیفت (سرشیفت)</span>
                 </div>
               </div>
 
@@ -6344,7 +6411,6 @@ export default function Home() {
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
                         <th className="px-4 py-3.5 text-xs font-black text-slate-500 text-center w-28">ترتیب چیدمان</th>
-                        <th className="px-6 py-3.5 text-xs font-black text-slate-500">کد پرسنلی</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نام و نام خانوادگی</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">گروه شغلی / سمت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نوع استخدام</th>
@@ -6390,7 +6456,6 @@ export default function Home() {
                               </button>
                             </div>
                           </td>
-                          <td className="px-6 py-3.5 font-mono text-xs font-bold text-slate-500">{p.personalCode}</td>
                           <td className="px-6 py-3.5 font-bold text-slate-800">{p.firstName} {p.lastName}</td>
                           <td className="px-6 py-3.5 text-slate-600">
                             {p.jobGroup === 'assistant' ? (
@@ -6991,15 +7056,17 @@ export default function Home() {
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs px-6 py-3.5 rounded-2xl shadow-lg shadow-emerald-900/40 transition-all cursor-pointer shrink-0 active:scale-95"
-                    id="btn-print-all-requests-pdf"
-                  >
-                    <Printer className="w-4 h-4" />
-                    <span>چاپ همه درخواست‌ها (PDF)</span>
-                  </button>
+                  {(role === 'headnurse' || role === 'admin') && (
+                    <button
+                      type="button"
+                      onClick={handlePrintRequests}
+                      className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs px-6 py-3.5 rounded-2xl shadow-lg shadow-emerald-900/40 transition-all cursor-pointer shrink-0 active:scale-95"
+                      id="btn-print-all-requests-pdf"
+                    >
+                      <Printer className="w-4 h-4" />
+                      <span>چاپ همه درخواست‌ها (PDF)</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* چیدمان افقی و روی‌هم کارت‌ها (Fanned Cards Layout) */}
@@ -7066,8 +7133,6 @@ export default function Home() {
                                       {p.firstName} {p.lastName}
                                     </h5>
                                     <div className="text-[11px] font-extrabold text-slate-500 flex items-center gap-2">
-                                      <span>کد پرسنلی: <span className="font-mono">{toPersianDigits(p.personalCode)}</span></span>
-                                      <span>•</span>
                                       <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 font-bold border border-indigo-200/40">
                                         {p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
                                       </span>
@@ -7133,8 +7198,6 @@ export default function Home() {
                                     {activePerson.firstName} {activePerson.lastName}
                                   </h3>
                                   <p className="text-xs font-bold text-slate-300 flex items-center gap-2">
-                                    <span>کد پرسنلی: <span className="font-mono text-white">{toPersianDigits(activePerson.personalCode)}</span></span>
-                                    <span>•</span>
                                     <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-black border border-indigo-400/30">
                                       {activePerson.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'}
                                     </span>
@@ -7302,7 +7365,7 @@ export default function Home() {
                 </div>
 
                 {/* ====== نسخهٔ چاپی PDF جهت خروجی چاپ عامیانه ====== */}
-                <div className="hidden print:block space-y-6 text-slate-900 p-6 bg-white dir-rtl" dir="rtl">
+                <div className="hidden print:block space-y-6 text-slate-900 p-6 bg-white dir-rtl" dir="rtl" id="print-requests-sheet">
                   <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
                     <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
                     <p className="text-xs font-bold text-slate-600">
@@ -7330,7 +7393,6 @@ export default function Home() {
                               <h3 className="text-base font-black text-slate-900">
                                 {p.firstName} {p.lastName} <span className="text-xs font-bold text-slate-600">({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})</span>
                               </h3>
-                              <p className="text-xs font-bold text-slate-500">کد پرسنلی: {toPersianDigits(p.personalCode)}</p>
                             </div>
                             <div>
                               {hasEssential ? (
