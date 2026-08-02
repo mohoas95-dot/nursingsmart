@@ -111,6 +111,7 @@ import { AddPersonnelModal } from '../features/personnel/components/AddPersonnel
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
 import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
+import { printHtmlSnapshot } from '../lib/print/print-snapshot';
 
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
@@ -4883,17 +4884,19 @@ export default function Home() {
 
   // اجرای امن یک کار چاپ (جدول شیفت یا کارت‌های درخواست)
   //
-  // علت اینکه قبلاً خروجی «Save as PDF» صفحه‌ای کاملاً خالی و سفید بود:
-  // پاکسازی state و استایل موقت با یک setTimeout ثابت ۵۰۰ میلی‌ثانیه‌ای انجام می‌شد.
-  // دیالوگ چاپ مرورگر اجرای جاوااسکریپت صفحه را متوقف نمی‌کند؛ بنابراین تایمر
-  // وسطِ بازبودن دیالوگ اجرا می‌شد و با setPrintTarget(null) کانتینر چاپی دوباره
-  // کلاس hidden (display:none) می‌گرفت. پیش‌نمایش در همان لحظه‌ی window.print()
-  // رندر شده بود و درست دیده می‌شد، اما مرورگر هنگام فشردن دکمه‌ی Save دوباره از
-  // DOM زنده رندر می‌گیرد و چون محتوای چاپی دیگر در DOM نمایش داده نمی‌شد،
-  // PDF نهایی خالی و سفید ذخیره می‌شد.
+  // علت ریشه‌ای باگ «PDF ذخیره‌شده خالی و سفید»:
+  // نسخه‌های قبلی مستقیماً از DOM زنده‌ی صفحه‌ی اصلی چاپ می‌گرفتند و پس از
+  // window.print() باید state چاپ را پاکسازی می‌کردند (با تایمر یا afterprint).
+  // دیالوگ «Save as PDF» مرورگر اجرای جاوااسکریپت صفحه را متوقف نمی‌کند و پیش‌نمایش
+  // یک بار رندر می‌شود، اما رندر PDF نهایی ممکن است دوباره و از روی DOM همان لحظه
+  // انجام شود؛ هر تغییری در این فاصله (پاکسازی state، ری‌رندر React، intervalهای صفحه)
+  // کانتینر چاپی را display:none می‌کند و خروجی نهایی صفحه‌ای کاملاً خالی می‌شود.
   //
-  // راه‌حل: پاکسازی فقط پس از رویداد afterprint انجام می‌شود (یعنی پس از بسته‌شدن
-  // کامل دیالوگ — چه با ذخیره چه با لغو) تا DOM در تمام مدت چاپ دست‌نخورده بماند.
+  // راه‌حل ریشه‌ای: چاپ اصلاً از صفحه‌ی اصلی انجام نمی‌شود. ابتدا نسخه‌ی چاپی در
+  // DOM رندر می‌شود، سپس از کانتینر یک «اسنپ‌شات ایستای HTML» به‌همراه تمام
+  // stylesheetها گرفته و داخل یک iframe مخفیِ بدون جاوااسکریپت چاپ می‌شود. آن سند
+  // هرگز تغییر نمی‌کند؛ بنابراین سندی که پیش‌نمایش می‌بیند دقیقاً همان سندی است که
+  // Save می‌شود — به‌ازای هر مدت‌زمان بازماندن دیالوگ و در هر مرورگر.
   const runPrintJob = (
     target: 'schedule' | 'requests',
     pageCss: string,
@@ -4903,55 +4906,40 @@ export default function Home() {
     setPrintTarget(target);
     setShowExportMenu(false);
 
-    // تزریق استایل موقت برای تنظیم اندازه/جهت صفحه (در runPrintJob قبلی idثابت بود؛
-    // حالا ارجاع مستقیم به عنصر نگه داشته می‌شود تا در کلیک‌های پیاپی عنصر اشتباهی حذف نشود)
-    const styleEl = document.createElement('style');
-    styleEl.textContent = pageCss;
-    document.head.appendChild(styleEl);
+    // کمی صبر تا React نسخه‌ی چاپی را کامل رندر و مرورگر آن را paint کند
+    window.setTimeout(() => {
+      const containerId = target === 'schedule' ? 'print-schedule-sheet' : 'print-request-cards';
+      const container = document.getElementById(containerId);
+      const bodyHtml = container?.outerHTML;
 
-    let cleanedUp = false;
-    let failsafeTimer = 0;
-    const printMedia = window.matchMedia ? window.matchMedia('print') : null;
-    const onPrintMediaChange = (event: MediaQueryListEvent) => {
-      // بازگشت به رسانهٔ screen یعنی رندر چاپ تمام شده است
-      if (!event.matches) cleanup();
-    };
-    const cleanup = () => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      window.removeEventListener('afterprint', cleanup);
-      if (printMedia) printMedia.removeEventListener('change', onPrintMediaChange);
-      if (failsafeTimer) window.clearTimeout(failsafeTimer);
-      styleEl.remove();
+      // state چاپ صفحه‌ی اصلی بلافاصله آزاد می‌شود؛ خروجی از این لحظه به‌هیچ‌وجه
+      // به DOM یا state صفحه‌ی اصلی وابسته نیست و داخل سند مستقل iframe چاپ می‌شود
       setPrintTarget(null);
       setPrintJobGroupFilter(null);
-    };
 
-    // afterprint پس از بسته‌شدن دیالوگ چاپ (ذخیره یا لغو) شلیک می‌شود
-    window.addEventListener('afterprint', cleanup);
-    // پوشش مرورگرهایی که afterprint را پایدار شلیک نمی‌کنند (مانند برخی نسخه‌ها/پلتفرم‌ها)
-    if (printMedia) printMedia.addEventListener('change', onPrintMediaChange);
-    // آخرین پوشش امن: اگر هیچ‌کدام از رویدادها هرگز شلیک نشدند، رابط کاربر در وضعیت چاپ گیر نکند
-    failsafeTimer = window.setTimeout(cleanup, 5 * 60 * 1000);
-
-    window.setTimeout(() => {
-      try {
-        window.print();
-      } catch {
-        // اگر فراخوانی چاپ ناموفق بود، حداقل رابط کاربر را به حالت عادی برگردان
-        cleanup();
-      }
+      if (!bodyHtml) return;
+      printHtmlSnapshot({
+        bodyHtml,
+        pageCss,
+        // کلاس‌های html/body و stylesheetها داخل printHtmlSnapshot کپی می‌شوند تا
+        // متغیرهای فونت (next/font) و قواعد Tailwind/styled-jsx/@media print دقیقاً
+        // مثل صفحه‌ی اصلی در سند چاپ اعمال شوند
+        htmlClassName: document.documentElement.className,
+        bodyClassName: document.body.className,
+        dir: 'rtl',
+        lang: 'fa',
+      });
     }, 150);
   };
 
   // چاپ جدول ماهانه شیفت (برای پرستاران یا کمک‌بهیاران) — A4 Landscape
   const handlePrintSchedule = (jobGroup: 'nurse' | 'assistant') => {
-    runPrintJob('schedule', '@media print { @page { size: A4 landscape; margin: 4mm; } }', jobGroup);
+    runPrintJob('schedule', '@page { size: A4 landscape; margin: 4mm; }', jobGroup);
   };
 
   // چاپ کارت‌های درخواست پرسنل — A4 Portrait
   const handlePrintRequests = () => {
-    runPrintJob('requests', '@media print { @page { size: A4 portrait; margin: 10mm; } }');
+    runPrintJob('requests', '@page { size: A4 portrait; margin: 10mm; }');
   };
 
   // Generate current calendar array — یکپارچه با تعطیلات انتخابی بخش و روز آغاز هفته (Requirement 4)
