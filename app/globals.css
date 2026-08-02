@@ -351,3 +351,38 @@
     animation: none !important;
   }
 }
+
+/* ===== Ribbon: گوشهٔ تا شده (سرشیفت) ===== */
+.shift-ribbon {
+  position: relative;
+  overflow: hidden;
+}
+.shift-ribbon::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 10px 10px 0;
+  border-color: transparent #d4a017 transparent transparent;
+  filter: drop-shadow(-0.5px 0.5px 1px rgba(0,0,0,0.18));
+  pointer-events: none;
+  z-index: 2;
+}
+/* Triangle fold shadow line for a "folded" look */
+.shift-ribbon::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 10px 10px 0;
+  border-color: transparent rgba(0,0,0,0.10) transparent transparent;
+  transform: translate(0.5px, 0.5px);
+  pointer-events: none;
+  z-index: 1;
+}
