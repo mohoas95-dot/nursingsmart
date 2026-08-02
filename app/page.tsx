@@ -6230,25 +6230,25 @@ export default function Home() {
 
                                 if (currentShift === 'M') {
                                   badgeClass = "bg-blue-50 text-blue-700 font-bold border-blue-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'صبح 👑' : 'صبح';
+                                  displayVal = 'صبح';
                                 } else if (currentShift === 'E') {
                                   badgeClass = "bg-amber-50 text-amber-700 font-bold border-amber-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'عصر 👑' : 'عصر';
+                                  displayVal = 'عصر';
                                 } else if (currentShift === 'N') {
                                   badgeClass = "bg-purple-50 text-purple-700 font-bold border-purple-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'شب 👑' : 'شب';
+                                  displayVal = 'شب';
                                 } else if (currentShift === 'ME') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-amber-50 text-slate-700 font-black border-indigo-200 border text-xs";
                                   displayVal = 'ME';
                                 } else if (currentShift === 'EN') {
                                   badgeClass = "bg-gradient-to-r from-amber-50 to-purple-50 text-slate-700 font-black border-violet-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'EN 👑' : 'EN';
+                                  displayVal = 'EN';
                                 } else if (currentShift === 'MN') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-purple-50 text-indigo-700 font-black border-indigo-200 border text-xs";
-                                  displayVal = isShiftLeaderCell ? 'MN 👑' : 'MN';
+                                  displayVal = 'MN';
                                 } else if (currentShift === 'MEN') {
                                   badgeClass = "bg-indigo-600 text-white font-black text-xs";
-                                  displayVal = isShiftLeaderCell ? 'MEN 👑' : 'MEN';
+                                  displayVal = 'MEN';
                                 } else if (currentShift === 'OFF') {
                                   badgeClass = "bg-slate-50 text-slate-300 font-medium text-xs";
                                   displayVal = 'آف';
@@ -6346,7 +6346,6 @@ export default function Home() {
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
                         <th className="px-4 py-3.5 text-xs font-black text-slate-500 text-center w-28">ترتیب چیدمان</th>
-                        <th className="px-6 py-3.5 text-xs font-black text-slate-500">کد پرسنلی</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نام و نام خانوادگی</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">گروه شغلی / سمت</th>
                         <th className="px-6 py-3.5 text-xs font-black text-slate-500">نوع استخدام</th>
@@ -6994,7 +6993,7 @@ export default function Home() {
 
                   {(role === 'headnurse' || role === 'admin') && <button
                     type="button"
-                    onClick={() => { document.documentElement.classList.add('printing-requests'); window.print(); window.setTimeout(() => document.documentElement.classList.remove('printing-requests'), 1000); }}
+                    onClick={() => { document.documentElement.classList.add('printing-requests'); const cleanup = () => { document.documentElement.classList.remove('printing-requests'); window.removeEventListener('afterprint', cleanup); }; window.addEventListener('afterprint', cleanup); window.print(); }}
                     className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs px-6 py-3.5 rounded-2xl shadow-lg shadow-emerald-900/40 transition-all cursor-pointer shrink-0 active:scale-95"
                     id="btn-print-all-requests-pdf"
                   >
