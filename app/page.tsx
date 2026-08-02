@@ -6270,50 +6270,50 @@ export default function Home() {
                                 if (currentShift === 'M') {
                                   badgeClass = "bg-blue-50 text-blue-700 font-bold border-blue-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      صبح <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[10px] leading-none whitespace-nowrap">
+                                      صبح<ShiftLeaderIcon style={{ width: '10px', height: '10px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'صبح';
                                 } else if (currentShift === 'E') {
                                   badgeClass = "bg-amber-50 text-amber-700 font-bold border-amber-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      عصر <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[10px] leading-none whitespace-nowrap">
+                                      عصر<ShiftLeaderIcon style={{ width: '10px', height: '10px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'عصر';
                                 } else if (currentShift === 'N') {
                                   badgeClass = "bg-purple-50 text-purple-700 font-bold border-purple-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      شب <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[10px] leading-none whitespace-nowrap">
+                                      شب<ShiftLeaderIcon style={{ width: '10px', height: '10px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'شب';
                                 } else if (currentShift === 'ME') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-amber-50 text-slate-700 font-black border-indigo-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      ME <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[9px] leading-none whitespace-nowrap">
+                                      ME<ShiftLeaderIcon style={{ width: '9px', height: '9px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'ME';
                                 } else if (currentShift === 'EN') {
                                   badgeClass = "bg-gradient-to-r from-amber-50 to-purple-50 text-slate-700 font-black border-violet-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      EN <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[9px] leading-none whitespace-nowrap">
+                                      EN<ShiftLeaderIcon style={{ width: '9px', height: '9px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'EN';
                                 } else if (currentShift === 'MN') {
                                   badgeClass = "bg-gradient-to-r from-blue-50 to-purple-50 text-indigo-700 font-black border-indigo-200 border text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      MN <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[9px] leading-none whitespace-nowrap">
+                                      MN<ShiftLeaderIcon style={{ width: '9px', height: '9px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'MN';
                                 } else if (currentShift === 'MEN') {
                                   badgeClass = "bg-indigo-600 text-white font-black text-xs";
                                   displayVal = isShiftLeaderCell ? (
-                                    <span className="inline-flex items-center gap-0.5">
-                                      MEN <ShiftLeaderIcon className="w-3.5 h-3.5" />
+                                    <span className="inline-block text-[9px] leading-none whitespace-nowrap">
+                                      MEN<ShiftLeaderIcon style={{ width: '9px', height: '9px', marginRight: '1px' }} />
                                     </span>
                                   ) : 'MEN';
                                 } else if (currentShift === 'OFF') {
@@ -7364,86 +7364,6 @@ export default function Home() {
                   })()}
                 </div>
 
-                {/* ====== نسخهٔ چاپی PDF جهت خروجی چاپ عامیانه ====== */}
-                <div className="hidden print:block space-y-6 text-slate-900 p-6 bg-white dir-rtl" dir="rtl" id="print-requests-sheet">
-                  <div className="border-b-2 border-slate-800 pb-4 text-center space-y-1">
-                    <h2 className="text-xl font-black">گزارش کامل درخواست‌های پرسنل بخش</h2>
-                    <p className="text-xs font-bold text-slate-600">
-                      برنامه‌ریزی {JALALI_MONTH_NAMES[currentMonth - 1]} سال {toPersianDigits(currentYear)} — تمامی درخواست‌های ثبت‌شده بدون ابهام
-                    </p>
-                  </div>
-
-                  <div className="space-y-6">
-                    {Array.from(new Set(requests.map(r => r.personnelId))).map(pid => {
-                      const p = personnel.find(per => per.id === pid);
-                      if (!p) return null;
-                      const pReqs = requests.filter(r => r.personnelId === pid);
-                      const hasEssential = pReqs.some(r => r.isEssential);
-                      const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
-
-                      const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
-                      const updatedAtDates = pReqs.map(r => r.updatedAt).filter(Boolean);
-                      const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
-                      const latestUpdated = updatedAtDates.length > 0 ? updatedAtDates.sort().reverse()[0] : undefined;
-
-                      return (
-                        <div key={`print-card-${pid}`} className="border-2 border-slate-800 rounded-2xl p-5 space-y-3 break-inside-avoid bg-slate-50/50">
-                          <div className="flex items-center justify-between border-b border-slate-300 pb-2">
-                            <div>
-                              <h3 className="text-base font-black text-slate-900">
-                                {p.firstName} {p.lastName} <span className="text-xs font-bold text-slate-600">({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})</span>
-                              </h3>
-                            </div>
-                            <div>
-                              {hasEssential ? (
-                                <span className="border-2 border-rose-600 text-rose-700 bg-rose-50 font-black text-xs px-3 py-1 rounded-full">
-                                  ★ دارای اولویت بالا
-                                </span>
-                              ) : (
-                                <span className="border border-slate-300 text-slate-700 font-bold text-xs px-3 py-1 rounded-full">
-                                  عادی
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            <h4 className="text-xs font-black text-slate-800">📌 شرح دقیق درخواست‌ها:</h4>
-                            <ul className="list-disc list-inside space-y-1.5 text-xs font-bold leading-6 text-slate-800">
-                              {pReqs.map(r => (
-                                <li key={`print-req-${r.id}`}>
-                                  {formatRequestConversational(r)}
-                                  {r.requestType === 'OFF' && (
-                                    <span className="mr-1 text-[10px] font-black text-slate-600">
-                                      ({r.offHardness === 'hard' ? 'نوع: آف قطعی 🔴' : 'نوع: آف ترجیحی 🟡'})
-                                    </span>
-                                  )}
-                                  {r.isEssential && (
-                                    <span className="mr-1 text-[10px] font-black text-rose-700">
-                                      [اولویت بالا ★]
-                                    </span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-
-                          {notesList.length > 0 && (
-                            <div className="border border-amber-300 bg-amber-50/80 p-3 rounded-xl text-xs font-bold text-amber-900">
-                              <b>📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</b>
-                              <p className="mt-1 leading-6">{notesList.join(' — ')}</p>
-                            </div>
-                          )}
-
-                          <div className="text-[10px] font-bold text-slate-500 border-t border-slate-200 pt-2 flex flex-wrap items-center justify-between gap-2">
-                            <span>📅 تاریخ و ساعت ثبت: {formatJalaliDateTime(earliestCreated)}</span>
-                            <span>✏️ تاریخ و ساعت آخرین ویرایش: {formatJalaliDateTime(latestUpdated || earliestCreated)}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
 
             </div>
@@ -8345,6 +8265,107 @@ export default function Home() {
               dutyHours={effectiveDutyHours}
               jobGroupFilter={printJobGroup}
             />
+          </div>
+
+          {/* ====== نسخهٔ چاپی PDF جهت خروجی چاپ عامیانه ====== */}
+          <div className="hidden print:block text-slate-900 p-8 bg-white dir-rtl" dir="rtl" id="print-requests-sheet">
+            <div className="border-b-4 border-double border-slate-900 pb-4 text-center space-y-2 mb-6">
+              <h2 className="text-2xl font-black tracking-tight text-slate-900">کارنامه و گزارش تفصیلی درخواست‌های پرسنل</h2>
+              <p className="text-sm font-extrabold text-slate-700">
+                بخش: {departments.find(d => d.id === selectedDepartmentId)?.name || 'سپهر'} — برنامه‌ریزی ماه {JALALI_MONTH_NAMES[currentMonth - 1]} سال {toPersianDigits(currentYear)}
+              </p>
+              <div className="text-[10px] font-bold text-slate-500">
+                تهیه شده در سامانه هوشمند برنامه‌ریزی شیفت پرستاری
+              </div>
+            </div>
+
+            {requests.length === 0 ? (
+              <div className="text-center py-16 border-2 border-dashed border-slate-300 rounded-3xl text-slate-400 font-black text-sm">
+                هیچ درخواستی برای این ماه ثبت نشده است.
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {Array.from(new Set(requests.map(r => r.personnelId))).map((pid, idx) => {
+                  const p = personnel.find(per => per.id === pid);
+                  if (!p) return null;
+                  const pReqs = requests.filter(r => r.personnelId === pid);
+                  const hasEssential = pReqs.some(r => r.isEssential);
+                  const notesList = [...new Set(pReqs.map(r => r.note?.trim()).filter(Boolean))];
+
+                  const createdAtDates = pReqs.map(r => r.createdAt).filter(Boolean);
+                  const updatedAtDates = pReqs.map(r => r.updatedAt).filter(Boolean);
+                  const earliestCreated = createdAtDates.length > 0 ? createdAtDates.sort()[0] : undefined;
+                  const latestUpdated = updatedAtDates.length > 0 ? updatedAtDates.sort().reverse()[0] : undefined;
+
+                  return (
+                    <div key={`print-card-${pid}`} className="border border-slate-400 rounded-xl p-5 space-y-4 break-inside-avoid bg-slate-50/20 shadow-xs">
+                      {/* هدر کارت پرسنل */}
+                      <div className="flex items-center justify-between border-b border-slate-300 pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-slate-500">#{toPersianDigits(idx + 1)}</span>
+                          <h3 className="text-base font-black text-slate-900">
+                            {p.firstName} {p.lastName}
+                            <span className="text-xs font-bold text-slate-600 mr-2">
+                              ({p.jobGroup === 'nurse' ? 'پرستار' : 'کمک‌بهیار'})
+                            </span>
+                          </h3>
+                        </div>
+                        <div>
+                          {hasEssential ? (
+                            <span className="border-2 border-rose-600 text-rose-700 bg-rose-50 font-black text-xs px-3 py-1 rounded-full">
+                              ★ دارای اولویت بالا
+                            </span>
+                          ) : (
+                            <span className="border border-slate-400 text-slate-700 font-bold text-xs px-3 py-1 rounded-full">
+                              عادی
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* لیست درخواست‌ها */}
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-black text-slate-800">📌 لیست دقیق درخواست‌ها:</h4>
+                        <ul className="space-y-2 pr-2 text-xs font-bold text-slate-800 leading-relaxed">
+                          {pReqs.map((r, rIdx) => (
+                            <li key={`print-req-${r.id}`} className="flex items-start gap-1.5 border-b border-dashed border-slate-200/80 pb-1.5 last:border-0 last:pb-0">
+                              <span className="text-slate-400 font-mono">{toPersianDigits(rIdx + 1)}.</span>
+                              <div className="flex-1">
+                                {formatRequestConversational(r)}
+                                {r.requestType === 'OFF' && (
+                                  <span className="mr-1.5 text-[10px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                    {r.offHardness === 'hard' ? 'آف قطعی 🔴' : 'آف ترجیحی 🟡'}
+                                  </span>
+                                )}
+                                {r.isEssential && (
+                                  <span className="mr-1.5 text-[10px] font-black text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100">
+                                    اولویت بالا ★
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* توضیحات تکمیلی */}
+                      {notesList.length > 0 && (
+                        <div className="border border-amber-300 bg-amber-50/60 p-3 rounded-lg text-xs font-bold text-amber-900 leading-relaxed">
+                          <b>📝 توضیحات اضافی ثبت‌شده توسط پرسنل:</b>
+                          <p className="mt-1">{notesList.join(' — ')}</p>
+                        </div>
+                      )}
+
+                      {/* پانویس کارت */}
+                      <div className="text-[10px] font-bold text-slate-500 border-t border-slate-200 pt-2 flex flex-wrap items-center justify-between gap-2">
+                        <span>📅 ثبت اولیه: {formatJalaliDateTime(earliestCreated)}</span>
+                        <span>✏️ آخرین ویرایش: {formatJalaliDateTime(latestUpdated || earliestCreated)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
         </div>

@@ -2,34 +2,43 @@ import React from 'react';
 
 interface ShiftLeaderIconProps {
   className?: string;
+  style?: React.CSSProperties;
 }
 
-export default function ShiftLeaderIcon({ className = "w-4 h-4" }: ShiftLeaderIconProps) {
+export default function ShiftLeaderIcon({ className = "", style }: ShiftLeaderIconProps) {
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className={`${className} inline-block align-text-bottom`}
-      style={{ minWidth: '1em', minHeight: '1em' }}
+      className={className}
+      style={{
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        width: '11px',
+        height: '11px',
+        marginRight: '2px',
+        flexShrink: 0,
+        ...style
+      }}
     >
       {/* Head */}
-      <circle cx="12" cy="5.5" r="4" fill="currentColor" />
+      <circle cx="12" cy="5.5" r="4.2" fill="currentColor" />
 
-      {/* Left Jacket (Viewer's Left, Character's Right) */}
+      {/* Left Jacket */}
       <path
         d="M 4 20 C 4 14.5 7 12 10.5 12 L 12 16 L 12 20 Z"
         fill="currentColor"
       />
 
-      {/* Right Jacket (Viewer's Right, Character's Left) */}
+      {/* Right Jacket */}
       <path
         d="M 20 20 C 20 14.5 17 12 13.5 12 L 12 16 L 12 20 Z"
         fill="currentColor"
       />
 
       {/* Tie Knot */}
-      <circle cx="12" cy="11.5" r="0.7" fill="currentColor" />
+      <circle cx="12" cy="11.5" r="0.8" fill="currentColor" />
 
       {/* Tie hanging */}
       <path
