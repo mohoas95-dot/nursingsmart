@@ -56,8 +56,7 @@ import {
   SHIFT_HOURS,
   getLeaveHours,
   getSeniorityHours,
-  calculateAutoDutyHours,
-  solveWithPriority
+  calculateAutoDutyHours
 } from '../lib/solver';
 import { aggregateWarnings, filterActiveWarnings } from '../lib/alertAggregator';
 import { captureScrollSnapshot, restoreScrollSnapshot } from '../lib/scroll-restore';
@@ -78,6 +77,8 @@ import {
   type ScoredSchedule,
 } from '../lib/scoring';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
+import { overlayLockedInheritance } from '../domain/scheduling/roster-inheritance';
+import { filterWarningsForLockedPersonnel } from '../domain/scheduling/warning-severity';
 import {
   DEFAULT_CUSTOM_HOLIDAY_TITLE,
   clearHolidayOverride,
@@ -105,8 +106,8 @@ import {
   type SystemEventLog,
 } from '../domain/logging/system-events';
 import { buildSolverRunEvents } from '../domain/logging/solver-report';
-import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
-import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
+import { applyManualShiftChangeFacade, mergeScenarioProposalFacade } from '../features/scheduling/facades/shift-write-facade';
+import type { SchedulePersistence } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
 import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
@@ -740,7 +741,19 @@ export default function Home() {
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
     const rawWarns = rawScenario?.schedule?.warnings || rawScenario?.warnings || [];
     const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
-    const activeWarnings = filterActiveWarnings(filteredGroup, dismissedWarnings);
+    // ── معماری برنامهٔ مبنا ─────────────────────────────────────────────────
+    // ۱) ردیف پرسنل قفل‌شده همیشه به‌صورت زنده از برنامهٔ مبنا ارث‌بری می‌شود؛
+    //    هیچ نسخهٔ مستقلی از دادهٔ قفل‌شده داخل سناریو معتبر نیست.
+    // ۲) هشدارهای سطح B/C پرسنل قفل‌شده برای سناریو ثبت نمی‌شود (تأیید مدیریتی)
+    //    و در امتیاز همان سناریو نیز اثری ندارد؛ هشدارهای بحرانی هرگز مخفی
+    //    نمی‌مانند و همیشه در امتیاز لحاظ می‌شوند.
+    const severityFiltered = filterWarningsForLockedPersonnel(filteredGroup, personnel, lockedRows);
+    const activeWarnings = filterActiveWarnings(severityFiltered, dismissedWarnings);
+    const inheritedAssignments = overlayLockedInheritance(
+      rawScenario?.schedule?.assignments || {},
+      schedule?.assignments || null,
+      lockedRows
+    );
 
     if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
       return {
@@ -749,6 +762,7 @@ export default function Home() {
         relevantWarningCount: activeWarnings.length,
         schedule: {
           ...(rawScenario.schedule || {}),
+          assignments: inheritedAssignments,
           warnings: activeWarnings,
         },
       } as ScoredSchedule;
@@ -758,6 +772,7 @@ export default function Home() {
       type: rawScenario?.type || (index === 0 ? 'REQUESTS' : index === 1 ? 'FAIRNESS' : 'MIXED'),
       schedule: {
         ...(rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
+        assignments: inheritedAssignments,
         warnings: activeWarnings,
       },
       personnelList: personnel,
@@ -770,7 +785,7 @@ export default function Home() {
       monthlyDutyHours,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
+  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, lockedRows, monthlyDutyHours, personnel, requests, schedule, settings]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
@@ -832,22 +847,15 @@ export default function Home() {
     : null;
 
   const displayedSchedule = React.useMemo(() => {
+    // ── ارث‌بری قفل‌ها از برنامهٔ مبنا ───────────────────────────────────────
+    // نمای هر سناریو = تخصیص‌های پیشنهادی سناریو + ردیف قفل‌شده که **زنده** از
+    // برنامهٔ مبنا خوانده می‌شود. هیچ سناریویی نمی‌تواند شیفت پرسنل قفل‌شده را
+    // تغییر دهد و این داده هیچ‌وقت به‌صورت نسخهٔ مستقل مصرف نمی‌شود.
     const preserveLockedRows = (candidate: MonthlySchedule | null): MonthlySchedule | null => {
       if (!candidate) return candidate;
-      if (!schedule || lockedRows.length === 0) return candidate;
-
-      const nextAssignments: Record<string, Record<number, ShiftType>> = {
-        ...candidate.assignments,
-      };
-      for (const personnelId of lockedRows) {
-        if (schedule.assignments[personnelId]) {
-          nextAssignments[personnelId] = { ...schedule.assignments[personnelId] };
-        }
-      }
-
       return {
         ...candidate,
-        assignments: nextAssignments,
+        assignments: overlayLockedInheritance(candidate.assignments, schedule?.assignments || null, lockedRows),
       };
     };
 
@@ -2280,7 +2288,15 @@ export default function Home() {
       currentRequests
     );
 
-    const freshWarnings = verification.warnings;
+    // ====== گام ۲'. قرارداد سطح‌بندی هشدار برای پرسنل قفل‌شده ======
+    // قفل کردن یک پرسنل = تأیید مدیریتی تصمیم‌های غیربحرانی او: هشدارهای سطح
+    // B/C متعلق به پرسنل قفل‌شده دیگر در برنامهٔ مبنا ثبت نمی‌شوند، اما
+    // هشدارهای بحرانی (سطح A) هرگز مخفی نمی‌مانند.
+    const freshWarnings = filterWarningsForLockedPersonnel(
+      verification.warnings,
+      currentPersonnel,
+      currentLocked
+    );
     const currentWarnings = schedule.warnings || [];
 
     const freshKey = [...freshWarnings].sort().join('|||');
@@ -2952,8 +2968,14 @@ export default function Home() {
   const reevaluateScenarioForGroup = React.useCallback((scenario: ScoredSchedule, group: JobGroup, scheduleOverride?: MonthlySchedule): ScoredSchedule => {
     const baseSchedule = scheduleOverride || scenario.schedule;
     const currentDismissed = dismissedWarningsRef.current || [];
+    // قرارداد سطح‌بندی در امتیازدهی: هشدار B/C پرسنل قفل‌شده در امتیاز هیچ
+    // سناریویی اثر ندارد؛ هشدارهای بحرانی (A) همیشه در امتیاز لحاظ می‌شوند.
     const activeWarnings = filterActiveWarnings(
-      filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group),
+      filterWarningsForLockedPersonnel(
+        filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group),
+        personnelRef.current,
+        lockedRowsRef.current
+      ),
       currentDismissed
     );
     const normalizedSchedule: MonthlySchedule = {
@@ -2971,6 +2993,73 @@ export default function Home() {
       month: currentMonth,
       customHolidays: holidaysRef.current,
       firstDayOfWeekIndex: firstDayRef.current === -1 ? undefined : firstDayRef.current,
+      monthlyDutyHours: monthlyDutyHoursRef.current,
+      targetJobGroup: group,
+    });
+  }, [currentMonth, currentYear]);
+
+  /**
+   * امتیازدهی رسمی یک سناریو پس از «محاسبهٔ مجدد Constraintها» — قرارداد بخش ۷.
+   *
+   * برخلاف reevaluateScenarioForGroup (که روی هشدارهای ذخیره‌شده امتیازدهی
+   * می‌کند)، این تابع ابتدا وضعیت نهایی سناریو را با همان verifier موجود سیستم
+   * دوباره می‌سنجد (بدون هیچ تغییری در قوانین)، ردیف‌های قفل‌شده را زنده از
+   * برنامهٔ مبنا ارث‌بری می‌کند، قرارداد سطح‌بندی پرسنل قفل‌شده را اعمال می‌کند
+   * و سپس امتیاز نهایی را بر مبنای دقیقاً همان وضعیت تازه محاسبه می‌کند.
+   */
+  const reverifyScenarioForGroup = React.useCallback((scenario: ScoredSchedule, group: JobGroup): ScoredSchedule => {
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentSettings = normalizeSettings(settingsRef.current);
+    const currentHolidays = holidaysRef.current;
+    const currentFirstDay = firstDayRef.current === -1 ? undefined : firstDayRef.current;
+    const currentLocked = lockedRowsRef.current;
+
+    // ۱) پرسنل قفل‌شده همیشه زنده از برنامهٔ مبنا ارث‌بری می‌کند.
+    const inheritedAssignments = overlayLockedInheritance(
+      scenario.schedule.assignments,
+      scheduleRef.current?.assignments || null,
+      currentLocked
+    );
+
+    // ۲) محاسبهٔ مجدد Constraintها (قوانین موجود و بدون تغییر).
+    const verification = verifyCoverageAndLeaders(
+      currentYear,
+      currentMonth,
+      currentPersonnel,
+      inheritedAssignments,
+      currentSettings,
+      currentHolidays,
+      currentFirstDay,
+      currentRequests
+    );
+
+    // ۳) قرارداد سطح‌بندی: A هرگز مخفی نمی‌شود — B/C پرسنل قفل‌شده ثبت نمی‌شود.
+    const effectiveWarnings = filterWarningsForLockedPersonnel(
+      filterWarningsForScenarioGroup(verification.warnings, currentPersonnel, group),
+      currentPersonnel,
+      currentLocked
+    );
+
+    const normalizedSchedule: MonthlySchedule = {
+      ...scenario.schedule,
+      assignments: inheritedAssignments,
+      shiftLeaders: verification.shiftLeaders,
+      warnings: effectiveWarnings,
+    };
+
+    // ۴) امتیاز فقط بر اساس وضعیت نهایی تازه‌محاسبه‌شدهٔ همین سناریو.
+    return evaluateScenarioSchedule({
+      id: scenario.id,
+      type: scenario.type,
+      schedule: normalizedSchedule,
+      personnelList: currentPersonnel,
+      requests: currentRequests,
+      settings: currentSettings,
+      year: currentYear,
+      month: currentMonth,
+      customHolidays: currentHolidays,
+      firstDayOfWeekIndex: currentFirstDay,
       monthlyDutyHours: monthlyDutyHoursRef.current,
       targetJobGroup: group,
     });
@@ -3072,7 +3161,8 @@ export default function Home() {
   };
 
   // Run the smart constraints CP-SAT mimic engine with loading animation
-  // Migrated to Facade pattern (Phase 3) — delegates to runOptimizerFacade
+  // خروجی موتور فقط «سناریوهای پیشنهادی فقط‌خواندنی» است؛ برنامهٔ مبنا هنگام
+  // تولید سناریو هرگز تغییر نمی‌کند (Merge فقط با دستور صریح سرپرستار انجام می‌شود).
   const handleRunOptimizer = async (jobGroup: JobGroup) => {
     const deptId = selectedDepartmentId || 'sepehr';
 
@@ -3231,18 +3321,43 @@ export default function Home() {
     }
   };
 
+  /**
+   * تصمیم نهایی سرپرستار: Merge مرجع‌محور سناریوی منتخب روی «برنامهٔ مبنا».
+   *
+   * قرارداد معماری (بخش ۵ و ۸):
+   *  - برنامهٔ مبنا تنها منبع حقیقت است و سناریو صرفاً «پیشنهاد» است؛ پس از
+   *    Merge نیز فقط برنامهٔ مبنا به‌روز و منتشر می‌شود.
+   *  - فقط Diff همان سناریو نسبت به مبنا اعمال می‌شود؛ تغییر پرسنل قفل‌شده رد،
+   *    و تغییر پرسنل آزاد اعمال می‌گردد.
+   *  - پس از Merge تمام Constraintها با همان قوانین موجود دوباره محاسبه،
+   *    هشدارها با قرارداد سطح‌بندی بازتولید و امتیاز سناریو از نو محاسبه می‌شود.
+   *  - تصمیم نهایی فقط توسط سرپرستار گرفته می‌شود (این هندلر فقط از مسیر
+   *    canManage صدا زده می‌شود).
+   */
   const handleApplyScenario = async (selectedScenario: ScoredSchedule, forcedGroup?: JobGroup) => {
     const jobGroup = forcedGroup || selectedScenario.targetJobGroup || null;
     if (!jobGroup) return;
 
     const deptId = selectedDepartmentId || 'sepehr';
+    const monthKeyLocal = `${currentYear}_${currentMonth}`;
     const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
-    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
-    const optimizerPersonnel = personnelRef.current;
-    const optimizerRequests = requestsRef.current;
-    const optimizerHolidays = holidaysRef.current;
-    const optimizerFirstDay = firstDayRef.current;
-    const optimizerDutyHours = monthlyDutyHoursRef.current;
+    const mergeSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const mergePersonnel = personnelRef.current;
+    const mergeRequests = requestsRef.current;
+    const mergeHolidays = holidaysRef.current;
+    const mergeFirstDay = firstDayRef.current === -1 ? undefined : firstDayRef.current;
+    const mergeLockedRows = lockedRowsRef.current;
+
+    // قانون موجود حفظ می‌شود: اگر برنامهٔ این گروه قبلاً ثبت نهایی/قفل شده باشد،
+    // انتخاب سناریوی تازه (در حکم بازتولید) مستلزم تأیید مجدد سرپرستار است.
+    const groupFinalizedMonths = jobGroup === 'nurse' ? finalizedNursesMonths : finalizedAssistantsMonths;
+    if (groupFinalizedMonths.includes(monthKeyLocal)) {
+      const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
+      const confirmed = confirm(
+        `برنامه ${groupTitle} این ماه قبلاً ثبت نهایی و قفل شده است. انتخاب سناریوی جدید، برنامهٔ مبنا را بازنویسی خواهد کرد. ادامه می‌دهید؟`
+      );
+      if (!confirmed) return;
+    }
 
     const persistenceAdapter: SchedulePersistence = {
       saveSchedule: async (newSchedule: any) => {
@@ -3251,7 +3366,6 @@ export default function Home() {
 
         const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
-        const monthKeyLocal = `${currentYear}_${currentMonth}`;
         if (jobGroup === 'nurse') {
           newSchedule.finalizedNurses = true;
         } else {
@@ -3292,13 +3406,13 @@ export default function Home() {
         if (!nextDb.lockState) nextDb.lockState = { finalizedNursesMonths: [], finalizedAssistantsMonths: [], requestsLockedMonths: [] };
         if (jobGroup === 'nurse') {
           if (!nextDb.lockState.finalizedNursesMonths) nextDb.lockState.finalizedNursesMonths = [];
-          if (!nextDb.lockState.finalizedNursesMonths.includes(`${currentYear}_${currentMonth}`)) {
-            nextDb.lockState.finalizedNursesMonths.push(`${currentYear}_${currentMonth}`);
+          if (!nextDb.lockState.finalizedNursesMonths.includes(monthKeyLocal)) {
+            nextDb.lockState.finalizedNursesMonths.push(monthKeyLocal);
           }
         } else {
           if (!nextDb.lockState.finalizedAssistantsMonths) nextDb.lockState.finalizedAssistantsMonths = [];
-          if (!nextDb.lockState.finalizedAssistantsMonths.includes(`${currentYear}_${currentMonth}`)) {
-            nextDb.lockState.finalizedAssistantsMonths.push(`${currentYear}_${currentMonth}`);
+          if (!nextDb.lockState.finalizedAssistantsMonths.includes(monthKeyLocal)) {
+            nextDb.lockState.finalizedAssistantsMonths.push(monthKeyLocal);
           }
         }
 
@@ -3306,63 +3420,84 @@ export default function Home() {
       },
     };
 
-    const uiAdapter: ScheduleUIFeedback = {
-      setSolvingTarget: (target) => setSolvingTarget(target as JobGroup | null),
-      showConfirmation: (message) => confirm(message),
-      showError: (message) => console.error('Optimizer error:', message),
-    };
+    setSolvingTarget(jobGroup);
+    try {
+      // پیش از Merge، ردیف قفل‌شدهٔ سناریو نیز از مبنا ارث‌بری می‌شود تا ورودی
+      // Diff دقیقاً بر پایهٔ دادهٔ معتبر باشد (قانون «رد تغییر پرسنل قفل» در
+      // computeScenarioMerge نیز مستقل از این کار اعمال می‌گردد).
+      const candidateAssignments = overlayLockedInheritance(
+        selectedScenario.schedule.assignments,
+        scheduleRef.current?.assignments || null,
+        mergeLockedRows
+      );
 
-    const mockSolver = (y: any, m: any, p: any, req: any, set: any, h: any, fd: any, mdh: any) => {
-      const baseResult = solveWithPriority(y, m, p, req, set, h, fd, mdh);
-      return { assignments: selectedScenario.schedule.assignments, warnings: baseResult.warnings };
-    };
-
-    const result = await runOptimizerFacade(
-      {
-        jobGroup,
-        year: currentYear,
-        month: currentMonth,
-        personnel: optimizerPersonnel,
-        requests: optimizerRequests,
-        settings: optimizerSettings,
-        holidays: optimizerHolidays,
-        firstDayOfWeek: optimizerFirstDay,
-        monthlyDutyHours: optimizerDutyHours,
-        currentSchedule: schedule,
-        lockState: {
-          finalizedNursesMonths,
-          finalizedAssistantsMonths,
-          lockedRows,
+      const result = await mergeScenarioProposalFacade(
+        {
+          jobGroup,
+          year: currentYear,
+          month: currentMonth,
+          personnel: mergePersonnel,
+          requests: mergeRequests,
+          settings: mergeSettings,
+          holidays: mergeHolidays,
+          firstDayOfWeek: mergeFirstDay,
+          totalDays: getJalaliMonthDays(currentYear, currentMonth),
+          currentSchedule: scheduleRef.current ?? schedule,
+          candidateAssignments,
+          lockState: {
+            finalizedNursesMonths,
+            finalizedAssistantsMonths,
+            lockedRows: mergeLockedRows,
+          },
+          dismissedWarnings,
         },
-        dismissedWarnings,
-      },
-      mockSolver,
-      verifyCoverageAndLeaders,
-      persistenceAdapter,
-      uiAdapter,
-      deptId,
-      { delayMs: 500 }
-    );
+        verifyCoverageAndLeaders,
+        persistenceAdapter,
+        deptId
+      );
 
-    if (!result.success && result.error) {
+      if (!result.success || !result.schedule) {
+        logEvent({
+          category: 'schedule',
+          severity: 'error',
+          title: 'اعمال برنامه انتخاب‌شده ناموفق بود',
+          detail: `${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} — ${result.error || 'خطای نامشخص'}`,
+        });
+        alert('خطا در اعمال برنامه: ' + (result.error || 'خطای نامشخص'));
+        return;
+      }
+
+      // ── امتیاز سناریو پس از Merge دوباره محاسبه می‌شود (بخش ۷) ────────────
+      // امتیاز نهایی = دقیقاً روی وضعیت نهایی همان سناریو پس از اعمال روی مبنا؛
+      // هشدارهای بحرانی (A) همیشه در امتیاز اثر دارند.
+      const finalMergedSchedule = result.schedule;
+      const rescoredAfterMerge = reevaluateScenarioForGroup(selectedScenario, jobGroup, finalMergedSchedule);
+
+      setSchedule(finalMergedSchedule);
+      setDismissedAlertWarnings(prev => pruneDismissedWarningMap(finalMergedSchedule.warnings || [], prev));
+      setDismissedWarnings(prev => pruneDismissedWarnings(finalMergedSchedule.warnings || [], prev));
+
+      const appliedCount = result.appliedChanges?.length ?? 0;
+      const rejectedCount = result.rejectedChanges?.length ?? 0;
+      const resolvedCount = result.resolvedWarnings?.length ?? 0;
+
       logEvent({
         category: 'schedule',
-        severity: 'error',
-        title: 'اعمال برنامه انتخاب‌شده ناموفق بود',
-        detail: `${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} — ${result.error}`,
+        severity: 'success',
+        title: `برنامه نهایی ${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} با Merge سناریو روی برنامهٔ مبنا ثبت شد`,
+        detail: [
+          `${selectedScenario.title} — امتیاز اولیه ${selectedScenario.totalScore.toFixed(1)} — امتیاز پس از Merge ${rescoredAfterMerge.totalScore.toFixed(1)}`,
+          `ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+          `${appliedCount} تغییر از سناریو روی مبنا اعمال شد`,
+          rejectedCount > 0 ? `${rejectedCount} تغییر به‌دلیل قفل ماهانهٔ پرسنل رد شد` : null,
+          resolvedCount > 0 ? `${resolvedCount} هشدار پس از Merge رفع شد` : null,
+        ].filter(Boolean).join(' — '),
       });
-      alert('خطا در اعمال برنامه: ' + result.error);
-      return;
+
+      setSelectedScenarioIndexForGroup(jobGroup, -1);
+    } finally {
+      setSolvingTarget(null);
     }
-
-    logEvent({
-      category: 'schedule',
-      severity: 'success',
-      title: `برنامه نهایی ${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} اعمال و ثبت شد`,
-      detail: `${selectedScenario.title} — امتیاز ${selectedScenario.totalScore.toFixed(1)} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear} — ${result.personnelUpdated} نفر به‌روزرسانی شدند`,
-    });
-
-    setSelectedScenarioIndexForGroup(jobGroup, -1);
   };
 
   const handleVoteScenario = async (scenarioId: number, rating: number, forcedGroup?: JobGroup) => {
@@ -3412,15 +3547,24 @@ export default function Home() {
   const handleStartScenarioComparison = async (jobGroup: JobGroup) => {
     const workflow = getWorkflowForGroup(jobGroup);
     if (!workflow || workflow.scenarios.length === 0) return;
-    if (workflow.scenarios.some(scenario => scenario.relevantWarningCount > 0)) {
-      alert('تا زمانی که هشدارهای هر سه سناریو به صفر نرسند، مقایسه و امتیازدهی شروع نمی‌شود.');
-      return;
+
+    // ── امتیازدهی رسمی فقط به دستور سرپرستار (بخش ۷ و ۸ معماری) ─────────────
+    // قبل از هر امتیازدهی، Constraintهای هر سناریو دوباره محاسبه می‌شود و
+    // امتیاز دقیقاً بر اساس وضعیت نهایی تازهٔ همان سناریو تعیین می‌گردد؛
+    // هشدارهای بحرانی (A) هم در نمایش باقی می‌مانند و هم در امتیاز اثر دارند.
+    const reverified = workflow.scenarios.map(scenario => reverifyScenarioForGroup(scenario, jobGroup));
+
+    const withCriticalAlerts = reverified.filter(scenario => scenario.relevantHardWarningCount > 0);
+    if (withCriticalAlerts.length > 0) {
+      const confirmed = confirm(
+        `${withCriticalAlerts.length} برنامه هنوز هشدار بحرانی (سطح A) دارد: ${withCriticalAlerts.map(scenario => scenario.scenarioKey).join('، ')}.\n` +
+        'هشدارهای بحرانی هرگز مخفی نمی‌شوند و مستقیماً در امتیاز همان برنامه اثر می‌گذارند.\n\n' +
+        'آیا دستور شروع مقایسه و امتیازدهی سیستم را صادر می‌کنید؟'
+      );
+      if (!confirmed) return;
     }
 
-    const rescored = buildPairwiseDifferences(
-      workflow.scenarios.map(scenario => reevaluateScenarioForGroup(scenario, jobGroup)),
-      jobGroup
-    );
+    const rescored = buildPairwiseDifferences(reverified, jobGroup);
 
     await persistScenarioWorkflow(jobGroup, current => ({
       targetJobGroup: jobGroup,
@@ -4347,37 +4491,21 @@ export default function Home() {
     }
   };
 
-  const getScenarioEditingContext = React.useCallback((personnelId: string) => {
-    const person = personnelRef.current.find(item => item.id === personnelId);
-    if (!person) return null;
-    const workflow = getWorkflowForGroup(person.jobGroup);
-    const selectedScenario = getSelectedScenarioForGroup(person.jobGroup);
-    if (!workflow || !selectedScenario) return null;
-    const scenarioIndex = getSelectedScenarioIndexForGroup(person.jobGroup);
-    return {
-      group: person.jobGroup,
-      workflow,
-      scenario: selectedScenario,
-      scenarioIndex,
-      person,
-    };
-  }, [getSelectedScenarioForGroup, getSelectedScenarioIndexForGroup, getWorkflowForGroup]);
-
   // --- Manual Schedule Override cell edit ---
   const handleCellClick = (pId: string, day: number) => {
     if (role !== 'admin' && role !== 'headnurse') return;
 
-    const scenarioContext = getScenarioEditingContext(pId);
-    if (scenarioContext) {
-      if (lockedRows.includes(pId)) {
-        alert('این ردیف قفل شده است و قابل ویرایش نیست.');
-        return;
-      }
-      setEditingCell({ pId, day });
+    const person = personnel.find(per => per.id === pId);
+
+    // ── معماری برنامهٔ مبنا: سناریوها فقط خواندنی هستند ─────────────────────
+    // وقتی جدول روی یکی از سناریوهای A/B/C (پیشنهاد موتور) قرار دارد، هیچ
+    // ویرایش دستی روی آن انجام نمی‌شود؛ تمام ویرایش‌ها فقط روی «برنامه مبنا»
+    // (تنها منبع حقیقت سیستم) صورت می‌گیرد.
+    if (person && getSelectedScenarioForGroup(person.jobGroup)) {
+      alert('سناریوها خروجی موتور هوشمند هستند و فقط خواندنی‌اند؛ امکان ویرایش دستی روی آن‌ها وجود ندارد.\n\nبرای ویرایش، ابتدا با دکمهٔ «بازگشت به برنامه مبنا» به برنامهٔ مبنا برگردید و اصلاح را همان‌جا انجام دهید.');
       return;
     }
 
-    const person = personnel.find(per => per.id === pId);
     if (person) {
       const monthKeyLocal = `${currentYear}_${currentMonth}`;
       const finalizedMonthsForGroup = person.jobGroup === 'nurse' ? finalizedNursesMonths : finalizedAssistantsMonths;
@@ -4398,13 +4526,19 @@ export default function Home() {
     setEditingCell({ pId, day });
   };
 
+  /**
+   * ویرایش دستی شیفت — فقط و فقط روی «برنامهٔ مبنا».
+   *
+   * برخلاف معماری قبلی، هیچ مسیر نوشتنی به سمت اسناد سناریوها وجود ندارد؛
+   * سناریوها پیشنهادهای فقط‌خواندنی موتور هستند و تنها راه تغییر دادن در
+   * وضعیت نهایی، ویرایش مستقیم برنامهٔ مبنا یا Merge یک سناریو توسط سرپرستار
+   * است.
+   */
   const handleManualShiftChange = async (pId: string, day: number, shift: ShiftType) => {
     const deptId = selectedDepartmentId || 'sepehr';
     const monthKey = `${currentYear}_${currentMonth}`;
-    const scenarioContext = getScenarioEditingContext(pId);
-    const latestSchedule: MonthlySchedule | null = scenarioContext
-      ? scenarioContext.scenario.schedule
-      : optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[monthKey] ?? scheduleRef.current ?? null;
+    const latestSchedule: MonthlySchedule | null =
+      optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[monthKey] ?? scheduleRef.current ?? null;
 
     if (!latestSchedule) return;
 
@@ -4430,62 +4564,6 @@ export default function Home() {
           if (!nextDb.deptData) nextDb.deptData = {};
 
           const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
-
-          if (scenarioContext) {
-            const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
-            const groupRecord = monthScenarios[scenarioContext.group];
-            if (!groupRecord) throw new Error('سناریوی انتخاب‌شده برای ویرایش پیدا نشد.');
-
-            const filteredWarnings = filterWarningsForScenarioGroup(newSchedule.warnings || [], currentPersonnel, scenarioContext.group);
-            const rescoredScenarios = buildPairwiseDifferences(
-              groupRecord.scenarios.map((scenario, index) => {
-                if (index !== scenarioContext.scenarioIndex) return scenario;
-                return reevaluateScenarioForGroup(
-                  scenario,
-                  scenarioContext.group,
-                  {
-                    ...newSchedule,
-                    warnings: filteredWarnings,
-                    lockedRows: currentLocked,
-                  }
-                );
-              }),
-              scenarioContext.group
-            );
-
-            const nextActiveScenarios = { ...(oldDept.activeScenarios || {}) } as any;
-            nextActiveScenarios[monthKey] = {
-              ...monthScenarios,
-              [scenarioContext.group]: {
-                ...groupRecord,
-                scenarios: rescoredScenarios,
-                votingOpen: false,
-                comparisonStartedAt: undefined,
-                generationLog: [
-                  ...(groupRecord.generationLog || []),
-                  `سناریوی ${groupRecord.scenarios[scenarioContext.scenarioIndex]?.scenarioKey || '?'} پس از ویرایش دستی دوباره به مرحله رفع هشدار بازگشت.`,
-                ].slice(-5),
-              },
-            };
-
-            const rawVotesMonth = (oldDept.scenarioVotes || {})[monthKey] as any;
-            const votesMonth = rawVotesMonth && (rawVotesMonth.nurse !== undefined || rawVotesMonth.assistant !== undefined)
-              ? { ...(rawVotesMonth as any) }
-              : { nurse: {}, assistant: {} };
-            votesMonth[scenarioContext.group] = {};
-
-            nextDb.deptData[deptId] = {
-              ...oldDept,
-              activeScenarios: nextActiveScenarios,
-              scenarioVotes: {
-                ...(oldDept.scenarioVotes || {}),
-                [monthKey]: votesMonth,
-              },
-            };
-
-            await saveDbState(nextDb, { showBusyOverlay: false });
-            return;
-          }
 
           const prunedDismissed = newSchedule.dismissedWarnings ?? currentDismissed;
           nextDb.deptData[deptId] = {
@@ -4550,12 +4628,11 @@ export default function Home() {
           dismissedWarnings: result.schedule.dismissedWarnings ?? currentDismissed,
         };
 
-        if (!scenarioContext) {
-          setSchedule(finalSchedule);
-          const remainingWarnings = finalSchedule.warnings ?? [];
-          setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
-          setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
-        }
+        // ویرایش دستی فقط روی برنامهٔ مبنا (تنها منبع حقیقت) انجام می‌شود.
+        setSchedule(finalSchedule);
+        const remainingWarnings = finalSchedule.warnings ?? [];
+        setDismissedAlertWarnings(prev => pruneDismissedWarningMap(remainingWarnings, prev));
+        setDismissedWarnings(prev => pruneDismissedWarnings(remainingWarnings, prev));
 
         // ویرایش دستی سرپرستار + هشدارهایی که با همین ویرایش رفع شدند، ثبت می‌شود.
         const editedPersonForLog = currentPersonnel.find(item => item.id === pId);
@@ -4567,7 +4644,7 @@ export default function Home() {
           title: `ویرایش دستی شیفت${editedPersonForLog ? ` ${editedPersonForLog.firstName} ${editedPersonForLog.lastName}` : ''} در روز ${day}`,
           detail: [
             `شیفت از «${previousShift}» به «${resolvedShift}» تغییر کرد`,
-            scenarioContext ? `در سناریوی ${scenarioContext.scenario.scenarioKey}` : `ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
+            `برنامهٔ مبنا — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`,
             resolvedCount > 0 ? `${resolvedCount} هشدار با این تغییر رفع شد` : null,
             (finalSchedule.warnings?.length ?? 0) > 0 ? `${finalSchedule.warnings.length} هشدار باقی‌مانده` : 'بدون هشدار باقی‌مانده',
           ].filter(Boolean).join(' — '),
@@ -6483,6 +6560,13 @@ export default function Home() {
                                           ? lockedRows.filter(id => id !== p.id)
                                           : [...lockedRows, p.id];
                                         setLockedRows(newLocked);
+
+                                        // قفل متعلق به «پرسنل» است و فوراً روی برنامهٔ مبنا اعمال
+                                        // می‌شود: هشدارهای سطح B/C این ردیف از برنامهٔ مبنا حذف و
+                                        // ردیف او از فضای جستجوی موتور حذف می‌گردد. با به‌روزرسانی
+                                        // سند برنامهٔ مبنا، افکت بازمحاسبه، هشدارها را با قرارداد
+                                        // سطح‌بندی از نو تولید می‌کند (هشدار بحرانی A هرگز مخفی نیست).
+                                        setSchedule(prev => (prev ? { ...prev, lockedRows: newLocked } : prev));
 
                                         const nextDb = getFreshDbCopy();
                                         const deptId = selectedDepartmentId || 'sepehr';

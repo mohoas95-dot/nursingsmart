@@ -23,6 +23,10 @@ This repository contains everything you need to run the app locally.
 
 The granular object layout, optimistic-locking contract, circuit breaker, and one-time migration procedure are documented in [`docs/STORAGE_ARCHITECTURE.md`](docs/STORAGE_ARCHITECTURE.md).
 
+## Roster architecture (SSOT)
+
+The Working Roster (برنامه مبنا) is the single source of truth: read-only engine scenarios, live lock inheritance, the reference-based Diff/Patch merge, the A/B/C warning-severity contract, and head-nurse-only final decisions are documented in [`docs/ROSTER_ARCHITECTURE.md`](docs/ROSTER_ARCHITECTURE.md).
+
 ## Authentication
 
 PostgreSQL/Prisma setup, national-ID login, session security, first-login password change, and the head-nurse password-reset workflow are documented in [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).

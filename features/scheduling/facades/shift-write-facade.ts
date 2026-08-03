@@ -25,6 +25,8 @@ import type {
   OptimizerResult,
   ManualShiftChangeInput,
   ManualShiftChangeResult,
+  ScenarioProposalMergeInput,
+  ScenarioProposalMergeResult,
 } from '../../../domain/scheduling/types';
 import type { MonthlySchedule } from '../../../domain/types';
 import type { Personnel, ShiftRequest, SystemSettings } from '../../../lib/types';
@@ -34,6 +36,8 @@ import {
 } from '../../../domain/scheduling/schedule-operations';
 import { reconcileStaffingCoverage } from '../../../domain/scheduling/staffing-coverage';
 import { findResolvedWarnings, pruneDismissedWarnings } from '../../../domain/scheduling/alert-lifecycle';
+import { computeScenarioMerge } from '../../../domain/scheduling/roster-inheritance';
+import { filterWarningsForLockedPersonnel } from '../../../domain/scheduling/warning-severity';
 import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
 import { generateJalaliMonthCalendar } from '../../../lib/jalali';
 
@@ -253,6 +257,153 @@ export async function runOptimizerFacade(
   } finally {
     // Step 10: Clear loading state
     ui.setSolvingTarget(null);
+  }
+}
+
+// ============================================================================
+// Scenario Proposal Merge Facade — «انتخاب سناریو توسط سرپرستار»
+// ============================================================================
+
+/**
+ * Merge یک سناریو (پیشنهاد موتور هوشمند) روی برنامهٔ مبنا با قرارداد Diff/Patch.
+ *
+ * FLOW (مطابق بخش ۵ معماری جدید):
+ *   ۱) محاسبهٔ Diff سناریو نسبت به برنامهٔ مبنا (فقط گروه هدف؛ سطح‌سلول)
+ *      — تغییرهای پرسنل قفل‌شده «رد» و فقط تغییرهای پرسنل آزاد اعمال می‌شوند.
+ *   ۲) محاسبهٔ مجدد Constraintها: reconcileStaffingCoverage + verifier موجود
+ *      (هیچ قانون زمان‌بندی تغییر نکرده است).
+ *   ۳) بازتولید هشدارها + قرارداد سطح‌بندی: هشدار بحرانی (A) هرگز مخفی نمی‌شود؛
+ *      هشدار B/C پرسنل قفل‌شده ثبت نمی‌شود (تأیید مدیریتی).
+ *   ۴) پاک‌سازی هشدارهای نادیده‌گرفته‌ای که واقعاً رفع شده‌اند.
+ *   ۵) ماندگاری برنامهٔ مبنای جدید — مرجعِ تنها باشد و خود سناریو هرگز مرجع
+ *      نمی‌شود.
+ *
+ * DESIGN:
+ *   - منطق Diff/Merge کاملاً خالص در domain/scheduling/roster-inheritance است؛
+ *     این Facade فقط ارکستراسیون (ترتیب فراخوان‌ها + ذخیره‌سازی) را مدیریت می‌کند.
+ *
+ * @param input - ورودی Merge (برنامهٔ مبنا + تخصیص‌های پیشنهادی سناریو)
+ * @param verifier - همان verifyCoverageAndLeaders موجود (تزریق برای تست‌پذیری)
+ * @param persistence - لایهٔ ذخیره‌سازی (تزریق)
+ * @param departmentId - شناسهٔ بخش
+ * @returns ScenarioProposalMergeResult (همراه با فهرست تغییرهای اعمال/ردشده)
+ */
+export async function mergeScenarioProposalFacade(
+  input: ScenarioProposalMergeInput,
+  verifier: (
+    year: number,
+    month: number,
+    personnel: ReadonlyArray<Personnel>,
+    assignments: Record<string, Record<number, string>>,
+    settings: SystemSettings,
+    holidays: Readonly<Record<number, string>>,
+    firstDayOfWeek: number | undefined,
+    requests: ReadonlyArray<ShiftRequest>
+  ) => { shiftLeaders: Record<number, ShiftLeaderRecord>; warnings: string[] },
+  persistence: SchedulePersistence,
+  departmentId: string
+): Promise<ScenarioProposalMergeResult> {
+  const {
+    jobGroup,
+    year,
+    month,
+    personnel,
+    requests,
+    settings,
+    holidays,
+    firstDayOfWeek,
+    totalDays,
+    currentSchedule,
+    candidateAssignments,
+    lockState,
+    dismissedWarnings = currentSchedule?.dismissedWarnings ?? [],
+  } = input;
+
+  try {
+    // ── گام ۱: Diff/Patch مرجع‌محور ────────────────────────────────────────
+    // برنامهٔ مبنا پایه است؛ اگر مبنایی وجود ندارد (اولین انتخاب)، سناریو به‌عنوان
+    // پایهٔ اولیه عمل می‌کند ولی قفل‌های ماهانه همچنان محفوظ می‌مانند.
+    const baseSchedule: MonthlySchedule = currentSchedule ?? {
+      year,
+      month,
+      assignments: {},
+      shiftLeaders: {},
+      warnings: [],
+    };
+
+    const merge = computeScenarioMerge(baseSchedule, { assignments: candidateAssignments }, {
+      lockedRows: lockState.lockedRows,
+      personnelList: personnel,
+      jobGroup,
+      totalDays,
+    });
+
+    // ── گام ۲: محاسبهٔ مجدد Constraintها (بدون هیچ تغییری در قوانین) ─────────
+    const calendar = generateJalaliMonthCalendar(year, month, holidays, firstDayOfWeek);
+    const staffingResult = reconcileStaffingCoverage(
+      merge.assignments,
+      personnel,
+      settings,
+      calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+      [jobGroup],
+      lockState.lockedRows, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
+      requests
+    );
+
+    const verification = verifier(
+      year,
+      month,
+      personnel,
+      staffingResult.assignments,
+      settings,
+      holidays,
+      firstDayOfWeek,
+      requests
+    );
+
+    // ── گام ۳: بازتولید هشدارها با قرارداد سطح‌بندی پرسنل قفل‌شده ──────────
+    const effectiveWarnings = filterWarningsForLockedPersonnel(
+      verification.warnings,
+      personnel,
+      lockState.lockedRows
+    );
+
+    const prunedDismissed = pruneDismissedWarnings(effectiveWarnings, dismissedWarnings);
+    const resolvedWarnings = findResolvedWarnings(
+      baseSchedule.warnings ?? [],
+      effectiveWarnings
+    );
+
+    // ── گام ۴: برنامهٔ مبنای جدید = تنها منبع حقیقت ────────────────────────
+    const newSchedule: MonthlySchedule = {
+      ...baseSchedule,
+      year,
+      month,
+      assignments: staffingResult.assignments,
+      shiftLeaders: verification.shiftLeaders,
+      warnings: effectiveWarnings,
+      dismissedWarnings: prunedDismissed,
+      lockedRows: [...lockState.lockedRows],
+      finalized: false,
+    };
+
+    // ── گام ۵: ماندگاری ────────────────────────────────────────────────────
+    await persistence.saveSchedule(newSchedule, departmentId);
+
+    return {
+      success: true,
+      schedule: newSchedule,
+      appliedChanges: merge.appliedChanges,
+      rejectedChanges: merge.rejectedChanges,
+      resolvedWarnings,
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      schedule: null,
+      error: errorMessage,
+    };
   }
 }
 

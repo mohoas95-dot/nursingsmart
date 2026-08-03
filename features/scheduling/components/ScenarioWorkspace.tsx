@@ -131,7 +131,7 @@ function buildStages(workflow: ScenarioWorkflowView, warningsResolved: boolean) 
     },
     {
       number: 2,
-      label: 'رفع هشدارها',
+      label: 'رفع هشدارها در برنامه مبنا',
       state: warningsResolved ? 'done' : 'active',
     },
     {
@@ -164,7 +164,11 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
   } = props;
 
   const meta = groupMeta[group];
+  // برنامه‌ها «فقط خواندنی»‌اند: هشدار رفع‌شده به‌صورت مستقیم روی سناریو معنا
+  // ندارد؛ رفع هشدار فقط روی «برنامه مبنا» انجام می‌شود. این پرچم فقط برای
+  // نمایش وضعیت به سرپرستار است و دیگر شروع امتیازدهی را قفل نمی‌کند.
   const warningsResolved = workflow.scenarios.length > 0 && workflow.scenarios.every((scenario) => scenario.relevantWarningCount === 0);
+  const hasCriticalWarnings = workflow.scenarios.some((scenario) => scenario.relevantHardWarningCount > 0);
   const ranking = rankScenarios(workflow.scenarios);
   const stages = buildStages(workflow, warningsResolved);
   const defaultScenarioId = workflow.scenarios[0]?.id ?? null;
@@ -249,7 +253,7 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
           >
             بازگشت به برنامه مبنا
           </button>
-          {canManage && warningsResolved && !workflow.comparisonStartedAt && (
+          {canManage && !workflow.comparisonStartedAt && (
             <button
               type="button"
               onClick={onStartComparison}
@@ -281,7 +285,10 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
           <div className="flex items-start gap-2 text-[11px] font-bold text-amber-900 leading-6">
             <MessageSquareWarning className="w-4 h-4 mt-0.5 text-amber-600 shrink-0" />
             <div>
-              برای ادامه، یکی از برنامه‌ها را در جدول فعال کنید و هشدارهای همان برنامه را از پنجره اصلی هشدارهای نارنجی بالای صفحه برطرف کنید. با تغییر برنامه فعال، همان پنجره نارنجی نیز با هشدارهای برنامه جدید به‌روز می‌شود.
+              سناریوها پیشنهاد فقط‌خواندنی موتور هستند و مستقیم ویرایش نمی‌شوند. برای رفع هشدارها به «برنامه مبنا» بازگردید و اصلاح را همان‌جا انجام دهید؛ سپس می‌توانید سناریوهای تازه بسازید یا همین‌جا یک سناریو را Merge کنید.
+              {hasCriticalWarnings
+                ? ' هشدارهای بحرانی (سطح A) هرگز مخفی نمی‌شوند و در امتیاز هر برنامه اثر می‌گذارند.'
+                : ' هشدارهای باقی‌مانده در امتیاز هر برنامه لحاظ می‌شوند.'}
             </div>
           </div>
         </div>
@@ -292,11 +299,20 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
           <div className="flex items-start gap-2 text-[11px] font-bold text-emerald-900 leading-6">
             <CheckCircle2 className="w-4 h-4 mt-0.5 text-emerald-600 shrink-0" />
             <div>
-              هشدارهای این گروه برای همه برنامه‌ها رفع شده است. این نوار ثابت باقی می‌ماند تا هر زمان که سرپرستار مایل بود، از همین‌جا مقایسه و امتیازدهی را آغاز کند.
+              هشدار فعالی در برنامه‌های پیشنهادی این گروه دیده نمی‌شود. هر زمان مایل بودید، از همین‌جا مقایسه و امتیازدهی را به دستور سرپرستار آغاز کنید.
             </div>
           </div>
         </div>
       )}
+
+      <div className="px-5 py-2.5 border-b border-slate-200/70 bg-slate-50/70">
+        <div className="flex items-start gap-2 text-[10px] font-bold text-slate-500 leading-6">
+          <Lock className="w-3.5 h-3.5 mt-1 text-amber-600 shrink-0" />
+          <div>
+            ردیف‌های قفل‌شدهٔ ماهانه در همهٔ برنامه‌ها دقیقاً برابر «برنامه مبنا» نمایش داده می‌شوند (ارث‌بری زنده از برنامه مبنا) و هیچ سناریویی نمی‌تواند آن‌ها را تغییر دهد.
+          </div>
+        </div>
+      </div>
 
       <div className="p-5">
         <div className={`bg-white rounded-3xl border ${meta.accentBorder} shadow-sm ring-4 ${meta.scoreRing} overflow-hidden`}>
@@ -321,6 +337,9 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${meta.softBadge}`}>{activeScenario.shortTitle}</span>
+              <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-slate-200 bg-white text-slate-500 inline-flex items-center gap-1">
+                <Lock className="w-3 h-3" /> پیشنهاد موتور — فقط خواندنی
+              </span>
               <span className="text-[11px] font-bold text-slate-500">{scenarioStageLabel}</span>
               {workflow.comparisonStartedAt && activeRank > 0 && (
                 <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-700 inline-flex items-center gap-1">

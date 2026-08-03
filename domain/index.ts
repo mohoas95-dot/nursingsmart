@@ -35,6 +35,9 @@ export type {
   ManualShiftChangeResult,
   PersonnelSaveInput,
   PersonnelSaveResult,
+  ScenarioProposalMergeInput,
+  ScenarioProposalMergeResult,
+  RosterDiffEntry,
 } from './scheduling/types';
 
 // ============================================================================
@@ -130,6 +133,42 @@ export {
 } from './scheduling/smart-rules';
 
 export type { AssignmentMap, ConsecutiveRunSummary } from './scheduling/smart-rules';
+
+// ============================================================================
+// Roster Inheritance — برنامهٔ مبنا = تنها منبع حقیقت (SSOT)
+// ارث‌بری قفل‌ها، Diff/Patch و Merge مرجع‌محور سناریوها
+// ============================================================================
+
+export {
+  computeScenarioMerge,
+  diffAgainstBaseRoster,
+  inheritLockedRowsFromBase,
+  overlayLockedInheritance,
+  partitionDiffByLocks,
+} from './scheduling/roster-inheritance';
+
+export type {
+  RosterDiffOptions,
+  RosterDiffPartition,
+  ScenarioMergeOptions,
+  ScenarioMergeResult,
+} from './scheduling/roster-inheritance';
+
+// ============================================================================
+// Warning Severity — سطح‌بندی هشدارها (بحرانی A / مدیریتی B / اطلاع‌رسانی C)
+// و رفتار آن‌ها برای پرسنل قفل‌شده
+// ============================================================================
+
+export {
+  classifyWarningSeverity,
+  extractWarningPersonnelIds,
+  filterWarningsForLockedPersonnel,
+  isCriticalWarning,
+  summarizeWarningsBySeverity,
+  WARNING_SEVERITY_LABELS,
+} from './scheduling/warning-severity';
+
+export type { WarningSeverity } from './scheduling/warning-severity';
 
 // ============================================================================
 // Alert Lifecycle — چرخهٔ عمر هشدارها (پاک‌سازی خودکار هشدارهای رفع‌شده)

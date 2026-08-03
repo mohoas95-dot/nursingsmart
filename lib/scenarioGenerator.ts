@@ -1,6 +1,7 @@
 import { generateJalaliMonthCalendar } from './jalali';
 import { verifyCoverageAndLeaders, solveWithPriority, generatePersonnelReports } from './solver';
 import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
+import { filterWarningsForLockedPersonnel } from '../domain/scheduling/warning-severity';
 import {
   JobGroup,
   MonthlySchedule,
@@ -235,12 +236,23 @@ function verifyScenarioSchedule(
     context.targetJobGroup
   );
 
+  // ── قرارداد معماری برنامهٔ مبنا ──────────────────────────────────────────
+  // پرسنل قفل‌شده ماهانه «تأیید مدیریتی تصمیم‌های غیربحرانی» هستند: هشدارهای
+  // سطح B/C متعلق به آن‌ها در سناریوها ثبت نمی‌شود و در امتیازدهی (که از روی
+  // همین فهرست انجام می‌شود) نیز اثری ندارد. هشدارهای بحرانی (سطح A) هرگز
+  // مخفی نمی‌مانند و در امتیاز لحاظ می‌شوند.
+  const effectiveWarnings = filterWarningsForLockedPersonnel(
+    relevantWarnings,
+    context.personnelList,
+    context.lockedRows
+  );
+
   return {
     year: context.year,
     month: context.month,
     assignments: reconciled,
     shiftLeaders: verification.shiftLeaders,
-    warnings: relevantWarnings,
+    warnings: effectiveWarnings,
   };
 }
 

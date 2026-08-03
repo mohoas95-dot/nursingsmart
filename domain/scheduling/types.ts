@@ -7,6 +7,9 @@
 
 import type { JobGroup, ShiftType, MonthlySchedule, ScheduleLockState } from '../types';
 import type { Personnel, ShiftRequest, SystemSettings, WorkRoutineTag } from '../../lib/types';
+import type { RosterDiffEntry } from './roster-inheritance';
+
+export type { RosterDiffEntry } from './roster-inheritance';
 
 // ============================================================================
 // Optimizer Operation
@@ -76,6 +79,51 @@ export interface ManualShiftChangeResult {
   schedule: MonthlySchedule | null;
   error?: string;
   /** هشدارهایی که با این ویرایش رفع شدند و باید از وضعیت نادیده‌گرفتن هم پاک شوند. */
+  resolvedWarnings?: ReadonlyArray<string>;
+}
+
+// ============================================================================
+// Scenario Proposal Merge Operation — Merge مرجع‌محور سناریو روی برنامهٔ مبنا
+// ============================================================================
+
+/**
+ * ورودی Merge یک سناریو (پیشنهاد موتور) روی برنامهٔ مبنا.
+ *
+ * قرارداد معماری: برنامهٔ مبنا تنها منبع حقیقت است؛ سناریو فقط پیشنهاد است و
+ * هیچ‌گاه مستقیم جای مرجع را نمی‌گیرد. Merge = فقط Diff سناریو نسبت به مبنا و
+ * فقط برای پرسنل آزاد.
+ */
+export interface ScenarioProposalMergeInput {
+  /** گروه هدف سناریو (پرستاران/کمک‌بهیاران) — ردیف گروه دیگر دست‌نخورده می‌ماند. */
+  jobGroup: JobGroup;
+  year: number;
+  month: number;
+  personnel: ReadonlyArray<Personnel>;
+  requests: ReadonlyArray<ShiftRequest>;
+  settings: SystemSettings;
+  holidays: Readonly<Record<number, string>>;
+  firstDayOfWeek: number | undefined;
+  /** تعداد روزهای ماه — برای محاسبهٔ Diff سطح‌سلول. */
+  totalDays: number;
+  /** برنامهٔ مبنای فعلی (مرجع). اگر null باشد، سناریو به‌عنوان پایهٔ اولیه در نظر گرفته می‌شود. */
+  currentSchedule: MonthlySchedule | null;
+  /** تخصیص‌های پیشنهادی سناریوی انتخاب‌شده. */
+  candidateAssignments: Record<string, Record<number, ShiftType>>;
+  lockState: ScheduleLockState;
+  /** هشدارهای نادیده‌گرفته‌شدهٔ فعلی برنامهٔ مبنا. */
+  dismissedWarnings?: ReadonlyArray<string>;
+}
+
+export interface ScenarioProposalMergeResult {
+  success: boolean;
+  /** برنامهٔ مبنای جدید (مرجع به‌روزشده) — منبع حقیقت پس از Merge. */
+  schedule: MonthlySchedule | null;
+  error?: string;
+  /** تغییرهای اعمال‌شده از سناریو روی مبنا (فقط پرسنل آزاد). */
+  appliedChanges?: ReadonlyArray<RosterDiffEntry>;
+  /** تغییرهای ردشده به‌دلیل قفل ماهانهٔ پرسنل. */
+  rejectedChanges?: ReadonlyArray<RosterDiffEntry>;
+  /** هشدارهایی که پس از Merge و محاسبهٔ مجدد Constraintها رفع شدند. */
   resolvedWarnings?: ReadonlyArray<string>;
 }
 
