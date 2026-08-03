@@ -3,16 +3,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { dbRead, dbWrite, isRecordNotFoundError } from '../db';
 import type { AuthenticatedUser } from './types';
+import { AuthenticationError } from './errors';
 
 const SESSION_COOKIE = 'nursingsmart_session';
 const DEFAULT_SESSION_HOURS = 12;
 
-export class AuthenticationError extends Error {
-  constructor(public readonly status: 401 | 403, message: string) {
-    super(message);
-    this.name = 'AuthenticationError';
-  }
-}
+// از `./errors` دوباره صادر می‌شود تا واردکننده‌های موجود دست‌نخورده بمانند.
+export { AuthenticationError };
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex');

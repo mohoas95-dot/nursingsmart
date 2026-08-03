@@ -48,7 +48,7 @@ export interface ProgressMeterProps {
 
 const RING_STROKE = 7;
 
-export function ProgressMeter({
+function ProgressMeterComponent({
   percent,
   phaseLabel,
   phaseNumber,
@@ -167,3 +167,10 @@ export function ProgressMeter({
     </div>
   );
 }
+
+/**
+ * تمام propها اولیه (عدد/رشته/بولین) هستند، پس مقایسهٔ سطحی React دقیقاً کار
+ * می‌کند. این حلقه هنگام اجرای موتور هوشمند روی صفحه است و بدون memo با هر
+ * تغییر state والد (که در حین پردازش مکرر است) بی‌دلیل دوباره رندر می‌شد.
+ */
+export const ProgressMeter = React.memo(ProgressMeterComponent);

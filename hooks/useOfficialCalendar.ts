@@ -41,7 +41,9 @@ export function useOfficialCalendar() {
     const controller = new AbortController();
     setStatus('loading');
     setCalendar(null); // جلوگیری از نمایش ماه قبلی زیر عنوان ماه جدید
-    let timer: ReturnType<typeof setTimeout>;
+    // `undefined` اولیه لازم است: اگر خطایی رخ ندهد تایمر ساخته نمی‌شود و
+    // clearTimeout(undefined) بی‌خطر است.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async (attempt = 0) => {
       try {
         const result = await fetchOfficialMonth(year, month, controller.signal);

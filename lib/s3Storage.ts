@@ -597,7 +597,7 @@ export async function writeResource(
  * Read the current committed value of a resource without failing when the
  * object is absent. Returns `null` when the key does not exist.
  */
-async function readResourceIfExists(
+export async function readResourceIfExists(
   resource: StorageResource,
 ): Promise<{ data: unknown; etag: string } | null> {
   beforeStorageCall();

@@ -119,6 +119,7 @@ import { useSubmitGuard } from '../features/shared/hooks/useSubmitGuard';
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
+import { ErrorBoundary } from '../features/shared/components/ErrorBoundary';
 import { EventLogPanel } from '../features/reports/components/EventLogPanel';
 import { useTaskProgress } from '../features/shared/hooks/useTaskProgress';
 import {
@@ -310,6 +311,59 @@ const MAX_CONFLICT_RESOLUTION_PASSES = 3;
  * `crypto.randomUUID` در همهٔ مرورگرهای امروزی و در بستر امن (HTTPS) موجود است؛
  * در غیر این صورت به ترکیب زمان + تصادف + شمارنده برمی‌گردیم.
  */
+/**
+ * استخراج پیام قابل‌نمایش از هر مقدار پرتاب‌شده.
+ *
+ * الگوی `toErrorMessage(error)` بیش از ۲۰ بار
+ * در این فایل تکرار شده بود. تجمیع آن یک نقطهٔ واحد می‌سازد تا در آینده بتوان
+ * رفتار را یک‌جا بهبود داد (مثلاً کوتاه‌سازی پیام‌های طولانی).
+ *
+ * مقادیر غیر-Error هم پوشش داده می‌شوند، چون در جاوااسکریپت هر چیزی قابل
+ * پرتاب شدن است (رشته، شیء ساده و ...).
+ */
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return String(error);
+}
+
+/**
+ * مقادیر پیش‌فرضِ بخش‌های قدیمی (پیش از مهاجرت به احراز هویت Prisma).
+ * فقط برای تشخیص «بخش تازه‌ساخته‌شده» در متن دکمهٔ ورود استفاده می‌شوند و هرگز
+ * مبنای هیچ تصمیم امنیتی نیستند.
+ */
+const LEGACY_DEFAULT_DEPT_USERNAME = 'headnurse';
+const LEGACY_DEFAULT_DEPT_PASSWORD = '123456';
+
+/**
+ * سند پیش‌فرض یک بخش، وقتی هنوز داده‌ای برای آن در حافظه نیست.
+ *
+ * این شیء پیش‌تر ۹ بار به‌صورت literal در همین فایل تکرار شده بود. هر تکرار
+ * یک نقطهٔ واگرایی بالقوه بود: افزودن فیلد جدید به سند بخش، می‌بایست در هر ۹
+ * نقطه دستی تکرار می‌شد و فراموشی یکی از آن‌ها باگ خاموش تولید می‌کرد.
+ *
+ * ⚠️ `settings_credentials` صرفاً برای سازگاری با شکل قدیمی JSON نگه داشته شده
+ * است. احراز هویت واقعی از طریق Prisma و جدول `User` انجام می‌شود و این فیلد
+ * هیچ اعتبارسنجی‌ای ندارد. مقدار قبلی این‌جا رشتهٔ `'123456'` بود که ظاهر یک
+ * «رمز پیش‌فرض» داشت و گمراه‌کننده بود؛ اکنون خالی است تا کسی آن را رمز واقعی
+ * تصور نکند.
+ */
+function createEmptyDepartmentData() {
+  return {
+    personnel: [],
+    requests: [],
+    settings_system: INITIAL_SETTINGS,
+    settings_credentials: { username: 'prisma-managed', password: '' },
+    holidays: {},
+    firstDayOfWeek: {},
+    schedules: {},
+  };
+}
+
 let localIdCounter = 0;
 function createLocalId(prefix: string): string {
   localIdCounter += 1;
@@ -355,6 +409,37 @@ export default function Home() {
   const personnelSaveLockRef = React.useRef(false);
   const personnelDeleteLockRef = React.useRef(new Set<string>());
   const logoutLockRef = React.useRef(false);
+
+  // ── مدیریت چرخهٔ عمر تایمرها (جلوگیری از نشت حافظه) ────────────────────────
+  // چند هندلر (پرش به هشدار، هایلایت سلول/ستون، چاپ) با setTimeout کار می‌کنند
+  // و پس از پایان تایمر `setState` صدا می‌زنند. اگر کاربر پیش از اتمام تایمر از
+  // صفحه خارج شود، آن setState روی کامپوننت unmount شده اجرا می‌شد: هم هشدار
+  // نشت حافظه در کنسول تولید می‌کرد و هم closure کل درخت state را زنده نگه
+  // می‌داشت. این مجموعه همهٔ تایمرهای معلق را نگه می‌دارد تا هنگام unmount
+  // یک‌جا پاک شوند.
+  const pendingTimersRef = React.useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const isMountedRef = React.useRef(true);
+
+  /** setTimeout ایمن: خودکار ثبت و در unmount پاک می‌شود. */
+  const scheduleTimeout = React.useCallback((callback: () => void, delayMs: number) => {
+    const timerId = setTimeout(() => {
+      pendingTimersRef.current.delete(timerId);
+      // اگر کامپوننت از بین رفته باشد، callback اصلاً اجرا نمی‌شود.
+      if (isMountedRef.current) callback();
+    }, delayMs);
+    pendingTimersRef.current.add(timerId);
+    return timerId;
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    const timers = pendingTimersRef.current;
+    return () => {
+      isMountedRef.current = false;
+      for (const timerId of timers) clearTimeout(timerId);
+      timers.clear();
+    };
+  }, []);
 
   // --- Dynamic Department routing helper ---
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(() => {
@@ -613,10 +698,13 @@ export default function Home() {
 
   // Load persisted selected month/year on mount to prevent defaulting to Khordad after resets
   useEffect(() => {
-    setTimeout(() => {
+    // تأخیر صفر عمدی است تا setState داخل بدنهٔ افکت اجرا نشود؛ اما تایمر باید
+    // در unmount پاک شود، وگرنه روی کامپوننت از بین رفته setState صدا می‌زند.
+    const timerId = setTimeout(() => {
       setIsMounted(true);
       setIsMonthLoaded(true);
     }, 0);
+    return () => clearTimeout(timerId);
   }, []);
 
   // User Authentication & Roles
@@ -1207,15 +1295,7 @@ export default function Home() {
   // stateهای محلی مشتق‌شده از آن نیز همگام می‌شوند تا رابط کاربری با سرور سازگار بماند.
   const syncLocalStateFromDb = (nextDb: AppDatabaseState) => {
     const deptId = selectedDepartmentId || 'sepehr';
-    const deptInfo = nextDb.deptData[deptId] || {
-      personnel: [],
-      requests: [],
-      settings_system: INITIAL_SETTINGS,
-      settings_credentials: { username: 'headnurse', password: '123456' },
-      holidays: {},
-      firstDayOfWeek: {},
-      schedules: {},
-    };
+    const deptInfo = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
     setDepartments(nextDb.departments || []);
     setPersonnel(deptInfo.personnel || []);
@@ -1849,7 +1929,7 @@ export default function Home() {
 
     setShowAlertCenter(false);
 
-    setTimeout(() => {
+    scheduleTimeout(() => {
       const element = document.getElementById(cellId);
       if (element) {
         if (warningText) {
@@ -1863,7 +1943,7 @@ export default function Home() {
         }
         setHighlightedCellId(cellId);
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => {
+        scheduleTimeout(() => {
           setHighlightedCellId(current => current === cellId ? null : current);
         }, 3200);
       }
@@ -1880,7 +1960,7 @@ export default function Home() {
 
     setShowAlertCenter(false);
 
-    setTimeout(() => {
+    scheduleTimeout(() => {
       const element = document.getElementById(headerId);
       if (element) {
         if (warningText) {
@@ -1897,7 +1977,7 @@ export default function Home() {
         // اگر بازگشت خودکار ثبت شده باشد، هایلایت تا رفع هشدار (یا انصراف کاربر)
         // باقی می‌ماند تا سرپرستار ستون را گم نکند؛ در غیر این صورت پس از ۶ ثانیه پاک می‌شود.
         if (!warningText) {
-          setTimeout(() => {
+          scheduleTimeout(() => {
             setHighlightedDay(current => (current === day ? null : current));
           }, 6000);
         }
@@ -1918,9 +1998,9 @@ export default function Home() {
     const shouldReopen = options.reopenAlertCenter ?? pending.reopenAlertCenter;
     if (shouldReopen) {
       // کمی صبر تا اسکرول نرم تمام شود، سپس پنجره هشدارها دوباره باز شود
-      setTimeout(() => setShowAlertCenter(true), 450);
+      scheduleTimeout(() => setShowAlertCenter(true), 450);
     }
-  }, []);
+  }, [scheduleTimeout]);
 
   const cancelAlertReturn = React.useCallback(() => {
     alertReturnRef.current = null;
@@ -1968,12 +2048,24 @@ export default function Home() {
 
   const alertCenterSchedule = displayedSchedule;
 
-  const getVisibleWarnings = () => {
+  /**
+   * هشدارهای فعال (نادیده‌گرفته‌نشده) برای نمایش در رابط کاربری.
+   *
+   * پیش‌تر این یک تابع معمولی بود که در هر رندر **سه بار** فراخوانی می‌شد
+   * (شرط نمایش نشان، شمارندهٔ داخل نشان و prop مرکز هشدارها) و هر بار کل آرایهٔ
+   * هشدارها را دو مرتبه فیلتر می‌کرد. با useMemo، محاسبه فقط وقتی تکرار می‌شود
+   * که ورودی‌ها واقعاً تغییر کرده باشند.
+   *
+   * مرجع پایدار آرایه یک مزیت دوم هم دارد: کامپوننت‌های فرزندی که این مقدار را
+   * می‌گیرند، با هر رندر یک prop «جدید» نمی‌بینند.
+   */
+  const visibleWarningsList = React.useMemo(() => {
     if (!alertCenterSchedule) return [];
-    const visible = filterActiveWarnings(alertCenterSchedule.warnings, dismissedWarnings)
+    return filterActiveWarnings(alertCenterSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
-    return visible;
-  };
+  }, [alertCenterSchedule, dismissedWarnings, dismissedAlertWarnings]);
+
+  const getVisibleWarnings = React.useCallback(() => visibleWarningsList, [visibleWarningsList]);
 
   const handleRestoreAllWarnings = async () => {
     setDismissedWarnings([]);
@@ -2655,15 +2747,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const monthKey = `${currentYear}_${currentMonth}`;
       const currentMonthSchedule =
@@ -2828,9 +2912,9 @@ export default function Home() {
         category: 'storage',
         severity: 'error',
         title: 'ذخیره‌سازی اطلاعات در فضای ابری ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در ذخیره‌سازی داده‌ها: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در ذخیره‌سازی داده‌ها: " + (toErrorMessage(error)));
       throw error;
     }
   };
@@ -2920,15 +3004,7 @@ export default function Home() {
     const nextDb = getFreshDbCopy();
     if (!nextDb.deptData) nextDb.deptData = {};
 
-    const oldDept = nextDb.deptData[deptId] || {
-      personnel: [],
-      requests: [],
-      settings_system: INITIAL_SETTINGS,
-      settings_credentials: { username: 'headnurse', password: '123456' },
-      holidays: {},
-      firstDayOfWeek: {},
-      schedules: {},
-    };
+    const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
     const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
     const nextGroup = updater((monthScenarios[group] || null) as ScenarioWorkflowGroup | null);
@@ -3147,7 +3223,7 @@ export default function Home() {
         category: 'solver',
         severity: 'error',
         title: `پردازش موتور هوشمند برای ${groupTitle} با خطا متوقف شد`,
-        detail: `ماه ${monthLabel} — ${err instanceof Error ? err.message : String(err)}`,
+        detail: `ماه ${monthLabel} — ${toErrorMessage(err)}`,
       });
       alert('خطا در تولید سناریوها');
       setSolvingTarget(null);
@@ -3173,15 +3249,7 @@ export default function Home() {
         const nextDb = getFreshDbCopy();
         if (!nextDb.deptData) nextDb.deptData = {};
 
-        const oldDept = nextDb.deptData[deptId] || {
-          personnel: [],
-          requests: [],
-          settings_system: INITIAL_SETTINGS,
-          settings_credentials: { username: 'headnurse', password: '123456' },
-          holidays: {},
-          firstDayOfWeek: {},
-          schedules: {},
-        };
+        const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
         const monthKeyLocal = `${currentYear}_${currentMonth}`;
         if (jobGroup === 'nurse') {
@@ -3388,15 +3456,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const existingSched = oldDept.schedules?.[key];
       if (!existingSched) {
@@ -3432,9 +3492,9 @@ export default function Home() {
         category: 'lock',
         severity: 'error',
         title: 'تغییر وضعیت قفل برنامه با خطا مواجه شد',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در تغییر وضعیت قفل: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در تغییر وضعیت قفل: " + (toErrorMessage(error)));
     }
   };
 
@@ -3448,15 +3508,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const existingSched = oldDept.schedules?.[key];
 
@@ -3487,9 +3539,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'تغییر وضعیت مهلت درخواست‌ها با خطا مواجه شد',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در تغییر وضعیت مهلت درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در تغییر وضعیت مهلت درخواست‌ها: " + (toErrorMessage(error)));
     }
   };
 
@@ -3502,15 +3554,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const existingSched = oldDept.schedules?.[key];
       if (!existingSched) return;
@@ -3617,7 +3661,7 @@ export default function Home() {
       setFormNationalId(result.nationalId || '');
     } catch (error) {
       console.error('Error loading personnel national ID:', error);
-      alert('کد ملی این پرسنل دریافت نشد: ' + (error instanceof Error ? error.message : String(error)));
+      alert('کد ملی این پرسنل دریافت نشد: ' + (toErrorMessage(error)));
     } finally {
       setIsLoadingPersonnelNationalId(false);
     }
@@ -3720,9 +3764,9 @@ export default function Home() {
         category: 'personnel',
         severity: 'error',
         title: 'ثبت اطلاعات پرسنل ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در ثبت اطلاعات پرسنل: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در ثبت اطلاعات پرسنل: " + (toErrorMessage(error)));
     } finally {
       personnelSaveLockRef.current = false;
     }
@@ -3753,9 +3797,9 @@ export default function Home() {
         category: 'personnel',
         severity: 'error',
         title: 'حذف پرسنل ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در حذف پرسنل: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در حذف پرسنل: " + (toErrorMessage(error)));
     } finally {
       personnelDeleteLockRef.current.delete(id);
     }
@@ -3853,9 +3897,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'ثبت درخواست فوری ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert('خطا در ثبت درخواست فوری: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در ثبت درخواست فوری: ' + (toErrorMessage(error)));
     } finally {
       setIsQuickRequestSubmitting(false);
     }
@@ -3939,9 +3983,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'ثبت درخواست تقویمی ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert('خطا در ثبت درخواست: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در ثبت درخواست: ' + (toErrorMessage(error)));
     } finally {
       setIsCalendarRequestSubmitting(false);
     }
@@ -4038,9 +4082,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'ثبت نهایی درخواست‌ها ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در ثبت نهایی درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در ثبت نهایی درخواست‌ها: " + (toErrorMessage(error)));
     }
   };
 
@@ -4169,7 +4213,7 @@ export default function Home() {
         setReqSelectedDays([]);
       } catch (error) {
         console.error("Error editing request:", error);
-        alert("خطا در ویرایش درخواست: " + (error instanceof Error ? error.message : String(error)));
+        alert("خطا در ویرایش درخواست: " + (toErrorMessage(error)));
       }
     } else {
       await handleFinalSubmitRequests();
@@ -4273,7 +4317,7 @@ export default function Home() {
       handleCloseRequestEditor();
     } catch (error) {
       console.error('Error editing request days:', error);
-      alert('خطا در ثبت ویرایش درخواست: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در ثبت ویرایش درخواست: ' + (toErrorMessage(error)));
     } finally {
       setIsSavingRequestEdit(false);
     }
@@ -4299,7 +4343,7 @@ export default function Home() {
       );
     } catch (error) {
       console.error("Error deleting request:", error);
-      alert("خطا در حذف درخواست: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در حذف درخواست: " + (toErrorMessage(error)));
     }
   };
 
@@ -4385,15 +4429,7 @@ export default function Home() {
           const nextDb = getFreshDbCopy();
           if (!nextDb.deptData) nextDb.deptData = {};
 
-          const oldDept = nextDb.deptData[deptId] || {
-            personnel: [],
-            requests: [],
-            settings_system: INITIAL_SETTINGS,
-            settings_credentials: { username: 'headnurse', password: '123456' },
-            holidays: {},
-            firstDayOfWeek: {},
-            schedules: {},
-          };
+          const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
           if (scenarioContext) {
             const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
@@ -4541,7 +4577,7 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Error setting manual shift change:', error);
-      alert('خطا در تغییر دستی شیفت: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در تغییر دستی شیفت: ' + (toErrorMessage(error)));
     }
   };
 
@@ -4563,7 +4599,7 @@ export default function Home() {
         category: 'settings',
         severity: 'error',
         title: 'ذخیره تنظیمات بخش ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
     }
   };
@@ -4603,7 +4639,7 @@ export default function Home() {
         category: 'calendar',
         severity: 'error',
         title: 'ثبت تغییر تقویم و تعطیلات ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
       throw error;
     }
@@ -4684,15 +4720,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       nextDb.deptData[deptId] = {
         ...oldDept,
@@ -4757,7 +4785,7 @@ export default function Home() {
         window.location.reload();
       }
     } catch (error) {
-      alert('خطا در حذف دائمی بخش: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در حذف دائمی بخش: ' + (toErrorMessage(error)));
     } finally {
       deleteDeptLockRef.current = false;
       setIsDeletingDept(false);
@@ -4804,7 +4832,7 @@ export default function Home() {
         window.location.reload();
       }
     } catch (error) {
-      alert('خطا در انتقال امن مدیریت بخش: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در انتقال امن مدیریت بخش: ' + (toErrorMessage(error)));
     } finally {
       transferDeptLockRef.current = false;
       setIsTransferringDept(false);
@@ -5137,7 +5165,7 @@ export default function Home() {
     setShowExportMenu(false);
 
     // کمی صبر تا React نسخه‌ی چاپی را کامل رندر و مرورگر آن را paint کند
-    window.setTimeout(() => {
+    scheduleTimeout(() => {
       const containerId = target === 'schedule' ? 'print-schedule-sheet' : 'print-request-cards';
       const container = document.getElementById(containerId);
       const bodyHtml = container?.outerHTML;
@@ -5247,7 +5275,11 @@ export default function Home() {
 
   if (role === 'guest') {
     const activeDept = departments.find(d => d.id === selectedDepartmentId);
-    const isNewDeptWithDefaults = activeDept?.username === 'headnurse' && activeDept?.password === '123456';
+    // تشخیص بخش‌های قدیمی که پیش از مهاجرت به احراز هویت Prisma ساخته شده‌اند.
+    // این فقط یک نشانهٔ نمایشی است (متن دکمهٔ ورود) و هیچ تصمیم امنیتی بر پایهٔ
+    // آن گرفته نمی‌شود؛ ورود واقعی همیشه از مسیر Prisma عبور می‌کند.
+    const isNewDeptWithDefaults = activeDept?.username === LEGACY_DEFAULT_DEPT_USERNAME
+      && activeDept?.password === LEGACY_DEFAULT_DEPT_PASSWORD;
 
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
@@ -7568,11 +7600,17 @@ export default function Home() {
 
               {/* لاگ‌ها و اتفاقات — سیستم اعتبار ۱۰۰ دلاری حذف شده است */}
               {role !== 'personnel' && (
-                <EventLogPanel
-                  events={eventLogs}
-                  monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
-                  userRole={role}
-                />
+                <ErrorBoundary
+                  label="event-log"
+                  title="نمایش «لاگ‌ها و اتفاقات» ممکن نشد"
+                  resetKeys={[currentYear, currentMonth, selectedDepartmentId]}
+                >
+                  <EventLogPanel
+                    events={eventLogs}
+                    monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
+                    userRole={role}
+                  />
+                </ErrorBoundary>
               )}
 
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="reports-table-container">
@@ -8728,21 +8766,31 @@ export default function Home() {
         parseNumberInput={parseNumberInput}
       />
 
-      <AlertCenter
-        isOpen={showAlertCenter && role === 'headnurse' && activeTab === 'schedule'}
-        onClose={() => setShowAlertCenter(false)}
-        allAlerts={allAlertsForDialog}
-        visibleWarningsCount={getVisibleWarnings().length}
-        dismissedAlertWarnings={dismissedAlertWarnings}
-        contextLabel={alertCenterContextLabel}
-        contextDescription={alertCenterContextDescription}
-        expandedSections={expandedAlertSections}
-        onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
-        onDismissAlert={handleDismissAlert}
-        onAlertClick={handleAlertClick}
-        onDayAlertClick={handleDayAlertClick}
-        extractWarningDay={extractWarningDay}
-      />
+      {/*
+        مرکز هشدارها دادهٔ مشتق‌شدهٔ پیچیده‌ای مصرف می‌کند؛ اگر شکل داده غیرمنتظره
+        باشد نباید کل جدول شیفت سرپرستار از دست برود.
+      */}
+      <ErrorBoundary
+        label="alert-center"
+        title="نمایش مرکز هشدارها ممکن نشد"
+        resetKeys={[currentYear, currentMonth, selectedDepartmentId]}
+      >
+        <AlertCenter
+          isOpen={showAlertCenter && role === 'headnurse' && activeTab === 'schedule'}
+          onClose={() => setShowAlertCenter(false)}
+          allAlerts={allAlertsForDialog}
+          visibleWarningsCount={getVisibleWarnings().length}
+          dismissedAlertWarnings={dismissedAlertWarnings}
+          contextLabel={alertCenterContextLabel}
+          contextDescription={alertCenterContextDescription}
+          expandedSections={expandedAlertSections}
+          onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
+          onDismissAlert={handleDismissAlert}
+          onAlertClick={handleAlertClick}
+          onDayAlertClick={handleDayAlertClick}
+          extractWarningDay={extractWarningDay}
+        />
+      </ErrorBoundary>
 
       {/* ====== نوار شناور بازگشت به موقعیت هشدار ====== */}
       {!showAlertCenter && (alertReturnAvailable || alertReturnToast) && (

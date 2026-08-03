@@ -10,6 +10,7 @@ import {
   StorageUnavailableError,
   StorageValidationError,
   writeResource,
+  readResourceIfExists,
   writeResourceResolvingConflict,
 } from '../../../lib/s3Storage';
 import { StorageResourceSchema, type StorageResource } from '../../../lib/storageSchemas';
@@ -17,8 +18,11 @@ import {
   AuthenticationError,
   requireCurrentUser,
 } from '../../../lib/auth/session';
-import type { AuthenticatedUser } from '../../../lib/auth/types';
 import { assertSameOrigin } from '../../../lib/auth/http';
+import {
+  assertRequestOwnership,
+  authorizeResourceWrite,
+} from '../../../lib/auth/resource-authorization';
 import { classifyDbError, describeDbError, isDatabaseError } from '../../../lib/db/errors';
 
 export const dynamic = 'force-dynamic';
@@ -94,34 +98,6 @@ function errorResponse(error: unknown) {
     code: 'INTERNAL_ERROR',
     error: 'خطای داخلی سرور',
   }, { status: 500 });
-}
-
-function authorizeResourceWrite(user: AuthenticatedUser, resource: StorageResource) {
-  if (user.role === 'ADMIN') return;
-  if (resource.type === 'departments') {
-    throw new AuthenticationError(403, 'فقط مدیر سامانه اجازه تغییر فهرست بخش‌ها را دارد.');
-  }
-  if (resource.type === 'activeScenarios') {
-    if (!user.departmentId || user.departmentId !== resource.departmentId) {
-      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-    }
-    if (user.role !== 'HEAD_NURSE') {
-      throw new AuthenticationError(403, 'فقط سرپرستار اجازه مدیریت سناریوها را دارد.');
-    }
-    return;
-  }
-  if (resource.type === 'scenarioVotes') {
-    if (!user.departmentId || user.departmentId !== resource.departmentId) {
-      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-    }
-    return;
-  }
-  if (!user.departmentId || user.departmentId !== resource.departmentId) {
-    throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-  }
-  if (user.role === 'PERSONNEL' && resource.type !== 'requests' && resource.type !== 'schedule') {
-    throw new AuthenticationError(403, 'پرسنل فقط اجازه ثبت درخواست‌های شیفت خود را دارند.');
-  }
 }
 
 /** اعتبارسنجی کلید ماه (`YYYY_M`) پیش از استفاده در مسیر شیء S3. */
@@ -232,7 +208,18 @@ export async function PUT(req: NextRequest) {
     }
 
     const { resource, data } = requestBody.data;
+    // مرحلهٔ ۱ — کنترل دسترسی در سطح نوع منبع (چه کسی اجازهٔ لمس این سند را دارد).
     authorizeResourceWrite(actor, resource);
+
+    // مرحلهٔ ۲ — کنترل مالکیت در سطح محتوا.
+    // سند «درخواست‌ها» آرایه‌ای مشترک برای کل بخش است؛ بدون این بررسی یک پرسنل
+    // می‌توانست نسخه‌ای بفرستد که درخواست‌های همکارانش در آن حذف یا دستکاری شده
+    // باشد. سند فعلی خوانده و با نسخهٔ پیشنهادی مقایسه می‌شود.
+    if (resource.type === 'requests' && actor.role === 'PERSONNEL') {
+      const committed = await readResourceIfExists(resource);
+      assertRequestOwnership(actor, committed?.data ?? [], data);
+    }
+
     const result = await writeResourceResolvingConflict(resource, data, ifMatch || null);
     const response = noStoreJson({
       success: true,

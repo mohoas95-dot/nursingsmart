@@ -27,6 +27,12 @@ The granular object layout, optimistic-locking contract, circuit breaker, and on
 
 PostgreSQL/Prisma setup, national-ID login, session security, first-login password change, and the head-nurse password-reset workflow are documented in [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
 
+## Code audit
+
+A full audit — duplicate code, error boundaries, memory leaks, re-render stability, and API authorization — is documented in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
+
+Authorization rules for storage resources live in `lib/auth/resource-authorization.ts` as pure, testable functions. **UI checks are never a security boundary**: every rule enforced in the client must also be enforced there.
+
 ## Performance
 
 Initial-load analysis — data-fetching waterfalls, lazy month loading, static asset optimization, and caching — is documented in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
