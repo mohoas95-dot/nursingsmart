@@ -10,6 +10,7 @@ import {
   StorageUnavailableError,
   StorageValidationError,
   writeResource,
+  readResourceIfExists,
   writeResourceResolvingConflict,
 } from '../../../lib/s3Storage';
 import { StorageResourceSchema, type StorageResource } from '../../../lib/storageSchemas';
@@ -17,8 +18,12 @@ import {
   AuthenticationError,
   requireCurrentUser,
 } from '../../../lib/auth/session';
-import type { AuthenticatedUser } from '../../../lib/auth/types';
 import { assertSameOrigin } from '../../../lib/auth/http';
+import {
+  assertRequestOwnership,
+  authorizeResourceWrite,
+} from '../../../lib/auth/resource-authorization';
+import { classifyDbError, describeDbError, isDatabaseError } from '../../../lib/db/errors';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -58,9 +63,31 @@ function errorResponse(error: unknown) {
       code: 'STORAGE_UNAVAILABLE',
       error: error.message,
       circuit: circuit.state,
+      // پیکربندی ناقص با تلاش مجدد درست نمی‌شود؛ فقط قطعی موقت گذراست.
+      retryable: error instanceof StorageUnavailableError,
     }, { status: 503 });
-    if (circuit.retryAfterMs > 0) {
-      response.headers.set('Retry-After', String(Math.max(1, Math.ceil(circuit.retryAfterMs / 1000))));
+    const retryAfterSeconds = circuit.retryAfterMs > 0
+      ? Math.max(1, Math.ceil(circuit.retryAfterMs / 1000))
+      : (error instanceof StorageUnavailableError ? 3 : 0);
+    if (retryAfterSeconds > 0) {
+      response.headers.set('Retry-After', String(retryAfterSeconds));
+    }
+    return response;
+  }
+
+  // احراز هویت این مسیر به پایگاه داده وابسته است، پس خطای گذرای دیتابیس هم
+  // ممکن است اینجا ظاهر شود و نباید به ۵۰۰ تبدیل گردد.
+  if (isDatabaseError(error)) {
+    const info = classifyDbError(error);
+    console.error('[storage-api] خطای پایگاه داده:', describeDbError(error));
+    const response = noStoreJson({
+      success: false,
+      code: info.retryable ? 'DB_TEMPORARILY_UNAVAILABLE' : `DB_${info.kind.toUpperCase()}`,
+      error: info.userMessage,
+      retryable: info.retryable,
+    }, { status: info.httpStatus });
+    if (info.retryAfterSeconds) {
+      response.headers.set('Retry-After', String(info.retryAfterSeconds));
     }
     return response;
   }
@@ -73,44 +100,53 @@ function errorResponse(error: unknown) {
   }, { status: 500 });
 }
 
-function authorizeResourceWrite(user: AuthenticatedUser, resource: StorageResource) {
-  if (user.role === 'ADMIN') return;
-  if (resource.type === 'departments') {
-    throw new AuthenticationError(403, 'فقط مدیر سامانه اجازه تغییر فهرست بخش‌ها را دارد.');
-  }
-  if (resource.type === 'activeScenarios') {
-    if (!user.departmentId || user.departmentId !== resource.departmentId) {
-      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-    }
-    if (user.role !== 'HEAD_NURSE') {
-      throw new AuthenticationError(403, 'فقط سرپرستار اجازه مدیریت سناریوها را دارد.');
-    }
-    return;
-  }
-  if (resource.type === 'scenarioVotes') {
-    if (!user.departmentId || user.departmentId !== resource.departmentId) {
-      throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-    }
-    return;
-  }
-  if (!user.departmentId || user.departmentId !== resource.departmentId) {
-    throw new AuthenticationError(403, 'اجازه تغییر اطلاعات این بخش را ندارید.');
-  }
-  if (user.role === 'PERSONNEL' && resource.type !== 'requests' && resource.type !== 'schedule') {
-    throw new AuthenticationError(403, 'پرسنل فقط اجازه ثبت درخواست‌های شیفت خود را دارند.');
-  }
-}
+/** اعتبارسنجی کلید ماه (`YYYY_M`) پیش از استفاده در مسیر شیء S3. */
+const MONTH_KEY_PATTERN = /^\d{4}_(?:[1-9]|1[0-2])$/;
 
-export async function GET() {
+/**
+ * دریافت وضعیت پایگاه داده.
+ *
+ * پارامتر اختیاری `months` (جداشده با کاما، مثل `?months=1404_5,1404_6`) دامنهٔ
+ * برنامه‌های ماهانهٔ بارگذاری‌شده را محدود می‌کند.
+ *
+ * ── چرا این تغییر ضروری بود؟ ────────────────────────────────────────────────
+ * پیش‌تر این مسیر **همهٔ** برنامه‌های ماهانهٔ تاریخچه را می‌خواند. بخشی با دو سال
+ * سابقه ۲۴ سند دارد و هر سند شامل تخصیص شیفت تمام پرسنل، هشدارها و لاگ
+ * رویدادهاست. یعنی هر بار تازه‌سازی صفحه ممکن بود صدها کیلوبایت داده‌ای دانلود
+ * شود که رابط کاربری هرگز نمایش نمی‌دهد — چون فقط ماه جاری دیده می‌شود.
+ *
+ * اکنون کلاینت فقط ماه‌های موردنیازش را می‌خواهد و `availableMonths` به او
+ * می‌گوید چه ماه‌های دیگری وجود دارد تا در صورت نیاز آن‌ها را تنبل بگیرد.
+ * برای سازگاری عقب‌رو، نبودِ پارامتر یعنی «همه» (مسیر مهاجرت/صادرات).
+ */
+export async function GET(req: NextRequest) {
   try {
     const actor = await requireCurrentUser();
     if (actor.role !== 'ADMIN' && !actor.departmentId) {
       throw new AuthenticationError(403, 'برای حساب کاربری بخش مشخص نشده است.');
     }
+
+    const monthsParam = req.nextUrl.searchParams.get('months');
+    let monthKeys: string[] | undefined;
+    if (monthsParam !== null) {
+      const requested = monthsParam.split(',').map(value => value.trim()).filter(Boolean);
+      // کلیدهای بدشکل رد می‌شوند تا هیچ ورودی کاربر مستقیماً به مسیر شیء نرود.
+      if (requested.some(monthKey => !MONTH_KEY_PATTERN.test(monthKey))) {
+        return noStoreJson({
+          success: false,
+          code: 'INVALID_MONTH_KEY',
+          error: 'قالب کلید ماه نامعتبر است.',
+        }, { status: 400 });
+      }
+      // سقف حفاظتی: جلوگیری از درخواست عمدی صدها ماه در یک فراخوانی.
+      monthKeys = requested.slice(0, 24);
+    }
+
     const { bucket, environment } = getS3Client();
-    const result = await readDatabaseState(actor.role === 'ADMIN'
-      ? undefined
-      : { departmentIds: [actor.departmentId!] });
+    const result = await readDatabaseState({
+      ...(actor.role === 'ADMIN' ? {} : { departmentIds: [actor.departmentId!] }),
+      ...(monthKeys ? { monthKeys } : {}),
+    });
     return noStoreJson({
       success: true,
       isConfigured: true,
@@ -119,6 +155,8 @@ export async function GET() {
       source: result.source,
       state: result.state,
       versions: result.versions,
+      availableMonths: result.availableMonths,
+      loadedMonths: result.loadedMonths,
     });
   } catch (error) {
     return errorResponse(error);
@@ -170,7 +208,18 @@ export async function PUT(req: NextRequest) {
     }
 
     const { resource, data } = requestBody.data;
+    // مرحلهٔ ۱ — کنترل دسترسی در سطح نوع منبع (چه کسی اجازهٔ لمس این سند را دارد).
     authorizeResourceWrite(actor, resource);
+
+    // مرحلهٔ ۲ — کنترل مالکیت در سطح محتوا.
+    // سند «درخواست‌ها» آرایه‌ای مشترک برای کل بخش است؛ بدون این بررسی یک پرسنل
+    // می‌توانست نسخه‌ای بفرستد که درخواست‌های همکارانش در آن حذف یا دستکاری شده
+    // باشد. سند فعلی خوانده و با نسخهٔ پیشنهادی مقایسه می‌شود.
+    if (resource.type === 'requests' && actor.role === 'PERSONNEL') {
+      const committed = await readResourceIfExists(resource);
+      assertRequestOwnership(actor, committed?.data ?? [], data);
+    }
+
     const result = await writeResourceResolvingConflict(resource, data, ifMatch || null);
     const response = noStoreJson({
       success: true,

@@ -1,7 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BellRing, KeyRound, Loader2, RefreshCw, UserPlus } from 'lucide-react';
+import { fetchJson } from '../../../lib/http/resilient-fetch';
+import { useSubmitGuard } from '../../../features/shared/hooks/useSubmitGuard';
 
 type ResetRequestUser = {
   id: string;
@@ -21,22 +23,55 @@ export function ResetRequestList() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // ── محافظت در برابر بارگذاری‌های هم‌زمان ────────────────────────────────────
+  // این فهرست هم با تایمر (هر ۲۰ ثانیه)، هم با focus پنجره و هم با دکمهٔ
+  // «تازه‌سازی» بارگذاری می‌شد. چند فراخوانی هم‌پوشان می‌توانستند پاسخ‌ها را
+  // خارج از ترتیب برگردانند و فهرستی کهنه را روی فهرست تازه بنشانند.
+  //  - inFlightRef: از اجرای هم‌زمان جلوگیری می‌کند.
+  //  - generationRef: فقط پاسخ آخرین درخواست اجازهٔ نوشتن در state را دارد.
+  //  - abortRef: درخواست قبلی هنگام unmount لغو می‌شود.
+  const inFlightRef = useRef(false);
+  const generationRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
+
   const load = useCallback(async (isManual = false) => {
+    if (inFlightRef.current && !isManual) return;
+    inFlightRef.current = true;
+    const generation = ++generationRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setError('');
     setLoading(true);
     try {
-      const response = await fetch('/api/head-nurse/reset-requests', { cache: 'no-store' });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'دریافت درخواست‌ها ناموفق بود.');
+      const result = await fetchJson<{ users: ResetRequestUser[] }>('/api/head-nurse/reset-requests', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      // پاسخ کهنه (درخواست جدیدتری آغاز شده) نادیده گرفته می‌شود.
+      if (generation !== generationRef.current || !mountedRef.current) return;
       setUsers(result.users);
       if (isManual) {
         setMessage('فهرست درخواست‌ها با موفقیت به‌روزرسانی شد.');
-        setTimeout(() => setMessage(''), 3000);
+        setTimeout(() => { if (mountedRef.current) setMessage(''); }, 3000);
       }
     } catch (reason) {
+      if (reason instanceof DOMException && reason.name === 'AbortError') return;
+      if (generation !== generationRef.current || !mountedRef.current) return;
       setError(reason instanceof Error ? reason.message : 'خطا در دریافت درخواست‌ها.');
     } finally {
-      setLoading(false);
+      inFlightRef.current = false;
+      if (generation === generationRef.current && mountedRef.current) setLoading(false);
     }
   }, []);
 
@@ -53,22 +88,33 @@ export function ResetRequestList() {
     };
   }, [load]);
 
-  const resetPassword = async (user: ResetRequestUser) => {
-    if (!window.confirm(`رمز عبور ${user.firstName} ${user.lastName} به ۱۲۳۴ بازنشانی شود؟`)) return;
+  // بازنشانی رمز از طریق محافظ ارسال اجرا می‌شود: دو کلیک سریع روی یک ردیف
+  // (یا روی دو ردیف مختلف) دیگر دو درخواست هم‌زمان تولید نمی‌کند.
+  const resetGuard = useSubmitGuard(async (user: ResetRequestUser) => {
     setResettingId(user.id);
     setError('');
     setMessage('');
     try {
-      const response = await fetch(`/api/head-nurse/reset-requests/${user.id}`, { method: 'PATCH' });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'بازنشانی رمز انجام نشد.');
+      const result = await fetchJson<{ message?: string }>(
+        `/api/head-nurse/reset-requests/${encodeURIComponent(user.id)}`,
+        { method: 'PATCH' },
+      );
+      if (!mountedRef.current) return;
       setUsers(current => current.filter(item => item.id !== user.id));
       setMessage(result.message || 'رمز عبور با موفقیت بازنشانی شد.');
     } catch (reason) {
+      if (!mountedRef.current) return;
       setError(reason instanceof Error ? reason.message : 'خطا در بازنشانی رمز عبور.');
+      // وضعیت سرور ممکن است تغییر کرده باشد؛ فهرست دوباره همگام می‌شود.
+      void load();
     } finally {
-      setResettingId(null);
+      if (mountedRef.current) setResettingId(null);
     }
+  });
+
+  const resetPassword = async (user: ResetRequestUser) => {
+    if (!window.confirm(`رمز عبور ${user.firstName} ${user.lastName} به ۱۲۳۴ بازنشانی شود؟`)) return;
+    await resetGuard.run(user);
   };
 
   return (
@@ -117,7 +163,7 @@ export function ResetRequestList() {
                 )}
               </div>
             </div>
-            <button type="button" onClick={() => void resetPassword(user)} disabled={resettingId !== null} className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60">
+            <button type="button" onClick={() => void resetPassword(user)} disabled={resettingId !== null || resetGuard.isRunning} className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:opacity-60">
               {resettingId === user.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
               بازنشانی رمز عبور
             </button>

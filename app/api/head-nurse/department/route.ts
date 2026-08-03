@@ -8,7 +8,9 @@ import {
   requireCurrentUser,
 } from '../../../../lib/auth/session';
 import { NationalIdSchema, PasswordInputSchema } from '../../../../lib/auth/validation';
-import { prisma } from '../../../../lib/prisma';
+import { dbRead, runInTransaction, withMutex } from '../../../../lib/db';
+import { registerFailedAttempt } from '../../../../lib/auth/failedAttempts';
+import { invalidateDepartmentCache } from '../../../../lib/cache/department-index';
 import {
   deleteDepartmentStorage,
   departmentExistsInIndex,
@@ -22,27 +24,11 @@ import {
 // تعطیلات و تمام شیفت‌های ماهانه) و تمام رکوردهای پایگاه‌داده (کاربران و نشست‌ها)
 // مرتبط با بخش برای همیشه پاک می‌شوند. این عملیات غیرقابل بازگشت است.
 
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_MINUTES = 15;
-
 const DeleteDepartmentSchema = z.object({
   nationalId: NationalIdSchema,
   password: PasswordInputSchema,
   departmentId: z.string().min(1).max(128).optional(),
 }).strict();
-
-async function registerFailedAttempt(userId: string, currentAttempts: number, lockedUntil: Date | null) {
-  const attempts = currentAttempts + 1;
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      failedLoginAttempts: attempts >= MAX_FAILED_ATTEMPTS ? 0 : attempts,
-      lockedUntil: attempts >= MAX_FAILED_ATTEMPTS
-        ? new Date(Date.now() + LOCK_MINUTES * 60_000)
-        : lockedUntil,
-    },
-  });
-}
 
 export async function DELETE(request: NextRequest) {
   try {
@@ -57,67 +43,103 @@ export async function DELETE(request: NextRequest) {
       throw new AuthenticationError(403, 'برای حذف، بخش موردنظر مشخص نشده است.');
     }
 
-    // احراز هویت مجدد اجباری: کد ملی واردشده باید دقیقاً متعلق به همان کاربر نشست فعلی باشد.
-    const reAuthUser = await prisma.user.findUnique({ where: { nationalId: input.nationalId } });
-    const passwordIsValid = await verifyPassword(input.password, reAuthUser?.passwordHash);
-    const isSameIdentity = !!reAuthUser && reAuthUser.id === actor.id && reAuthUser.active;
-    if (!isSameIdentity || !passwordIsValid) {
-      if (reAuthUser && reAuthUser.id === actor.id) {
-        await registerFailedAttempt(reAuthUser.id, reAuthUser.failedLoginAttempts, reAuthUser.lockedUntil);
-      }
-      return authJson({ success: false, error: 'احراز هویت مجدد ناموفق بود؛ کد ملی یا رمز عبور نادرست است.' }, { status: 401 });
-    }
-    if (reAuthUser.lockedUntil && reAuthUser.lockedUntil > new Date()) {
-      return authJson({
-        success: false,
-        error: 'به‌دلیل تلاش‌های ناموفق، این حساب موقتاً مسدود شده است. کمی بعد دوباره تلاش کنید.',
-      }, { status: 429 });
-    }
+    // حذف بخش عملیاتی طولانی (پاک‌سازی ابری + پایگاه داده) و غیرقابل بازگشت است.
+    // دو ارسال هم‌زمان فرم باعث می‌شد نیمی از اسناد توسط یک درخواست و نیم دیگر
+    // توسط درخواست دوم حذف شود و پیام‌های خطای متناقض تولید گردد.
+    return await withMutex(`department-delete:${targetDepartmentId}`, () =>
+      performDelete(actor, input, targetDepartmentId));
+  } catch (error) {
+    return departmentErrorResponse(error);
+  }
+}
 
-    if (!(await departmentExistsInIndex(targetDepartmentId))) {
-      return authJson({ success: false, error: 'بخش موردنظر در فهرست بخش‌ها یافت نشد.' }, { status: 404 });
+async function performDelete(
+  actor: Awaited<ReturnType<typeof requireCurrentUser>>,
+  input: z.infer<typeof DeleteDepartmentSchema>,
+  targetDepartmentId: string,
+) {
+  // احراز هویت مجدد اجباری: کد ملی واردشده باید دقیقاً متعلق به همان کاربر نشست فعلی باشد.
+  const reAuthUser = await dbRead(
+    client => client.user.findUnique({ where: { nationalId: input.nationalId } }),
+    { label: 'department-delete-reauth' },
+  );
+  const passwordIsValid = await verifyPassword(input.password, reAuthUser?.passwordHash);
+  const isSameIdentity = !!reAuthUser && reAuthUser.id === actor.id && reAuthUser.active;
+  if (!isSameIdentity || !passwordIsValid) {
+    if (reAuthUser && reAuthUser.id === actor.id) {
+      await registerFailedAttempt(reAuthUser.id);
     }
+    return authJson({ success: false, error: 'احراز هویت مجدد ناموفق بود؛ کد ملی یا رمز عبور نادرست است.' }, { status: 401 });
+  }
+  if (reAuthUser.lockedUntil && reAuthUser.lockedUntil > new Date()) {
+    return authJson({
+      success: false,
+      error: 'به‌دلیل تلاش‌های ناموفق، این حساب موقتاً مسدود شده است. کمی بعد دوباره تلاش کنید.',
+    }, { status: 429 });
+  }
 
-    // ابتدا اسناد ابری بخش به‌صورت دائمی پاک می‌شوند؛ اگر این مرحله خطا بدهد، حساب‌های
-    // کاربری دست‌نخورده باقی می‌مانند و امکان تلاش مجدد وجود دارد.
-    await deleteDepartmentStorage(targetDepartmentId);
+  if (!(await departmentExistsInIndex(targetDepartmentId))) {
+    return authJson({ success: false, error: 'بخش موردنظر در فهرست بخش‌ها یافت نشد.' }, { status: 404 });
+  }
 
-    // سپس تمام رکوردهای پایگاه‌داده مرتبط با بخش (نشست‌ها و کاربران) حذف قطعی می‌شوند.
-    const departmentUsers = await prisma.user.findMany({
+  // ابتدا اسناد ابری بخش به‌صورت دائمی پاک می‌شوند؛ اگر این مرحله خطا بدهد، حساب‌های
+  // کاربری دست‌نخورده باقی می‌مانند و امکان تلاش مجدد وجود دارد.
+  await deleteDepartmentStorage(targetDepartmentId);
+  // بخش حذف شد؛ کش فهرست عمومی بلافاصله باطل می‌شود تا بخشِ پاک‌شده در صفحهٔ
+  // ورود نمایش داده نشود.
+  invalidateDepartmentCache();
+
+  // سپس تمام رکوردهای پایگاه‌داده مرتبط با بخش (نشست‌ها و کاربران) حذف قطعی می‌شوند.
+  //
+  // پیش‌تر فهرست کاربران بیرون از تراکنش خوانده می‌شد و سپس نشست‌ها بر اساس آن
+  // فهرستِ احتمالاً کهنه حذف می‌گردید: کاربری که در همان فاصله به بخش اضافه
+  // می‌شد، حسابش حذف ولی نشست فعالش باقی می‌ماند. اکنون خواندن و هر دو حذف در
+  // یک تراکنش اتمیک و بر پایهٔ رابطهٔ خود بخش انجام می‌شود.
+  const removedAccounts = await runInTransaction(async (tx) => {
+    const departmentUsers = await tx.user.findMany({
       where: { departmentId: targetDepartmentId },
       select: { id: true },
     });
     const userIds = departmentUsers.map((user: { id: string }) => user.id);
-    await prisma.$transaction([
-      prisma.session.deleteMany({ where: { userId: { in: userIds } } }),
-      prisma.user.deleteMany({ where: { departmentId: targetDepartmentId } }),
-    ]);
+    if (userIds.length > 0) {
+      await tx.session.deleteMany({ where: { userId: { in: userIds } } });
+      await tx.user.deleteMany({ where: { id: { in: userIds } } });
+    }
+    return userIds.length;
+  }, { label: 'department-delete-accounts', timeout: 30_000 });
 
-    // اگر مدیر، بخش خودش را حذف کرده، نشست او بلافاصله ابطال می‌شود.
-    if (actor.departmentId === targetDepartmentId) {
-      await destroyCurrentSession().catch(() => undefined);
-    }
-
-    return authJson({
-      success: true,
-      deletedDepartmentId: targetDepartmentId,
-      removedAccounts: userIds.length,
-      ownAccountRemoved: actor.departmentId === targetDepartmentId,
-      message: 'بخش و تمام سوابق و حساب‌های مرتبط با آن به‌صورت دائمی حذف شد.',
-    });
-  } catch (error) {
-    if (error instanceof StorageConflictError) {
-      return authJson({ success: false, error: 'خطای همزمانی در حذف اطلاعات ابری بخش؛ لطفاً دوباره تلاش کنید.' }, { status: 409 });
-    }
-    if (error instanceof StorageValidationError) {
-      return authJson({ success: false, error: 'خطای اعتبارسنجی در اطلاعات ذخیره‌شده بخش.' }, { status: 422 });
-    }
-    if (error instanceof StorageUnavailableError) {
-      return authJson({ success: false, error: 'فضای ذخیره‌سازی ابری موقتاً در دسترس نیست؛ لطفاً کمی بعد دوباره تلاش کنید.' }, { status: 503 });
-    }
-    if (error instanceof StorageConfigurationError) {
-      return authJson({ success: false, error: 'پیکربندی فضای ذخیره‌سازی ابری ناقص یا اشتباه است.' }, { status: 503 });
-    }
-    return authErrorResponse(error);
+  // اگر مدیر، بخش خودش را حذف کرده، نشست او بلافاصله ابطال می‌شود.
+  const ownAccountRemoved = actor.departmentId === targetDepartmentId;
+  if (ownAccountRemoved) {
+    await destroyCurrentSession().catch(() => undefined);
   }
+
+  return authJson({
+    success: true,
+    deletedDepartmentId: targetDepartmentId,
+    removedAccounts,
+    ownAccountRemoved,
+    message: 'بخش و تمام سوابق و حساب‌های مرتبط با آن به‌صورت دائمی حذف شد.',
+  });
+}
+
+/** تبدیل خطاهای ذخیره‌سازی ابری و پایگاه داده به پاسخ استاندارد و امن. */
+function departmentErrorResponse(error: unknown) {
+  if (error instanceof StorageConflictError) {
+    const response = authJson({ success: false, error: 'خطای همزمانی در حذف اطلاعات ابری بخش؛ لطفاً دوباره تلاش کنید.', retryable: true }, { status: 409 });
+    response.headers.set('Retry-After', '2');
+    return response;
+  }
+  if (error instanceof StorageValidationError) {
+    return authJson({ success: false, error: 'خطای اعتبارسنجی در اطلاعات ذخیره‌شده بخش.' }, { status: 422 });
+  }
+  if (error instanceof StorageUnavailableError) {
+    const response = authJson({ success: false, error: 'فضای ذخیره‌سازی ابری موقتاً در دسترس نیست؛ لطفاً کمی بعد دوباره تلاش کنید.', retryable: true }, { status: 503 });
+    response.headers.set('Retry-After', '5');
+    return response;
+  }
+  if (error instanceof StorageConfigurationError) {
+    return authJson({ success: false, error: 'پیکربندی فضای ذخیره‌سازی ابری ناقص یا اشتباه است.' }, { status: 503 });
+  }
+  return authErrorResponse(error);
 }

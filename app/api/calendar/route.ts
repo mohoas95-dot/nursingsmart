@@ -6,6 +6,16 @@ export const dynamic = 'force-dynamic';
 
 interface HolidayRules { holidays: { jalali: [number, number][]; hijri: [number, number][] } }
 const cache = new Map<string, { expires: number; value: unknown }>();
+
+/**
+ * درخواست‌های در حال اجرا، به تفکیک ماه.
+ *
+ * بدون این نگاشت، وقتی چند کاربر (یا چند تب) هم‌زمان یک ماه را باز می‌کردند، هر
+ * درخواست یک بار کامل چهار منبع بیرونی را واکشی می‌کرد (cache stampede). این هم
+ * منابع بیرونی را زیر فشار می‌گذاشت و هم پاسخ همه را کند می‌کرد. اکنون فقط اولین
+ * درخواست واقعاً واکشی می‌کند و بقیه به همان Promise می‌پیوندند.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
 const SOURCES = {
   holidays: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/holidays-iran.json',
   jalali: 'https://raw.githubusercontent.com/ilius/starcal/master/plugins/iran-jalali-data.txt',
@@ -87,17 +97,44 @@ export async function GET(request: NextRequest) {
   const cached = cache.get(key);
   if (cached && cached.expires > Date.now()) return NextResponse.json(cached.value);
 
+  // درخواست هم‌زمان برای همان ماه به واکشی در حال اجرا می‌پیوندد.
+  const pending = inFlight.get(key);
+  if (pending) {
+    try {
+      const value = await pending;
+      return NextResponse.json(value, {
+        headers: { 'Cache-Control': 'public, s-maxage=43200, stale-while-revalidate=86400' },
+      });
+    } catch {
+      return NextResponse.json({ error: 'منبع رسمی تقویم در دسترس نیست.' }, { status: 503, headers: { 'Retry-After': '10' } });
+    }
+  }
+
+  const work = buildMonth(year, month);
+  inFlight.set(key, work);
   try {
-    // منابع به‌صورت موازی دریافت می‌شوند؛ باحساب مرجع اصلی تاریخ‌های قمری متغیر است.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const value = await work;
+    cache.set(key, { expires: Date.now() + 12 * 60 * 60 * 1000, value });
+    return NextResponse.json(value, { headers: { 'Cache-Control': 'public, s-maxage=43200, stale-while-revalidate=86400' } });
+  } catch {
+    return NextResponse.json({ error: 'منبع رسمی تقویم در دسترس نیست.' }, { status: 503, headers: { 'Retry-After': '10' } });
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/** واکشی و ساخت داده‌های یک ماه از منابع رسمی. */
+async function buildMonth(year: number, month: number) {
+  // منابع به‌صورت موازی دریافت می‌شوند؛ باحساب مرجع اصلی تاریخ‌های قمری متغیر است.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
     const [rulesText, jalaliText, hijriText, bahesabText] = await Promise.all([
       fetchText(SOURCES.holidays, controller.signal),
       fetchText(SOURCES.jalali, controller.signal),
       fetchText(SOURCES.hijri, controller.signal),
       fetchText(SOURCES.bahesab, controller.signal).catch(() => null)
     ]);
-    clearTimeout(timeout);
 
     const rules = JSON.parse(rulesText) as HolidayRules;
     const jalaliEvents = parseEvents(jalaliText);
@@ -125,16 +162,16 @@ export async function GET(request: NextRequest) {
     const finalHolidays = bahesabMonth?.holidays || holidays;
     const finalOccasions = bahesabMonth?.occasions || occasions;
 
-    const value = {
+    return {
       year, month, holidays: finalHolidays, occasions: finalOccasions,
       firstDayOfWeek: iranWeekday(year, month, 1),
       source: bahesabMonth ? 'bahesab.ir/time/calendar' : 'شورای مرکز تقویم مؤسسه ژئوفیزیک دانشگاه تهران / StarCalendar',
       online: true,
       syncedAt: new Date().toISOString()
     };
-    cache.set(key, { expires: Date.now() + 12 * 60 * 60 * 1000, value });
-    return NextResponse.json(value, { headers: { 'Cache-Control': 'public, s-maxage=43200, stale-while-revalidate=86400' } });
-  } catch {
-    return NextResponse.json({ error: 'منبع رسمی تقویم در دسترس نیست.' }, { status: 503, headers: { 'Retry-After': '10' } });
+  } finally {
+    // تایمر همیشه پاک می‌شود؛ پیش‌تر در مسیر خطا باقی می‌ماند و پس از ۸ ثانیه
+    // یک AbortController مرده را لغو می‌کرد (نشت تایمر در هر درخواست ناموفق).
+    clearTimeout(timeout);
   }
 }

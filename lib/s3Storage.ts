@@ -264,6 +264,28 @@ export interface DatabaseReadResult {
   state: AppDatabaseState;
   versions: Record<string, string>;
   source: 's3-granular';
+  /**
+   * فهرست کامل ماه‌های موجود در ذخیره‌سازی، به تفکیک بخش — حتی ماه‌هایی که در
+   * این پاسخ بارگذاری نشده‌اند. کلاینت با این فهرست می‌داند کدام ماه‌ها وجود
+   * دارند (برای ناوبری تقویم) بدون آنکه محتوای آن‌ها را دانلود کند.
+   */
+  availableMonths: Record<string, string[]>;
+  /** ماه‌هایی که واقعاً در این پاسخ بارگذاری شده‌اند، به تفکیک بخش. */
+  loadedMonths: Record<string, string[]>;
+}
+
+export interface ReadDatabaseOptions {
+  departmentIds?: string[];
+  /**
+   * فقط این ماه‌ها بارگذاری شوند (کلید `YYYY_M`). اگر تعیین نشود همهٔ ماه‌ها
+   * خوانده می‌شوند — رفتار قدیمی که فقط برای مهاجرت/صادرات لازم است.
+   *
+   * چرا این گزینه حیاتی است؟ برنامهٔ هر ماه می‌تواند ده‌ها کیلوبایت باشد
+   * (تخصیص شیفت همهٔ پرسنل + هشدارها + لاگ رویدادها). بخشی که دو سال سابقه
+   * دارد ۲۴ سند دارد و بارگذاری اولیه همهٔ آن‌ها را دانلود می‌کرد، در حالی که
+   * رابط کاربری فقط ماه جاری را نمایش می‌دهد.
+   */
+  monthKeys?: string[];
 }
 
 async function readDepartmentIndexOptional(): Promise<{ data: Array<{ id: string; name: string; username?: string; password?: string }>; etag: string } | null> {
@@ -407,8 +429,11 @@ export async function deleteDepartmentStorage(departmentId: string): Promise<voi
   }
 }
 
-export async function readDatabaseState(options?: { departmentIds?: string[] }): Promise<DatabaseReadResult> {
+export async function readDatabaseState(options?: ReadDatabaseOptions): Promise<DatabaseReadResult> {
   const versions: Record<string, string> = {};
+  const availableMonths: Record<string, string[]> = {};
+  const loadedMonths: Record<string, string[]> = {};
+  const requestedMonths = options?.monthKeys ? new Set(options.monthKeys) : null;
   const indexResource = { type: 'departments' } as const;
   const index = await readDocument(indexResource, DepartmentsSchema);
   versions[resourceVersionId(indexResource)] = index.etag;
@@ -430,13 +455,25 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
     const activeScenariosResource = { type: 'activeScenarios', departmentId } as const;
     const scenarioVotesResource = { type: 'scenarioVotes', departmentId } as const;
 
-    const [personnel, requests, settings, holidays, firstDayOfWeek, scheduleKeys] = await Promise.all([
+    // همهٔ اسناد پایهٔ بخش به‌همراه دو سند اختیاری سناریو، در یک موج موازی
+    // خوانده می‌شوند.
+    //
+    // پیش‌تر `activeScenarios` و `scenarioVotes` با دو `await` جداگانه و پشت سر
+    // هم خوانده می‌شدند؛ یعنی دو رفت‌وبرگشت کامل شبکه که بی‌دلیل به‌صورت سریالی
+    // به انتهای مسیر بحرانی اضافه می‌شد. حالا هزینهٔ آن‌ها صفر است چون در همان
+    // موج اول جا می‌گیرند.
+    const [
+      personnel, requests, settings, holidays, firstDayOfWeek, scheduleKeys,
+      activeScenariosDoc, scenarioVotesDoc,
+    ] = await Promise.all([
       readDocument(personnelResource, PersonnelListSchema),
       readDocument(requestsResource, RequestsSchema),
       readDocument(settingsResource, DepartmentSettingsSchema),
       readDocument(holidaysResource, HolidaysSchema),
       readDocument(firstDayResource, FirstDayOfWeekSchema),
       listScheduleMonthKeys(departmentId),
+      readResourceIfExists(activeScenariosResource),
+      readResourceIfExists(scenarioVotesResource),
     ]);
 
     versions[resourceVersionId(personnelResource)] = personnel.etag;
@@ -446,8 +483,6 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
     versions[resourceVersionId(firstDayResource)] = firstDayOfWeek.etag;
 
     // activeScenarios and scenarioVotes are optional granular docs — may not exist for old departments; treat missing as undefined so first write uses If-None-Match
-    const activeScenariosDoc = await readResourceIfExists(activeScenariosResource);
-    const scenarioVotesDoc = await readResourceIfExists(scenarioVotesResource);
     let activeScenariosData: any = undefined;
     let scenarioVotesData: any = undefined;
     if (activeScenariosDoc) {
@@ -469,7 +504,16 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
       }
     }
 
-    const schedulePairs = await Promise.all(scheduleKeys.map(async (monthKey) => {
+    // فقط ماه‌های درخواست‌شده بارگذاری می‌شوند. فهرست کامل ماه‌های موجود جداگانه
+    // برگردانده می‌شود تا رابط کاربری بداند چه چیزی در دسترس است و بتواند ماه‌های
+    // دیگر را در صورت نیاز به‌صورت تنبل (lazy) بگیرد.
+    availableMonths[departmentId] = [...scheduleKeys].sort();
+    const monthKeysToLoad = requestedMonths
+      ? scheduleKeys.filter(monthKey => requestedMonths.has(monthKey))
+      : scheduleKeys;
+    loadedMonths[departmentId] = [...monthKeysToLoad].sort();
+
+    const schedulePairs = await Promise.all(monthKeysToLoad.map(async (monthKey) => {
       const resource = { type: 'schedule', departmentId, monthKey } as const;
       const schedule = await readDocument(resource, MonthlyScheduleSchema);
       if (`${schedule.data.year}_${schedule.data.month}` !== monthKey) {
@@ -500,7 +544,7 @@ export async function readDatabaseState(options?: { departmentIds?: string[] }):
       cause: new StorageValidationError(state.error.issues),
     });
   }
-  return { state: state.data, versions, source: 's3-granular' };
+  return { state: state.data, versions, source: 's3-granular', availableMonths, loadedMonths };
 }
 
 export async function writeResource(
@@ -553,7 +597,7 @@ export async function writeResource(
  * Read the current committed value of a resource without failing when the
  * object is absent. Returns `null` when the key does not exist.
  */
-async function readResourceIfExists(
+export async function readResourceIfExists(
   resource: StorageResource,
 ): Promise<{ data: unknown; etag: string } | null> {
   beforeStorageCall();

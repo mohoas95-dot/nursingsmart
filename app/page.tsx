@@ -113,10 +113,13 @@ import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/schedu
 import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
 import { RequestCardStack } from '../features/requests/components/RequestCardStack';
 import { printHtmlSnapshot } from '../lib/print/print-snapshot';
+import { fetchJson, resilientFetch } from '../lib/http/resilient-fetch';
+import { useSubmitGuard } from '../features/shared/hooks/useSubmitGuard';
 
 import { ProfileSection } from '../features/profile/components/ProfileSection';
 import { DeleteConfirmModal } from '../features/shared/components/DeleteConfirmModal';
 import { BusyOverlay } from '../features/shared/components/BusyOverlay';
+import { ErrorBoundary } from '../features/shared/components/ErrorBoundary';
 import { EventLogPanel } from '../features/reports/components/EventLogPanel';
 import { useTaskProgress } from '../features/shared/hooks/useTaskProgress';
 import {
@@ -291,6 +294,85 @@ function inferGenderFromPersianName(firstName?: string, lastName?: string): Infe
 }
 
 // خطای تداخل قفل خوش‌بینانه (ETag) — برای شناسایی داخلی و بازیابی خودکار در صف ذخیره‌سازی.
+/**
+ * حداکثر دورهای حل تداخل ETag پیش از تسلیم شدن.
+ * هر دور: خواندن جدیدترین وضعیت سرور → مرج تغییر کاربر → تلاش دوبارهٔ نوشتن.
+ */
+const MAX_CONFLICT_RESOLUTION_PASSES = 3;
+
+/**
+ * ساخت شناسهٔ یکتا برای رکوردهای تازه (درخواست شیفت، پرسنل و ...).
+ *
+ * چرا `Date.now()` کافی نیست؟ وقتی کاربر چند درخواست را پشت سر هم ثبت می‌کند یا
+ * روی دکمه دوبار سریع کلیک می‌کند، چند رکورد در یک میلی‌ثانیه ساخته می‌شوند و
+ * شناسهٔ یکسان می‌گیرند. آنگاه رکورد دوم، اولی را در فهرست بازنویسی می‌کرد و
+ * درخواست کاربر بی‌صدا گم می‌شد.
+ *
+ * `crypto.randomUUID` در همهٔ مرورگرهای امروزی و در بستر امن (HTTPS) موجود است؛
+ * در غیر این صورت به ترکیب زمان + تصادف + شمارنده برمی‌گردیم.
+ */
+/**
+ * استخراج پیام قابل‌نمایش از هر مقدار پرتاب‌شده.
+ *
+ * الگوی `toErrorMessage(error)` بیش از ۲۰ بار
+ * در این فایل تکرار شده بود. تجمیع آن یک نقطهٔ واحد می‌سازد تا در آینده بتوان
+ * رفتار را یک‌جا بهبود داد (مثلاً کوتاه‌سازی پیام‌های طولانی).
+ *
+ * مقادیر غیر-Error هم پوشش داده می‌شوند، چون در جاوااسکریپت هر چیزی قابل
+ * پرتاب شدن است (رشته، شیء ساده و ...).
+ */
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return String(error);
+}
+
+/**
+ * مقادیر پیش‌فرضِ بخش‌های قدیمی (پیش از مهاجرت به احراز هویت Prisma).
+ * فقط برای تشخیص «بخش تازه‌ساخته‌شده» در متن دکمهٔ ورود استفاده می‌شوند و هرگز
+ * مبنای هیچ تصمیم امنیتی نیستند.
+ */
+const LEGACY_DEFAULT_DEPT_USERNAME = 'headnurse';
+const LEGACY_DEFAULT_DEPT_PASSWORD = '123456';
+
+/**
+ * سند پیش‌فرض یک بخش، وقتی هنوز داده‌ای برای آن در حافظه نیست.
+ *
+ * این شیء پیش‌تر ۹ بار به‌صورت literal در همین فایل تکرار شده بود. هر تکرار
+ * یک نقطهٔ واگرایی بالقوه بود: افزودن فیلد جدید به سند بخش، می‌بایست در هر ۹
+ * نقطه دستی تکرار می‌شد و فراموشی یکی از آن‌ها باگ خاموش تولید می‌کرد.
+ *
+ * ⚠️ `settings_credentials` صرفاً برای سازگاری با شکل قدیمی JSON نگه داشته شده
+ * است. احراز هویت واقعی از طریق Prisma و جدول `User` انجام می‌شود و این فیلد
+ * هیچ اعتبارسنجی‌ای ندارد. مقدار قبلی این‌جا رشتهٔ `'123456'` بود که ظاهر یک
+ * «رمز پیش‌فرض» داشت و گمراه‌کننده بود؛ اکنون خالی است تا کسی آن را رمز واقعی
+ * تصور نکند.
+ */
+function createEmptyDepartmentData() {
+  return {
+    personnel: [],
+    requests: [],
+    settings_system: INITIAL_SETTINGS,
+    settings_credentials: { username: 'prisma-managed', password: '' },
+    holidays: {},
+    firstDayOfWeek: {},
+    schedules: {},
+  };
+}
+
+let localIdCounter = 0;
+function createLocalId(prefix: string): string {
+  localIdCounter += 1;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}_${crypto.randomUUID().replaceAll('-', '')}`;
+  }
+  return `${prefix}_${Date.now().toString(36)}_${localIdCounter.toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
 class ConcurrencyConflictError extends Error {
   constructor(resource: string) {
     super(`Optimistic concurrency conflict for ${resource}`);
@@ -315,6 +397,50 @@ export default function Home() {
   const [isPortalSubmitting, setIsPortalSubmitting] = useState(false);
   const [isResetRequestSubmitting, setIsResetRequestSubmitting] = useState(false);
 
+  // ── قفل‌های ضدِ ارسال تکراری ────────────────────────────────────────────────
+  // به‌روزرسانی state در React ناهم‌زمان است: دو کلیک در یک تیک، هر دو مقدار
+  // قدیمیِ `false` را می‌بینند و هر دو درخواست ارسال می‌شود. ref بلافاصله و
+  // به‌صورت هم‌زمان تغییر می‌کند و همان لحظه درِ ورود را می‌بندد.
+  const portalSubmitLockRef = React.useRef(false);
+  const forgotPasswordLockRef = React.useRef(false);
+  const onboardingLockRef = React.useRef(false);
+  const deleteDeptLockRef = React.useRef(false);
+  const transferDeptLockRef = React.useRef(false);
+  const personnelSaveLockRef = React.useRef(false);
+  const personnelDeleteLockRef = React.useRef(new Set<string>());
+  const logoutLockRef = React.useRef(false);
+
+  // ── مدیریت چرخهٔ عمر تایمرها (جلوگیری از نشت حافظه) ────────────────────────
+  // چند هندلر (پرش به هشدار، هایلایت سلول/ستون، چاپ) با setTimeout کار می‌کنند
+  // و پس از پایان تایمر `setState` صدا می‌زنند. اگر کاربر پیش از اتمام تایمر از
+  // صفحه خارج شود، آن setState روی کامپوننت unmount شده اجرا می‌شد: هم هشدار
+  // نشت حافظه در کنسول تولید می‌کرد و هم closure کل درخت state را زنده نگه
+  // می‌داشت. این مجموعه همهٔ تایمرهای معلق را نگه می‌دارد تا هنگام unmount
+  // یک‌جا پاک شوند.
+  const pendingTimersRef = React.useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const isMountedRef = React.useRef(true);
+
+  /** setTimeout ایمن: خودکار ثبت و در unmount پاک می‌شود. */
+  const scheduleTimeout = React.useCallback((callback: () => void, delayMs: number) => {
+    const timerId = setTimeout(() => {
+      pendingTimersRef.current.delete(timerId);
+      // اگر کامپوننت از بین رفته باشد، callback اصلاً اجرا نمی‌شود.
+      if (isMountedRef.current) callback();
+    }, delayMs);
+    pendingTimersRef.current.add(timerId);
+    return timerId;
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    const timers = pendingTimersRef.current;
+    return () => {
+      isMountedRef.current = false;
+      for (const timerId of timers) clearTimeout(timerId);
+      timers.clear();
+    };
+  }, []);
+
   // --- Dynamic Department routing helper ---
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(() => {
     if (typeof window !== 'undefined') {
@@ -338,6 +464,16 @@ export default function Home() {
   const saveQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   const storageWriteBlockedRef = React.useRef(false);
   const storageLoadCountRef = React.useRef(0);
+  /**
+   * ماه‌هایی که هم‌اکنون در حافظهٔ کلاینت بارگذاری شده‌اند (کلید `YYYY_M`).
+   *
+   * بارگذاری اولیه فقط ماه جاری (و ماه‌های همسایه) را می‌گیرد، نه کل تاریخچه را.
+   * این مجموعه تضمین می‌کند هنگام محاسبهٔ تغییرات برای ذخیره‌سازی، ماهی که اصلاً
+   * بارگذاری نشده به‌اشتباه «حذف‌شده» تلقی نشود.
+   */
+  const loadedMonthKeysRef = React.useRef<Set<string>>(new Set());
+  /** فهرست کامل ماه‌های موجود در سرور، حتی آن‌هایی که بارگذاری نشده‌اند. */
+  const availableMonthKeysRef = React.useRef<string[]>([]);
   const storageLoadGenerationRef = React.useRef(0);
 
   // Self-service head-nurse/department onboarding
@@ -562,10 +698,13 @@ export default function Home() {
 
   // Load persisted selected month/year on mount to prevent defaulting to Khordad after resets
   useEffect(() => {
-    setTimeout(() => {
+    // تأخیر صفر عمدی است تا setState داخل بدنهٔ افکت اجرا نشود؛ اما تایمر باید
+    // در unmount پاک شود، وگرنه روی کامپوننت از بین رفته setState صدا می‌زند.
+    const timerId = setTimeout(() => {
       setIsMounted(true);
       setIsMonthLoaded(true);
     }, 0);
+    return () => clearTimeout(timerId);
   }, []);
 
   // User Authentication & Roles
@@ -795,68 +934,105 @@ export default function Home() {
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
 
+  /**
+   * راه‌اندازی اولیه: نشست کاربر و فهرست بخش‌ها **هم‌زمان** واکشی می‌شوند.
+   *
+   * ── مشکل ساختاری که رفع شد ─────────────────────────────────────────────────
+   * پیش‌تر این دو درخواست یک آبشار (waterfall) بودند:
+   *
+   *   mount → GET /api/auth/me  ──(تمام شد)──▶ setIsAuthLoading(false)
+   *                                              ↓ (رندر مجدد، افکت دوم)
+   *                                         GET /api/public/departments
+   *
+   * افکت دوم شرط `if (isAuthLoading) return` داشت، پس تا وقتی پاسخ نشست
+   * نمی‌رسید اصلاً شروع نمی‌شد. کاربر مهمان که اساساً نشستی ندارد، باید منتظر
+   * یک ۴۰۱ می‌ماند و تازه بعد از آن واکشی بخش‌ها آغاز می‌شد؛ یعنی زمان انتظار
+   * برابر مجموع دو رفت‌وبرگشت بود، نه بیشترینِ آن‌ها. این دقیقاً همان «چند ثانیه
+   * طول کشیدن لود بخش پیش‌فرض» است.
+   *
+   * حالا هر دو در همان لحظهٔ mount با Promise.all شروع می‌شوند. فهرست بخش‌ها
+   * عمومی است و به نشست وابستگی ندارد، پس هیچ دلیلی برای انتظار وجود نداشت.
+   * زمان کل = max(auth, departments) به‌جای auth + departments.
+   *
+   * نکتهٔ مهم: از `Promise.allSettled` استفاده می‌شود تا شکست یکی، دیگری را
+   * از بین نبرد (مثلاً اگر ذخیره‌سازی ابری پایین باشد، کاربرِ دارای نشست باید
+   * همچنان بتواند وارد شود).
+   */
   useEffect(() => {
     let cancelled = false;
-    const loadSession = async () => {
-      try {
-        const response = await fetch('/api/auth/me', { cache: 'no-store' });
-        const result = await response.json();
-        if (!response.ok || !result.user) {
-          if (!cancelled) {
-            setAuthenticatedUser(null);
-            setRole('guest');
-          }
-          return;
-        }
-        const user = result.user as AuthenticatedUser;
-        if (user.mustChangePassword) {
-          router.replace('/change-password');
-          return;
-        }
-        if (cancelled) return;
+
+    const loadSession = async (): Promise<AuthenticatedUser | null> => {
+      const response = await resilientFetch('/api/auth/me', { cache: 'no-store' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.user) return null;
+      return result.user as AuthenticatedUser;
+    };
+
+    const loadDepartmentOptions = async (): Promise<Department[]> => {
+      const response = await resilientFetch('/api/public/departments');
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || 'فهرست بخش‌ها دریافت نشد.');
+      return result.departments as Department[];
+    };
+
+    const bootstrap = async () => {
+      setDepartmentListStatus('loading');
+      // هر دو درخواست هم‌زمان روانه می‌شوند؛ هیچ‌کدام منتظر دیگری نمی‌ماند.
+      const [sessionOutcome, departmentsOutcome] = await Promise.allSettled([
+        loadSession(),
+        loadDepartmentOptions(),
+      ]);
+      if (cancelled) return;
+
+      // ۱) فهرست بخش‌ها — حتی اگر کاربر وارد شده باشد ذخیره می‌شود تا نام بخش
+      //    بلافاصله در دسترس باشد و منتظر بارگذاری کامل دیتابیس نماند.
+      const publicDepartments = departmentsOutcome.status === 'fulfilled'
+        ? departmentsOutcome.value
+        : null;
+      if (publicDepartments) {
+        setDepartments(publicDepartments);
+        setDepartmentListStatus('ready');
+      } else {
+        setDepartmentListStatus('error');
+      }
+
+      // ۲) نشست کاربر
+      const user = sessionOutcome.status === 'fulfilled' ? sessionOutcome.value : null;
+      if (user?.mustChangePassword) {
+        router.replace('/change-password');
+        return;
+      }
+
+      if (user) {
         setAuthenticatedUser(user);
         setRole(user.role === 'ADMIN' ? 'admin' : user.role === 'HEAD_NURSE' ? 'headnurse' : 'personnel');
         if (user.departmentId) {
           setSelectedDepartmentId(user.departmentId);
           localStorage.setItem('hospital_selected_dept_id', user.departmentId);
         }
-      } catch {
-        if (!cancelled) {
-          setAuthenticatedUser(null);
-          setRole('guest');
+      } else {
+        setAuthenticatedUser(null);
+        setRole('guest');
+        // انتخاب بخش پیش‌فرض فقط برای کاربر مهمان معنا دارد. این کار داخل
+        // به‌روزرسانی تابعی انجام می‌شود تا افکت به `selectedDepartmentId`
+        // وابسته نباشد؛ وابستگی قبلی باعث می‌شد کل واکشی با هر تغییر انتخاب
+        // بخش دوباره اجرا شود.
+        if (publicDepartments && publicDepartments.length > 0) {
+          setSelectedDepartmentId(current => {
+            if (publicDepartments.some(item => item.id === current)) return current;
+            const fallbackId = publicDepartments[0].id;
+            localStorage.setItem('hospital_selected_dept_id', fallbackId);
+            return fallbackId;
+          });
         }
-      } finally {
-        if (!cancelled) setIsAuthLoading(false);
       }
+
+      setIsAuthLoading(false);
     };
-    void loadSession();
+
+    void bootstrap();
     return () => { cancelled = true; };
   }, [router]);
-
-  useEffect(() => {
-    if (isAuthLoading || authenticatedUser) return;
-    let cancelled = false;
-    const loadDepartmentOptions = async () => {
-      setDepartmentListStatus('loading');
-      try {
-        const response = await fetch('/api/public/departments');
-        const result = await response.json();
-        if (!response.ok || !result.success) throw new Error(result.error || 'فهرست بخش‌ها دریافت نشد.');
-        if (cancelled) return;
-        const publicDepartments = result.departments as Department[];
-        setDepartments(publicDepartments);
-        setDepartmentListStatus('ready');
-        if (publicDepartments.length > 0 && !publicDepartments.some(item => item.id === selectedDepartmentId)) {
-          setSelectedDepartmentId(publicDepartments[0].id);
-          localStorage.setItem('hospital_selected_dept_id', publicDepartments[0].id);
-        }
-      } catch {
-        if (!cancelled) setDepartmentListStatus('error');
-      }
-    };
-    void loadDepartmentOptions();
-    return () => { cancelled = true; };
-  }, [authenticatedUser, isAuthLoading, selectedDepartmentId]);
 
   const handlePortalLogin = async (portal: 'staff' | 'head-nurse') => {
     setAuthError('');
@@ -878,19 +1054,23 @@ export default function Home() {
       setAuthError('رمز عبور را وارد کنید. رمز اولیه برای حساب‌های جدید ۱۲۳۴ است.');
       return;
     }
+    // کلیک دوم روی «ورود» پیش از رسیدن پاسخ اول، دو نشست هم‌زمان می‌ساخت و
+    // شمارندهٔ تلاش ناموفق را دوبار افزایش می‌داد. ref در همان تیک درِ ورود را
+    // می‌بندد (برخلاف state که ناهم‌زمان به‌روز می‌شود).
+    if (portalSubmitLockRef.current) return;
+    portalSubmitLockRef.current = true;
     setIsPortalSubmitting(true);
     try {
-      const response = await fetch('/api/auth/login', {
+      const result = await fetchJson<{ user: AuthenticatedUser; redirectTo?: string }>('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nationalId, password, departmentId: selectedDepartmentId, portal }),
       });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'ورود انجام نشد.');
-      setPendingLogin({ user: result.user, redirectTo: result.redirectTo });
+      setPendingLogin({ user: result.user, redirectTo: result.redirectTo || '/' });
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'خطا در برقراری ارتباط با سرور.');
     } finally {
+      portalSubmitLockRef.current = false;
       setIsPortalSubmitting(false);
     }
   };
@@ -909,19 +1089,21 @@ export default function Home() {
       setAuthError('ابتدا بخش خود را از فهرست بالا انتخاب کنید تا درخواست برای سرپرستار همان بخش ارسال شود.');
       return;
     }
+    // چند کلیک پیاپی روی «فراموشی رمز» می‌توانست چند حساب متصل‌نشده بسازد.
+    if (forgotPasswordLockRef.current) return;
+    forgotPasswordLockRef.current = true;
     setIsResetRequestSubmitting(true);
     try {
-      const response = await fetch('/api/auth/forgot-password', {
+      const result = await fetchJson<{ message?: string }>('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nationalId, departmentId: selectedDepartmentId }),
       });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'ثبت درخواست انجام نشد.');
       setStaffAuthNotice(result.message || 'درخواست شما ثبت شد؛ سرپرستار بخش رمز عبور شما را بازنشانی می‌کند.');
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'خطا در ثبت درخواست بازیابی.');
     } finally {
+      forgotPasswordLockRef.current = false;
       setIsResetRequestSubmitting(false);
     }
   };
@@ -929,9 +1111,12 @@ export default function Home() {
   const handleHeadNurseOnboarding = async () => {
     setAuthError('');
     setPortalNotice('');
+    // ساخت بخش عملیاتی سنگین و غیرقابل بازگشت است؛ کلیک دوم باید نادیده گرفته شود.
+    if (onboardingLockRef.current) return;
+    onboardingLockRef.current = true;
     setIsOnboardingSubmitting(true);
     try {
-      const response = await fetch('/api/onboarding/head-nurse', {
+      const result = await fetchJson<{ department: Department }>('/api/onboarding/head-nurse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -941,8 +1126,6 @@ export default function Home() {
           nationalId: newHeadNurseNationalId,
         }),
       });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'ساخت بخش انجام نشد.');
       const department = result.department as Department;
       setDepartments(current => [...current.filter(item => item.id !== department.id), department]);
       setSelectedDepartmentId(department.id);
@@ -959,6 +1142,7 @@ export default function Home() {
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'خطا در ساخت بخش و حساب سرپرستار.');
     } finally {
+      onboardingLockRef.current = false;
       setIsOnboardingSubmitting(false);
     }
   };
@@ -998,6 +1182,24 @@ export default function Home() {
     }
     return JSON.parse(JSON.stringify(current));
   };
+
+  /**
+   * پنجرهٔ ماه‌هایی که در بارگذاری اولیه گرفته می‌شوند: ماه جاری به‌همراه ماه قبل
+   * و بعد.
+   *
+   * چرا ماه‌های همسایه هم؟ کاربر معمولاً بین ماه‌های مجاور جابه‌جا می‌شود؛
+   * پیش‌واکشی آن‌ها ناوبری را آنی می‌کند در حالی که هزینهٔ آن ناچیز است. ماه‌های
+   * دورتر فقط در صورت نیاز (lazy) گرفته می‌شوند.
+   */
+  const buildMonthWindow = React.useCallback((year: number, month: number): string[] => {
+    const previous = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+    const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+    return [
+      `${previous.year}_${previous.month}`,
+      `${year}_${month}`,
+      `${next.year}_${next.month}`,
+    ];
+  }, []);
 
   const versionIdForResource = (resource: StorageResource): string => {
     switch (resource.type) {
@@ -1056,13 +1258,22 @@ export default function Home() {
         }
       }
 
+      // فقط ماه‌های موجود در وضعیت جدید بررسی می‌شوند و هرگز چیزی حذف نمی‌شود.
+      //
+      // این نکته با بارگذاری جزئی (فقط ماه جاری و همسایه‌ها) حیاتی است: ماهی که
+      // اصلاً بارگذاری نشده در `after.schedules` نیست، پس هیچ‌گاه به‌اشتباه
+      // «حذف‌شده» تلقی نمی‌شود و سند آن در ذخیره‌سازی دست‌نخورده می‌ماند.
       for (const [monthKey, nextSchedule] of Object.entries(after.schedules || {})) {
         const previousSchedule = before?.schedules?.[monthKey];
         if (!sameDocument(previousSchedule, nextSchedule)) {
           mutations.push({
             resource: { type: 'schedule', departmentId, monthKey },
             data: nextSchedule,
-            existed: previousSchedule !== undefined,
+            // ماهی که در این نشست بارگذاری نشده ممکن است روی سرور وجود داشته
+            // باشد؛ در آن حالت `If-None-Match: *` اشتباه است و باید با ETag تازه
+            // نوشته شود. مرجع درستیِ «وجود داشتن» فهرست ماه‌های سرور است.
+            existed: previousSchedule !== undefined ||
+              availableMonthKeysRef.current.includes(monthKey),
           });
         }
       }
@@ -1084,15 +1295,7 @@ export default function Home() {
   // stateهای محلی مشتق‌شده از آن نیز همگام می‌شوند تا رابط کاربری با سرور سازگار بماند.
   const syncLocalStateFromDb = (nextDb: AppDatabaseState) => {
     const deptId = selectedDepartmentId || 'sepehr';
-    const deptInfo = nextDb.deptData[deptId] || {
-      personnel: [],
-      requests: [],
-      settings_system: INITIAL_SETTINGS,
-      settings_credentials: { username: 'headnurse', password: '123456' },
-      holidays: {},
-      firstDayOfWeek: {},
-      schedules: {},
-    };
+    const deptInfo = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
     setDepartments(nextDb.departments || []);
     setPersonnel(deptInfo.personnel || []);
@@ -1167,10 +1370,21 @@ export default function Home() {
 
   // Fetch the latest committed snapshot (state + ETags) for concurrency recovery.
   const fetchLatestSnapshot = async (): Promise<{ state: AppDatabaseState; versions: Record<string, string> }> => {
-    const response = await fetch('/api/storage', { cache: 'no-store' });
-    const result = await response.json();
+    // خواندن idempotent است، پس تلاش مجدد خودکار کاملاً امن است و یک اختلال
+    // لحظه‌ای، مسیر بازیابی از تداخل را بی‌نتیجه نمی‌گذارد.
+    //
+    // دقیقاً همان ماه‌هایی درخواست می‌شود که هم‌اکنون بارگذاری شده‌اند: اگر
+    // دامنه کوچک‌تر گرفته شود، ماه‌های در حال ویرایش از snapshot غایب می‌مانند و
+    // مرجِ پس از تداخل ناقص می‌شود.
+    const months = [...loadedMonthKeysRef.current];
+    const query = months.length > 0 ? `?months=${encodeURIComponent(months.join(','))}` : '';
+    const response = await resilientFetch(`/api/storage${query}`, { cache: 'no-store' });
+    const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.success || !result.state || !result.versions) {
       throw new Error(result.error || 'خواندن امن دیتابیس برای همگام‌سازی مجدد ناموفق بود.');
+    }
+    if (Array.isArray(result.availableMonths?.[selectedDepartmentId || 'sepehr'])) {
+      availableMonthKeysRef.current = result.availableMonths[selectedDepartmentId || 'sepehr'];
     }
     return { state: result.state as AppDatabaseState, versions: result.versions as Record<string, string> };
   };
@@ -1243,6 +1457,10 @@ export default function Home() {
     const totalMutations = Math.max(1, mutations.length);
     let completedMutations = 0;
 
+    // شمارش نوشتن‌های موفق این دسته. اگر هیچ نوشتنی انجام نشده باشد، وضعیت سرور
+    // دست‌نخورده است و نیازی به قفل کردن ذخیره‌سازی نیست.
+    let committedWrites = 0;
+
     const writeMutationOnce = async (mutation: StorageMutation) => {
       const versionId = versionIdForResource(mutation.resource);
       const expectedETag = storageVersionsRef.current[versionId];
@@ -1250,7 +1468,10 @@ export default function Home() {
         throw new Error(`ETag منبع ${versionId} موجود نیست؛ ذخیره متوقف شد.`);
       }
 
-      const response = await fetch('/api/storage', {
+      // نوشتن با پیش‌شرط ETag ارسال می‌شود. `resilientFetch` فقط خطاهای گذرای
+      // اعلام‌شده توسط سرور (۴۲۹/۵۰۳ یا `retryable: true`) را تکرار می‌کند؛
+      // تداخل واقعی ETag تکرار نمی‌شود چون باید با وضعیت تازه مرج شود.
+      const response = await resilientFetch('/api/storage', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1260,12 +1481,13 @@ export default function Home() {
         },
         body: JSON.stringify({ resource: mutation.resource, data: mutation.data }),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.success || !result.etag) {
         if (result.code === 'ETAG_CONFLICT') throw new ConcurrencyConflictError(versionId);
         throw new Error(result.error || `خطای ذخیره منبع ${versionId}`);
       }
       storageVersionsRef.current[versionId] = result.etag;
+      committedWrites += 1;
       completedMutations += 1;
       if (showBusyOverlay) {
         saveProgressRef.current.reportPhaseFraction(completedMutations / totalMutations);
@@ -1283,9 +1505,11 @@ export default function Home() {
       try {
         let pendingMutations = mutations;
         // خطای تداخل نباید یک ذخیره معتبر را زمین‌گیر کند: در تداخل، جدیدترین وضعیت سرور
-        // خوانده می‌شود، تغییر هدف کاربر روی آن مرج و یک‌بار دیگر ذخیره می‌شود؛ پس از آن
-        // دیگر نیازی به تازه‌سازی دستی صفحه نیست. اگر تداخل تکرار شود، رفتار fail-closed باقی می‌ماند.
-        for (let pass = 0; pass < 2 && pendingMutations.length > 0; pass += 1) {
+        // خوانده می‌شود، تغییر هدف کاربر روی آن مرج و دوباره ذخیره می‌شود؛ پس از آن
+        // دیگر نیازی به تازه‌سازی دستی صفحه نیست.
+        // تعداد دورها از ۲ به ۳ افزایش یافت: زیر بار هم‌زمانِ چند سرپرستار، یک دور
+        // مرج همیشه کافی نبود و کاربر بی‌دلیل پیام «صفحه را تازه‌سازی کنید» می‌گرفت.
+        for (let pass = 0; pass < MAX_CONFLICT_RESOLUTION_PASSES && pendingMutations.length > 0; pass += 1) {
           const succeeded: StorageMutation[] = [];
           let conflicted = false;
           for (const mutation of pendingMutations) {
@@ -1302,9 +1526,13 @@ export default function Home() {
             pendingMutations = [];
             break;
           }
-          if (pass === 1) {
+          if (pass === MAX_CONFLICT_RESOLUTION_PASSES - 1) {
             throw new Error('اطلاعات توسط کاربر دیگری تغییر کرده است؛ برای جلوگیری از بازنویسی، صفحه را تازه‌سازی کنید.');
           }
+
+          // فاصلهٔ کوتاه و تصادفی پیش از دور بعدی: اگر دو کاربر هم‌زمان ذخیره کنند،
+          // بدون این تأخیر هر دو بلافاصله دوباره برخورد می‌کردند (thundering herd).
+          await new Promise(resolve => setTimeout(resolve, 120 * (pass + 1) + Math.random() * 180));
 
           const snapshot = await fetchLatestSnapshot();
           storageVersionsRef.current = snapshot.versions;
@@ -1327,9 +1555,34 @@ export default function Home() {
         }
         if (showBusyOverlay) saveProgressRef.current.beginPhase('sync');
       } catch (error) {
-        // A batch can span multiple objects and S3 has no multi-object transaction.
-        // Fail closed after any partial failure; a reload is required before more writes.
-        storageWriteBlockedRef.current = true;
+        // یک دسته می‌تواند چند سند را در بر بگیرد و S3 تراکنش چندسندی ندارد.
+        //
+        // پیش‌تر هر خطایی (حتی یک قطعی لحظه‌ای شبکه پیش از نوشتن اولین سند)
+        // ذخیره‌سازی را برای همیشه قفل می‌کرد و کاربر مجبور به تازه‌سازی دستی
+        // صفحه می‌شد — شکایت اصلی کاربران. اکنون تفکیک می‌شود:
+        //
+        //  • هیچ سندی نوشته نشده  → وضعیت سرور دست‌نخورده است و وضعیت محلی به
+        //    آخرین مقدار معتبر برمی‌گردد؛ ذخیره‌سازی قفل نمی‌شود و کاربر می‌تواند
+        //    بلافاصله دوباره تلاش کند.
+        //  • نوشتن جزئی رخ داده  → تلاش می‌شود وضعیت به‌صورت خودکار از سرور
+        //    همگام شود. اگر موفق شد، کار ادامه می‌یابد؛ فقط اگر همگام‌سازی هم
+        //    شکست بخورد، رفتار fail-closed اعمال می‌شود.
+        if (committedWrites === 0) {
+          optimisticDbRef.current = baseDb;
+          setFullDbState(baseDb);
+          syncLocalStateFromDb(baseDb);
+        } else {
+          try {
+            const snapshot = await fetchLatestSnapshot();
+            storageVersionsRef.current = snapshot.versions;
+            optimisticDbRef.current = snapshot.state;
+            setFullDbState(snapshot.state);
+            syncLocalStateFromDb(snapshot.state);
+          } catch {
+            // همگام‌سازی خودکار ممکن نشد: تنها اینجا نوشتن‌های بعدی مسدود می‌شود.
+            storageWriteBlockedRef.current = true;
+          }
+        }
         if (showBusyOverlay) saveProgressRef.current.reset();
         throw error;
       } finally {
@@ -1391,6 +1644,18 @@ export default function Home() {
     const key = targetMonthKey || `${currentYear}_${currentMonth}`;
     const dept = (nextDb.deptData || {})[deptId] as any;
     if (!dept) return nextDb;
+
+    // ⚠️ حفاظت در برابر از دست رفتن داده با بارگذاری جزئی:
+    // اگر برنامهٔ این ماه روی سرور وجود دارد ولی در این نشست بارگذاری نشده،
+    // ساختن یک سند خالی و نوشتن آن، برنامهٔ واقعی همان ماه را پاک می‌کرد.
+    // ثبت لاگ «بهترین تلاش» است و هرگز نباید داده‌ای را نابود کند، پس در این
+    // حالت از ثبت رویداد صرف‌نظر می‌شود.
+    const scheduleIsLoaded = dept.schedules?.[key] !== undefined;
+    const scheduleExistsOnServer = availableMonthKeysRef.current.includes(key);
+    if (!scheduleIsLoaded && scheduleExistsOnServer) {
+      console.warn(`[event-log] ماه ${key} بارگذاری نشده است؛ برای جلوگیری از بازنویسی، رویداد ثبت نشد.`);
+      return nextDb;
+    }
 
     const [yearPart, monthPart] = key.split('_');
     const existingSchedule = dept.schedules?.[key];
@@ -1475,8 +1740,15 @@ export default function Home() {
         // Reads and writes never overlap in this tab. This also prevents a late GET
         // from replacing newly written ETags with an older snapshot.
         await saveQueueRef.current;
-        const res = await fetch('/api/storage', { cache: 'no-store' });
-        const data = await res.json();
+        // فقط پنجرهٔ ماه جاری (ماه قبل، جاری، بعد) درخواست می‌شود، نه کل تاریخچه.
+        // این تنها تغییری است که بیشترین اثر را روی زمان لود اولیه دارد: بخشی با
+        // دو سال سابقه پیش‌تر ۲۴ سند برنامه را دانلود می‌کرد تا فقط یکی را نشان دهد.
+        const monthWindow = buildMonthWindow(currentYear, currentMonth);
+        const res = await resilientFetch(
+          `/api/storage?months=${encodeURIComponent(monthWindow.join(','))}`,
+          { cache: 'no-store' },
+        );
+        const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success || !data.state || !data.versions) {
           throw new Error(data.error || 'خواندن امن دیتابیس ناموفق بود.');
         }
@@ -1490,6 +1762,21 @@ export default function Home() {
         storageVersionsRef.current = data.versions;
         optimisticDbRef.current = updatedDb;
         storageWriteBlockedRef.current = false;
+
+        // ثبت اینکه چه ماه‌هایی بارگذاری شده و چه ماه‌هایی روی سرور موجود است.
+        // این دو با هم تضمین می‌کنند که ذخیره‌سازی بعدی، ماه‌های بارگذاری‌نشده را
+        // نه حذف کند و نه با پیش‌شرط اشتباه بنویسد.
+        const activeDeptId = updatedDb.deptData[selectedDepartmentId || 'sepehr']
+          ? (selectedDepartmentId || 'sepehr')
+          : updatedDb.departments[0]?.id;
+        availableMonthKeysRef.current = Array.isArray(data.availableMonths?.[activeDeptId])
+          ? data.availableMonths[activeDeptId]
+          : Object.keys(updatedDb.deptData[activeDeptId]?.schedules || {});
+        loadedMonthKeysRef.current = new Set(
+          Array.isArray(data.loadedMonths?.[activeDeptId])
+            ? data.loadedMonths[activeDeptId]
+            : Object.keys(updatedDb.deptData[activeDeptId]?.schedules || {}),
+        );
         setFullDbState(updatedDb);
         setStorageInfo({
           isConfigured: data.isConfigured,
@@ -1594,7 +1881,7 @@ export default function Home() {
     };
 
     loadDatabase();
-  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading]);
+  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading, buildMonthWindow]);
 
   const extractWarningDay = (warningText: string) => {
     const dayMatch = warningText.match(/روز (\d+)/);
@@ -1642,7 +1929,7 @@ export default function Home() {
 
     setShowAlertCenter(false);
 
-    setTimeout(() => {
+    scheduleTimeout(() => {
       const element = document.getElementById(cellId);
       if (element) {
         if (warningText) {
@@ -1656,7 +1943,7 @@ export default function Home() {
         }
         setHighlightedCellId(cellId);
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => {
+        scheduleTimeout(() => {
           setHighlightedCellId(current => current === cellId ? null : current);
         }, 3200);
       }
@@ -1673,7 +1960,7 @@ export default function Home() {
 
     setShowAlertCenter(false);
 
-    setTimeout(() => {
+    scheduleTimeout(() => {
       const element = document.getElementById(headerId);
       if (element) {
         if (warningText) {
@@ -1690,7 +1977,7 @@ export default function Home() {
         // اگر بازگشت خودکار ثبت شده باشد، هایلایت تا رفع هشدار (یا انصراف کاربر)
         // باقی می‌ماند تا سرپرستار ستون را گم نکند؛ در غیر این صورت پس از ۶ ثانیه پاک می‌شود.
         if (!warningText) {
-          setTimeout(() => {
+          scheduleTimeout(() => {
             setHighlightedDay(current => (current === day ? null : current));
           }, 6000);
         }
@@ -1711,9 +1998,9 @@ export default function Home() {
     const shouldReopen = options.reopenAlertCenter ?? pending.reopenAlertCenter;
     if (shouldReopen) {
       // کمی صبر تا اسکرول نرم تمام شود، سپس پنجره هشدارها دوباره باز شود
-      setTimeout(() => setShowAlertCenter(true), 450);
+      scheduleTimeout(() => setShowAlertCenter(true), 450);
     }
-  }, []);
+  }, [scheduleTimeout]);
 
   const cancelAlertReturn = React.useCallback(() => {
     alertReturnRef.current = null;
@@ -1761,12 +2048,24 @@ export default function Home() {
 
   const alertCenterSchedule = displayedSchedule;
 
-  const getVisibleWarnings = () => {
+  /**
+   * هشدارهای فعال (نادیده‌گرفته‌نشده) برای نمایش در رابط کاربری.
+   *
+   * پیش‌تر این یک تابع معمولی بود که در هر رندر **سه بار** فراخوانی می‌شد
+   * (شرط نمایش نشان، شمارندهٔ داخل نشان و prop مرکز هشدارها) و هر بار کل آرایهٔ
+   * هشدارها را دو مرتبه فیلتر می‌کرد. با useMemo، محاسبه فقط وقتی تکرار می‌شود
+   * که ورودی‌ها واقعاً تغییر کرده باشند.
+   *
+   * مرجع پایدار آرایه یک مزیت دوم هم دارد: کامپوننت‌های فرزندی که این مقدار را
+   * می‌گیرند، با هر رندر یک prop «جدید» نمی‌بینند.
+   */
+  const visibleWarningsList = React.useMemo(() => {
     if (!alertCenterSchedule) return [];
-    const visible = filterActiveWarnings(alertCenterSchedule.warnings, dismissedWarnings)
+    return filterActiveWarnings(alertCenterSchedule.warnings, dismissedWarnings)
       .filter(w => !dismissedAlertWarnings[w]);
-    return visible;
-  };
+  }, [alertCenterSchedule, dismissedWarnings, dismissedAlertWarnings]);
+
+  const getVisibleWarnings = React.useCallback(() => visibleWarningsList, [visibleWarningsList]);
 
   const handleRestoreAllWarnings = async () => {
     setDismissedWarnings([]);
@@ -2418,35 +2717,37 @@ export default function Home() {
         finalStrategy = (fdIndex as ScheduleUpdateStrategy) || { mode: 'preserve_current' };
       }
 
-      let calculatedMonthlyDutyHours = monthlyDutyHours;
-      if (cleanUpdatedS.autoCalculateDutyHours) {
-        const autoHours = calculateAutoDutyHours(
-          currentYear,
-          currentMonth,
-          updatedH,
-          activeFd === -1 ? undefined : activeFd
-        );
-        calculatedMonthlyDutyHours = {
-          ...cleanUpdatedS.dutyHours,
-          official: autoHours.official,
-          contract: autoHours.contract
-        };
-        setMonthlyDutyHours(calculatedMonthlyDutyHours);
-      }
+      // ساعت موظفی ماه بدون بازنویسی متغیرِ گرفته‌شده از رندر محاسبه می‌شود.
+      // مقدار پایه از ref خوانده می‌شود نه state: این تابع در هندلرهای ناهم‌زمان
+      // (پس از await) اجرا می‌شود و مقدار state در closure می‌تواند کهنه باشد.
+      const autoDutyHours = cleanUpdatedS.autoCalculateDutyHours
+        ? calculateAutoDutyHours(
+            currentYear,
+            currentMonth,
+            updatedH,
+            activeFd === -1 ? undefined : activeFd
+          )
+        : null;
+      // همیشه یک شیء تازه ساخته می‌شود (نه ارجاع به محتوای ref): در غیر این صورت
+      // این متغیر محلی به شیء مشترکِ داخل ref «نام مستعار» می‌شد و هر تغییر
+      // بعدی، مقدار مشترک را هم بی‌صدا دستکاری می‌کرد.
+      const previousDutyHours = monthlyDutyHoursRef.current;
+      const calculatedMonthlyDutyHours = autoDutyHours
+        ? {
+            ...cleanUpdatedS.dutyHours,
+            official: autoDutyHours.official,
+            contract: autoDutyHours.contract,
+          }
+        : previousDutyHours
+          ? { ...previousDutyHours }
+          : null;
+      if (autoDutyHours) setMonthlyDutyHours(calculatedMonthlyDutyHours);
 
       const nextDb = getFreshDbCopy();
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const monthKey = `${currentYear}_${currentMonth}`;
       const currentMonthSchedule =
@@ -2611,9 +2912,9 @@ export default function Home() {
         category: 'storage',
         severity: 'error',
         title: 'ذخیره‌سازی اطلاعات در فضای ابری ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در ذخیره‌سازی داده‌ها: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در ذخیره‌سازی داده‌ها: " + (toErrorMessage(error)));
       throw error;
     }
   };
@@ -2703,15 +3004,7 @@ export default function Home() {
     const nextDb = getFreshDbCopy();
     if (!nextDb.deptData) nextDb.deptData = {};
 
-    const oldDept = nextDb.deptData[deptId] || {
-      personnel: [],
-      requests: [],
-      settings_system: INITIAL_SETTINGS,
-      settings_credentials: { username: 'headnurse', password: '123456' },
-      holidays: {},
-      firstDayOfWeek: {},
-      schedules: {},
-    };
+    const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
     const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
     const nextGroup = updater((monthScenarios[group] || null) as ScenarioWorkflowGroup | null);
@@ -2930,7 +3223,7 @@ export default function Home() {
         category: 'solver',
         severity: 'error',
         title: `پردازش موتور هوشمند برای ${groupTitle} با خطا متوقف شد`,
-        detail: `ماه ${monthLabel} — ${err instanceof Error ? err.message : String(err)}`,
+        detail: `ماه ${monthLabel} — ${toErrorMessage(err)}`,
       });
       alert('خطا در تولید سناریوها');
       setSolvingTarget(null);
@@ -2956,15 +3249,7 @@ export default function Home() {
         const nextDb = getFreshDbCopy();
         if (!nextDb.deptData) nextDb.deptData = {};
 
-        const oldDept = nextDb.deptData[deptId] || {
-          personnel: [],
-          requests: [],
-          settings_system: INITIAL_SETTINGS,
-          settings_credentials: { username: 'headnurse', password: '123456' },
-          holidays: {},
-          firstDayOfWeek: {},
-          schedules: {},
-        };
+        const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
         const monthKeyLocal = `${currentYear}_${currentMonth}`;
         if (jobGroup === 'nurse') {
@@ -3171,15 +3456,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const existingSched = oldDept.schedules?.[key];
       if (!existingSched) {
@@ -3215,9 +3492,9 @@ export default function Home() {
         category: 'lock',
         severity: 'error',
         title: 'تغییر وضعیت قفل برنامه با خطا مواجه شد',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در تغییر وضعیت قفل: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در تغییر وضعیت قفل: " + (toErrorMessage(error)));
     }
   };
 
@@ -3231,15 +3508,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const existingSched = oldDept.schedules?.[key];
 
@@ -3270,9 +3539,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'تغییر وضعیت مهلت درخواست‌ها با خطا مواجه شد',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در تغییر وضعیت مهلت درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در تغییر وضعیت مهلت درخواست‌ها: " + (toErrorMessage(error)));
     }
   };
 
@@ -3285,15 +3554,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       const existingSched = oldDept.schedules?.[key];
       if (!existingSched) return;
@@ -3360,9 +3621,14 @@ export default function Home() {
   }, [setCurrentMonth, setCurrentYear]);
 
   const handleLogout = async () => {
+    // کلیک دوم روی «خروج» درخواست تکراری می‌فرستاد و گاهی صفحه را در وضعیت
+    // نیمه‌خارج‌شده رها می‌کرد؛ قفل هم‌زمان از آن جلوگیری می‌کند.
+    if (logoutLockRef.current) return;
+    logoutLockRef.current = true;
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await resilientFetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     } finally {
+      logoutLockRef.current = false;
       setAuthenticatedUser(null);
       setRole('guest');
       localStorage.removeItem('hospital_saved_role');
@@ -3386,17 +3652,16 @@ export default function Home() {
     personnelForm.openEditModal(p);
     setIsLoadingPersonnelNationalId(true);
     try {
-      const response = await fetch(`/api/users/personnel/${encodeURIComponent(p.id)}`, { cache: 'no-store' });
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'دریافت کد ملی پرسنل انجام نشد.');
-      }
+      const result = await fetchJson<{ nationalId?: string }>(
+        `/api/users/personnel/${encodeURIComponent(p.id)}`,
+        { cache: 'no-store' },
+      );
       // پرسنل قدیمی ممکن است هنوز حساب ورود نداشته باشد؛ در این حالت فیلد کد ملی خالی
       // می‌ماند و با ثبت آن، حساب ورود همان‌جا ساخته می‌شود.
       setFormNationalId(result.nationalId || '');
     } catch (error) {
       console.error('Error loading personnel national ID:', error);
-      alert('کد ملی این پرسنل دریافت نشد: ' + (error instanceof Error ? error.message : String(error)));
+      alert('کد ملی این پرسنل دریافت نشد: ' + (toErrorMessage(error)));
     } finally {
       setIsLoadingPersonnelNationalId(false);
     }
@@ -3413,11 +3678,15 @@ export default function Home() {
       alert('لطفاً تا دریافت کد ملی فعلی پرسنل صبر کنید.');
       return;
     }
+    // ثبت پرسنل چند مرحله دارد (ساخت حساب ورود + ذخیرهٔ فهرست + بازتولید برنامه).
+    // ارسال دوم پیش از پایان مرحلهٔ اول، حساب یا رکورد تکراری می‌ساخت.
+    if (personnelSaveLockRef.current) return;
+    personnelSaveLockRef.current = true;
 
     try {
       let updatedList: Personnel[];
       if (editingPersonnel) {
-        const accountResponse = await fetch(`/api/users/personnel/${encodeURIComponent(editingPersonnel.id)}`, {
+        await fetchJson(`/api/users/personnel/${encodeURIComponent(editingPersonnel.id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -3427,10 +3696,6 @@ export default function Home() {
             departmentId: selectedDepartmentId,
           }),
         });
-        const accountResult = await accountResponse.json();
-        if (!accountResponse.ok || !accountResult.success) {
-          throw new Error(accountResult.error || 'ویرایش کد ملی پرسنل انجام نشد.');
-        }
 
         const pData = {
           ...editingPersonnel,
@@ -3463,7 +3728,10 @@ export default function Home() {
           workRoutine: formWorkRoutine || undefined,
           orderIndex: personnel.length
         };
-        const accountResponse = await fetch('/api/users', {
+        // شناسهٔ پرسنل (`newId`) در state نگه داشته می‌شود تا اگر مرحلهٔ دوم شکست
+        // بخورد و کاربر دوباره تلاش کند، همان شناسه استفاده شود و رکورد تکراری
+        // ساخته نشود (رفتار idempotent در تلاش مجدد).
+        await fetchJson('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -3475,10 +3743,6 @@ export default function Home() {
             personnelId: newId,
           }),
         });
-        const accountResult = await accountResponse.json();
-        if (!accountResponse.ok || !accountResult.success) {
-          throw new Error(accountResult.error || 'ساخت حساب ورود پرسنل انجام نشد.');
-        }
         updatedList = [...personnel, pData];
       }
 
@@ -3500,24 +3764,27 @@ export default function Home() {
         category: 'personnel',
         severity: 'error',
         title: 'ثبت اطلاعات پرسنل ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در ثبت اطلاعات پرسنل: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در ثبت اطلاعات پرسنل: " + (toErrorMessage(error)));
+    } finally {
+      personnelSaveLockRef.current = false;
     }
   };
 
   const handleDeletePersonnel = async (id: string) => {
     const removedPerson = personnel.find(p => p.id === id);
     const removedRequestCount = requests.filter(r => r.personnelId === id).length;
+    // حذف همان پرسنل نباید دوبار هم‌زمان اجرا شود: مرحلهٔ اول (ذخیرهٔ فهرست) و
+    // مرحلهٔ دوم (غیرفعال‌سازی حساب) با هم تداخل می‌کردند و خطای تداخل ETag
+    // تولید می‌شد. قفل به‌ازای شناسهٔ پرسنل، حذف افراد مختلف را موازی نگه می‌دارد.
+    if (personnelDeleteLockRef.current.has(id)) return;
+    personnelDeleteLockRef.current.add(id);
     try {
       const updatedP = personnel.filter(p => p.id !== id);
       const updatedR = requests.filter(r => r.personnelId !== id);
       await saveState(updatedP, updatedR, settings, customHolidays, { mode: 'full_resolve' });
-      const accountResponse = await fetch(`/api/users/personnel/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const accountResult = await accountResponse.json();
-      if (!accountResponse.ok || !accountResult.success) {
-        throw new Error(accountResult.error || 'غیرفعال‌سازی حساب ورود پرسنل انجام نشد.');
-      }
+      await fetchJson(`/api/users/personnel/${encodeURIComponent(id)}`, { method: 'DELETE' });
       logEvent({
         category: 'personnel',
         severity: 'warning',
@@ -3530,9 +3797,11 @@ export default function Home() {
         category: 'personnel',
         severity: 'error',
         title: 'حذف پرسنل ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در حذف پرسنل: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در حذف پرسنل: " + (toErrorMessage(error)));
+    } finally {
+      personnelDeleteLockRef.current.delete(id);
     }
   };
 
@@ -3569,7 +3838,7 @@ export default function Home() {
       }
       newRequests = [{
         ...baseRequest,
-        id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        id: createLocalId('quick_req'),
         requestType: quickSelectedTemplateId === 'off' ? 'OFF' : 'leave',
         preferredShift: quickSelectedTemplateId === 'off' ? 'OFF' : 'L',
         // نوع آف (سخت/نرم) را فقط سرپرستار تعیین می‌کند؛ آف ثبت‌شده توسط پرسنل بدون نوع می‌ماند
@@ -3585,7 +3854,7 @@ export default function Home() {
           : 'ME';
       newRequests = [{
         ...baseRequest,
-        id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        id: createLocalId('quick_req'),
         requestType: 'shift',
         preferredShift,
         scope: quickSelectedScope,
@@ -3596,7 +3865,7 @@ export default function Home() {
       if (quickSelectedTemplateId === 'long_off') {
         newRequests.push({
           ...baseRequest,
-          id: `quick_req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          id: createLocalId('quick_req'),
           requestType: 'OFF',
           preferredShift: 'OFF',
           offHardness: 'soft',
@@ -3628,9 +3897,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'ثبت درخواست فوری ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert('خطا در ثبت درخواست فوری: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در ثبت درخواست فوری: ' + (toErrorMessage(error)));
     } finally {
       setIsQuickRequestSubmitting(false);
     }
@@ -3676,7 +3945,7 @@ export default function Home() {
     const now = new Date().toISOString();
     const allNotes = Object.values(calendarRequestNotes).map(item => item.trim()).filter(Boolean);
     const newRequests: ShiftRequest[] = Array.from(grouped.values()).map(({ code, note, days }, index) => ({
-      id: `cal_req_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+      id: createLocalId('cal_req'),
       personnelId: targetPersonnelId,
       requestType: code === 'OFF' ? 'OFF' : code === 'L' ? 'leave' : 'shift',
       preferredShift: code,
@@ -3714,9 +3983,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'ثبت درخواست تقویمی ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert('خطا در ثبت درخواست: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در ثبت درخواست: ' + (toErrorMessage(error)));
     } finally {
       setIsCalendarRequestSubmitting(false);
     }
@@ -3732,7 +4001,7 @@ export default function Home() {
     const steps = reqType === 'pattern' ? reqPatternInput.split(' ').map(s => s.trim().toUpperCase()) : undefined;
 
     const reqData: ShiftRequest = {
-      id: `draft_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      id: createLocalId('draft'),
       personnelId: pid,
       requestType: reqType,
       preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
@@ -3760,7 +4029,7 @@ export default function Home() {
     if (finalRequestsToSave.length === 0) {
       const steps = reqType === 'pattern' ? reqPatternInput.split(' ').map(s => s.trim().toUpperCase()) : undefined;
       const currentReq: ShiftRequest = {
-        id: `req_${Date.now()}`,
+        id: createLocalId('req'),
         personnelId: pid,
         requestType: reqType,
         preferredShift: reqType === 'leave' ? 'L' : (reqType === 'OFF' ? 'OFF' : ((reqType === 'shift' || reqType === 'avoid_shift') ? reqPreferredShift : undefined)),
@@ -3778,7 +4047,7 @@ export default function Home() {
     try {
       let updatedR = [...requests];
       for (const reqData of finalRequestsToSave) {
-        const finalId = reqData.id.startsWith('draft_') ? `req_${Date.now()}_${Math.random().toString(36).substr(2, 5)}` : reqData.id;
+        const finalId = reqData.id.startsWith('draft_') ? createLocalId('req') : reqData.id;
         const finalReq = { ...reqData, id: finalId };
         updatedR.push(finalReq);
       }
@@ -3813,9 +4082,9 @@ export default function Home() {
         category: 'requests',
         severity: 'error',
         title: 'ثبت نهایی درخواست‌ها ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
-      alert("خطا در ثبت نهایی درخواست‌ها: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در ثبت نهایی درخواست‌ها: " + (toErrorMessage(error)));
     }
   };
 
@@ -3944,7 +4213,7 @@ export default function Home() {
         setReqSelectedDays([]);
       } catch (error) {
         console.error("Error editing request:", error);
-        alert("خطا در ویرایش درخواست: " + (error instanceof Error ? error.message : String(error)));
+        alert("خطا در ویرایش درخواست: " + (toErrorMessage(error)));
       }
     } else {
       await handleFinalSubmitRequests();
@@ -4012,7 +4281,7 @@ export default function Home() {
     const now = new Date().toISOString();
     const rebuilt: ShiftRequest[] = Array.from(grouped.values()).map(({ code, note, days }, index) => ({
       ...requestEditTarget,
-      id: index === 0 ? requestEditTarget.id : `req_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+      id: index === 0 ? requestEditTarget.id : createLocalId('req'),
       requestType: code === 'OFF' ? 'OFF' : code === 'L' ? 'leave' : 'shift',
       preferredShift: code,
       patternSteps: undefined,
@@ -4048,7 +4317,7 @@ export default function Home() {
       handleCloseRequestEditor();
     } catch (error) {
       console.error('Error editing request days:', error);
-      alert('خطا در ثبت ویرایش درخواست: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در ثبت ویرایش درخواست: ' + (toErrorMessage(error)));
     } finally {
       setIsSavingRequestEdit(false);
     }
@@ -4074,7 +4343,7 @@ export default function Home() {
       );
     } catch (error) {
       console.error("Error deleting request:", error);
-      alert("خطا در حذف درخواست: " + (error instanceof Error ? error.message : String(error)));
+      alert("خطا در حذف درخواست: " + (toErrorMessage(error)));
     }
   };
 
@@ -4160,15 +4429,7 @@ export default function Home() {
           const nextDb = getFreshDbCopy();
           if (!nextDb.deptData) nextDb.deptData = {};
 
-          const oldDept = nextDb.deptData[deptId] || {
-            personnel: [],
-            requests: [],
-            settings_system: INITIAL_SETTINGS,
-            settings_credentials: { username: 'headnurse', password: '123456' },
-            holidays: {},
-            firstDayOfWeek: {},
-            schedules: {},
-          };
+          const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
           if (scenarioContext) {
             const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
@@ -4316,7 +4577,7 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Error setting manual shift change:', error);
-      alert('خطا در تغییر دستی شیفت: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در تغییر دستی شیفت: ' + (toErrorMessage(error)));
     }
   };
 
@@ -4338,7 +4599,7 @@ export default function Home() {
         category: 'settings',
         severity: 'error',
         title: 'ذخیره تنظیمات بخش ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
     }
   };
@@ -4378,7 +4639,7 @@ export default function Home() {
         category: 'calendar',
         severity: 'error',
         title: 'ثبت تغییر تقویم و تعطیلات ناموفق بود',
-        detail: error instanceof Error ? error.message : String(error),
+        detail: toErrorMessage(error),
       });
       throw error;
     }
@@ -4459,15 +4720,7 @@ export default function Home() {
       if (!nextDb.deptData) nextDb.deptData = {};
 
       const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId] || {
-        personnel: [],
-        requests: [],
-        settings_system: INITIAL_SETTINGS,
-        settings_credentials: { username: 'headnurse', password: '123456' },
-        holidays: {},
-        firstDayOfWeek: {},
-        schedules: {},
-      };
+      const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
 
       nextDb.deptData[deptId] = {
         ...oldDept,
@@ -4507,9 +4760,12 @@ export default function Home() {
       return;
     }
     const targetDepartmentId = role === 'headnurse' ? (authenticatedUser?.departmentId || selectedDepartmentId) : selectedDepartmentId;
+    // حذف بخش غیرقابل بازگشت است؛ ارسال دوم باید در همان تیک مسدود شود.
+    if (deleteDeptLockRef.current) return;
+    deleteDeptLockRef.current = true;
     setIsDeletingDept(true);
     try {
-      const response = await fetch('/api/head-nurse/department', {
+      const result = await fetchJson<{ ownAccountRemoved?: boolean }>('/api/head-nurse/department', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4518,21 +4774,20 @@ export default function Home() {
           ...(role === 'admin' ? { departmentId: targetDepartmentId } : {}),
         }),
       });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'حذف بخش انجام نشد.');
       setShowDeleteDeptModal(false);
       setDeleteDeptNationalId('');
       setDeleteDeptPassword('');
       if (result.ownAccountRemoved) {
         // حساب مدیر فعلی نیز حذف شده است؛ خروج اجباری و بازگشت به ورود امن.
-        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+        await resilientFetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
         exitToGuestPortal();
       } else {
         window.location.reload();
       }
     } catch (error) {
-      alert('خطا در حذف دائمی بخش: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در حذف دائمی بخش: ' + (toErrorMessage(error)));
     } finally {
+      deleteDeptLockRef.current = false;
       setIsDeletingDept(false);
     }
   };
@@ -4543,9 +4798,12 @@ export default function Home() {
       alert('لطفاً اطلاعات سرپرستار جدید و تأیید امنیتی سرپرستار قبلی را کامل وارد کنید.');
       return;
     }
+    // انتقال مدیریت حساس و غیرقابل بازگشت است؛ ارسال دوم مسدود می‌شود.
+    if (transferDeptLockRef.current) return;
+    transferDeptLockRef.current = true;
     setIsTransferringDept(true);
     try {
-      const response = await fetch('/api/head-nurse/transfer', {
+      const result = await fetchJson<{ transferredByPreviousHeadNurse?: boolean; message?: string }>('/api/head-nurse/transfer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4559,8 +4817,6 @@ export default function Home() {
           },
         }),
       });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'انتقال مدیریت بخش انجام نشد.');
       setShowTransferDeptModal(false);
       setTransferPrevNationalId('');
       setTransferPrevPassword('');
@@ -4569,15 +4825,16 @@ export default function Home() {
       setTransferNewLastName('');
       if (result.transferredByPreviousHeadNurse) {
         // حساب سرپرستار قبلی غیرفعال شده است؛ خروج اجباری و بازگشت به ورود امن.
-        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+        await resilientFetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
         exitToGuestPortal();
       } else {
         alert(result.message || 'مدیریت بخش با موفقیت منتقل شد.');
         window.location.reload();
       }
     } catch (error) {
-      alert('خطا در انتقال امن مدیریت بخش: ' + (error instanceof Error ? error.message : String(error)));
+      alert('خطا در انتقال امن مدیریت بخش: ' + (toErrorMessage(error)));
     } finally {
+      transferDeptLockRef.current = false;
       setIsTransferringDept(false);
     }
   };
@@ -4908,7 +5165,7 @@ export default function Home() {
     setShowExportMenu(false);
 
     // کمی صبر تا React نسخه‌ی چاپی را کامل رندر و مرورگر آن را paint کند
-    window.setTimeout(() => {
+    scheduleTimeout(() => {
       const containerId = target === 'schedule' ? 'print-schedule-sheet' : 'print-request-cards';
       const container = document.getElementById(containerId);
       const bodyHtml = container?.outerHTML;
@@ -5018,7 +5275,11 @@ export default function Home() {
 
   if (role === 'guest') {
     const activeDept = departments.find(d => d.id === selectedDepartmentId);
-    const isNewDeptWithDefaults = activeDept?.username === 'headnurse' && activeDept?.password === '123456';
+    // تشخیص بخش‌های قدیمی که پیش از مهاجرت به احراز هویت Prisma ساخته شده‌اند.
+    // این فقط یک نشانهٔ نمایشی است (متن دکمهٔ ورود) و هیچ تصمیم امنیتی بر پایهٔ
+    // آن گرفته نمی‌شود؛ ورود واقعی همیشه از مسیر Prisma عبور می‌کند.
+    const isNewDeptWithDefaults = activeDept?.username === LEGACY_DEFAULT_DEPT_USERNAME
+      && activeDept?.password === LEGACY_DEFAULT_DEPT_PASSWORD;
 
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-12 font-sans relative overflow-hidden" dir="rtl">
@@ -5035,35 +5296,30 @@ export default function Home() {
           <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
 
           <div className="mb-6 flex flex-col items-center">
-            <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
-              <img
+            {/*
+              لوگو با next/image و priority بارگذاری می‌شود.
+
+              چرا این تغییر لازم بود؟ نسخهٔ قبلی به `/logo.png` اشاره می‌کرد که
+              اصلاً وجود نداشت. مرورگر ابتدا یک ۴۰۴ می‌گرفت، سپس زنجیرهٔ onError
+              به فایل SVG می‌رفت: ۵۶۴ کیلوبایت با ۶۱۲ مسیر برداری و بدون viewBox.
+              یعنی برای یک نشان ۸۰ پیکسلی، دو رفت‌وبرگشت شبکه و نیم مگابایت
+              داده — دقیقاً همان «چند ثانیه تأخیر و چشمک زدن لوگو».
+
+              اکنون همان تصویر به PNG ۱۶۰ پیکسلی (~۱۰ کیلوبایت) تبدیل شده و
+              `priority` آن را در همان HTML اولیه preload می‌کند، پس هیچ
+              رفت‌وبرگشت اضافه یا پرش چیدمان (layout shift) وجود ندارد.
+            */}
+            <div className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
+              <Image
                 src="/logo.png"
                 alt="بیمارستان بعثت نهاجا"
+                width={80}
+                height={80}
+                priority
+                sizes="80px"
                 className="w-full h-full object-contain"
-                onError={(e) => {
-                  const imgEl = e.currentTarget;
-                  if (imgEl.src.endsWith('/logo.png')) {
-                    imgEl.src = '/logo.svg';
-                  } else if (imgEl.src.endsWith('/logo.svg')) {
-                    imgEl.src = '/logo.jpg';
-                  } else if (imgEl.src.endsWith('/logo.jpg')) {
-                    imgEl.src = '/logo.jpeg';
-                  } else {
-                    imgEl.style.display = 'none';
-                    const fallbackEl = document.getElementById('hospital-icon-fallback');
-                    if (fallbackEl) {
-                      fallbackEl.style.display = 'flex';
-                    }
-                  }
-                }}
               />
-              <div
-                id="hospital-icon-fallback"
-                className="hidden w-20 h-20 bg-emerald-50 rounded-2xl border border-emerald-200 shadow-inner flex items-center justify-center text-4xl"
-              >
-                🏥
-              </div>
-            </picture>
+            </div>
             <span className="text-[10px] text-amber-600 font-extrabold tracking-widest mt-2 uppercase">بیمارستان بعثت نهاجا</span>
           </div>
 
@@ -7344,11 +7600,17 @@ export default function Home() {
 
               {/* لاگ‌ها و اتفاقات — سیستم اعتبار ۱۰۰ دلاری حذف شده است */}
               {role !== 'personnel' && (
-                <EventLogPanel
-                  events={eventLogs}
-                  monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
-                  userRole={role}
-                />
+                <ErrorBoundary
+                  label="event-log"
+                  title="نمایش «لاگ‌ها و اتفاقات» ممکن نشد"
+                  resetKeys={[currentYear, currentMonth, selectedDepartmentId]}
+                >
+                  <EventLogPanel
+                    events={eventLogs}
+                    monthLabel={`${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`}
+                    userRole={role}
+                  />
+                </ErrorBoundary>
               )}
 
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden" id="reports-table-container">
@@ -8504,21 +8766,31 @@ export default function Home() {
         parseNumberInput={parseNumberInput}
       />
 
-      <AlertCenter
-        isOpen={showAlertCenter && role === 'headnurse' && activeTab === 'schedule'}
-        onClose={() => setShowAlertCenter(false)}
-        allAlerts={allAlertsForDialog}
-        visibleWarningsCount={getVisibleWarnings().length}
-        dismissedAlertWarnings={dismissedAlertWarnings}
-        contextLabel={alertCenterContextLabel}
-        contextDescription={alertCenterContextDescription}
-        expandedSections={expandedAlertSections}
-        onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
-        onDismissAlert={handleDismissAlert}
-        onAlertClick={handleAlertClick}
-        onDayAlertClick={handleDayAlertClick}
-        extractWarningDay={extractWarningDay}
-      />
+      {/*
+        مرکز هشدارها دادهٔ مشتق‌شدهٔ پیچیده‌ای مصرف می‌کند؛ اگر شکل داده غیرمنتظره
+        باشد نباید کل جدول شیفت سرپرستار از دست برود.
+      */}
+      <ErrorBoundary
+        label="alert-center"
+        title="نمایش مرکز هشدارها ممکن نشد"
+        resetKeys={[currentYear, currentMonth, selectedDepartmentId]}
+      >
+        <AlertCenter
+          isOpen={showAlertCenter && role === 'headnurse' && activeTab === 'schedule'}
+          onClose={() => setShowAlertCenter(false)}
+          allAlerts={allAlertsForDialog}
+          visibleWarningsCount={getVisibleWarnings().length}
+          dismissedAlertWarnings={dismissedAlertWarnings}
+          contextLabel={alertCenterContextLabel}
+          contextDescription={alertCenterContextDescription}
+          expandedSections={expandedAlertSections}
+          onToggleSection={(section) => setExpandedAlertSections(prev => ({...prev, [section]: !prev[section]}))}
+          onDismissAlert={handleDismissAlert}
+          onAlertClick={handleAlertClick}
+          onDayAlertClick={handleDayAlertClick}
+          extractWarningDay={extractWarningDay}
+        />
+      </ErrorBoundary>
 
       {/* ====== نوار شناور بازگشت به موقعیت هشدار ====== */}
       {!showAlertCenter && (alertReturnAvailable || alertReturnToast) && (

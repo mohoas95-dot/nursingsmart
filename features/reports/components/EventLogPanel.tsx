@@ -104,7 +104,17 @@ function toPersianDigits(value: string | number): string {
   return String(value).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
 }
 
-export function EventLogPanel({ events, monthLabel }: EventLogPanelProps) {
+/**
+ * پنل «لاگ‌ها و اتفاقات».
+ *
+ * با `React.memo` پوشانده شده است: این پنل داخل صفحهٔ اصلی رندر می‌شود که بیش
+ * از ۱۰۰ متغیر state دارد، پس با هر تغییر کوچک (مثلاً تایپ در یک فیلد فرم)
+ * دوباره رندر می‌شد — در حالی که propهای آن (`events` یک useMemo پایدار و
+ * `monthLabel` یک رشته) تغییر نکرده بودند.
+ *
+ * چون همهٔ propها مقایسهٔ سطحی‌پذیرند، مقایسه‌کنندهٔ سفارشی لازم نیست.
+ */
+function EventLogPanelComponent({ events, monthLabel }: EventLogPanelProps) {
   const [filter, setFilter] = React.useState<FilterId>('all');
 
   const ordered = React.useMemo(() => orderEventLogsForDisplay(events), [events]);
@@ -228,3 +238,5 @@ export function EventLogPanel({ events, monthLabel }: EventLogPanelProps) {
     </div>
   );
 }
+
+export const EventLogPanel = React.memo(EventLogPanelComponent);
