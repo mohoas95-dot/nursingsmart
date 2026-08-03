@@ -124,16 +124,53 @@ function authorizeResourceWrite(user: AuthenticatedUser, resource: StorageResour
   }
 }
 
-export async function GET() {
+/** اعتبارسنجی کلید ماه (`YYYY_M`) پیش از استفاده در مسیر شیء S3. */
+const MONTH_KEY_PATTERN = /^\d{4}_(?:[1-9]|1[0-2])$/;
+
+/**
+ * دریافت وضعیت پایگاه داده.
+ *
+ * پارامتر اختیاری `months` (جداشده با کاما، مثل `?months=1404_5,1404_6`) دامنهٔ
+ * برنامه‌های ماهانهٔ بارگذاری‌شده را محدود می‌کند.
+ *
+ * ── چرا این تغییر ضروری بود؟ ────────────────────────────────────────────────
+ * پیش‌تر این مسیر **همهٔ** برنامه‌های ماهانهٔ تاریخچه را می‌خواند. بخشی با دو سال
+ * سابقه ۲۴ سند دارد و هر سند شامل تخصیص شیفت تمام پرسنل، هشدارها و لاگ
+ * رویدادهاست. یعنی هر بار تازه‌سازی صفحه ممکن بود صدها کیلوبایت داده‌ای دانلود
+ * شود که رابط کاربری هرگز نمایش نمی‌دهد — چون فقط ماه جاری دیده می‌شود.
+ *
+ * اکنون کلاینت فقط ماه‌های موردنیازش را می‌خواهد و `availableMonths` به او
+ * می‌گوید چه ماه‌های دیگری وجود دارد تا در صورت نیاز آن‌ها را تنبل بگیرد.
+ * برای سازگاری عقب‌رو، نبودِ پارامتر یعنی «همه» (مسیر مهاجرت/صادرات).
+ */
+export async function GET(req: NextRequest) {
   try {
     const actor = await requireCurrentUser();
     if (actor.role !== 'ADMIN' && !actor.departmentId) {
       throw new AuthenticationError(403, 'برای حساب کاربری بخش مشخص نشده است.');
     }
+
+    const monthsParam = req.nextUrl.searchParams.get('months');
+    let monthKeys: string[] | undefined;
+    if (monthsParam !== null) {
+      const requested = monthsParam.split(',').map(value => value.trim()).filter(Boolean);
+      // کلیدهای بدشکل رد می‌شوند تا هیچ ورودی کاربر مستقیماً به مسیر شیء نرود.
+      if (requested.some(monthKey => !MONTH_KEY_PATTERN.test(monthKey))) {
+        return noStoreJson({
+          success: false,
+          code: 'INVALID_MONTH_KEY',
+          error: 'قالب کلید ماه نامعتبر است.',
+        }, { status: 400 });
+      }
+      // سقف حفاظتی: جلوگیری از درخواست عمدی صدها ماه در یک فراخوانی.
+      monthKeys = requested.slice(0, 24);
+    }
+
     const { bucket, environment } = getS3Client();
-    const result = await readDatabaseState(actor.role === 'ADMIN'
-      ? undefined
-      : { departmentIds: [actor.departmentId!] });
+    const result = await readDatabaseState({
+      ...(actor.role === 'ADMIN' ? {} : { departmentIds: [actor.departmentId!] }),
+      ...(monthKeys ? { monthKeys } : {}),
+    });
     return noStoreJson({
       success: true,
       isConfigured: true,
@@ -142,6 +179,8 @@ export async function GET() {
       source: result.source,
       state: result.state,
       versions: result.versions,
+      availableMonths: result.availableMonths,
+      loadedMonths: result.loadedMonths,
     });
   } catch (error) {
     return errorResponse(error);

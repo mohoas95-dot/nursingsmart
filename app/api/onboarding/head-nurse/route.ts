@@ -12,6 +12,7 @@ import {
   StorageUnavailableError,
   StorageValidationError,
 } from '../../../../lib/s3Storage';
+import { invalidateDepartmentCache } from '../../../../lib/cache/department-index';
 
 const HeadNurseOnboardingSchema = z.object({
   departmentName: z.string().trim().min(2, 'نام بخش را وارد کنید.').max(200),
@@ -98,6 +99,10 @@ async function performOnboarding(input: z.infer<typeof HeadNurseOnboardingSchema
       settings_credentials: { username: 'prisma-managed', password: '' },
     },
   });
+
+  // بخش تازه ساخته شد؛ کش فهرست بخش‌ها باید فوراً باطل شود تا کاربر بعدی آن را
+  // در صفحهٔ ورود ببیند و منتظر انقضای TTL نماند.
+  invalidateDepartmentCache();
 
   // مرحلهٔ ۳ — فعال‌سازی حساب پس از آماده شدن کامل بخش.
   await runInTransaction(tx => tx.user.update({

@@ -27,6 +27,12 @@ The granular object layout, optimistic-locking contract, circuit breaker, and on
 
 PostgreSQL/Prisma setup, national-ID login, session security, first-login password change, and the head-nurse password-reset workflow are documented in [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
 
+## Performance
+
+Initial-load analysis — data-fetching waterfalls, lazy month loading, static asset optimization, and caching — is documented in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+
+`GET /api/storage` accepts an optional `?months=YYYY_M,...` parameter so clients load only the schedule documents they display; the response reports `availableMonths` for lazy navigation.
+
 ## Concurrency
 
 Transaction rules, the automatic retry layer for transient database errors (deadlocks, lock timeouts, pool exhaustion), duplicate-request protection, and the error-handling contract are documented in [`docs/CONCURRENCY.md`](docs/CONCURRENCY.md).

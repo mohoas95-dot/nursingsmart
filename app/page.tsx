@@ -379,6 +379,16 @@ export default function Home() {
   const saveQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   const storageWriteBlockedRef = React.useRef(false);
   const storageLoadCountRef = React.useRef(0);
+  /**
+   * ماه‌هایی که هم‌اکنون در حافظهٔ کلاینت بارگذاری شده‌اند (کلید `YYYY_M`).
+   *
+   * بارگذاری اولیه فقط ماه جاری (و ماه‌های همسایه) را می‌گیرد، نه کل تاریخچه را.
+   * این مجموعه تضمین می‌کند هنگام محاسبهٔ تغییرات برای ذخیره‌سازی، ماهی که اصلاً
+   * بارگذاری نشده به‌اشتباه «حذف‌شده» تلقی نشود.
+   */
+  const loadedMonthKeysRef = React.useRef<Set<string>>(new Set());
+  /** فهرست کامل ماه‌های موجود در سرور، حتی آن‌هایی که بارگذاری نشده‌اند. */
+  const availableMonthKeysRef = React.useRef<string[]>([]);
   const storageLoadGenerationRef = React.useRef(0);
 
   // Self-service head-nurse/department onboarding
@@ -836,68 +846,105 @@ export default function Home() {
   const { count: resetRequestCount } = useResetRequestCount(role === 'headnurse' || role === 'admin');
 
 
+  /**
+   * راه‌اندازی اولیه: نشست کاربر و فهرست بخش‌ها **هم‌زمان** واکشی می‌شوند.
+   *
+   * ── مشکل ساختاری که رفع شد ─────────────────────────────────────────────────
+   * پیش‌تر این دو درخواست یک آبشار (waterfall) بودند:
+   *
+   *   mount → GET /api/auth/me  ──(تمام شد)──▶ setIsAuthLoading(false)
+   *                                              ↓ (رندر مجدد، افکت دوم)
+   *                                         GET /api/public/departments
+   *
+   * افکت دوم شرط `if (isAuthLoading) return` داشت، پس تا وقتی پاسخ نشست
+   * نمی‌رسید اصلاً شروع نمی‌شد. کاربر مهمان که اساساً نشستی ندارد، باید منتظر
+   * یک ۴۰۱ می‌ماند و تازه بعد از آن واکشی بخش‌ها آغاز می‌شد؛ یعنی زمان انتظار
+   * برابر مجموع دو رفت‌وبرگشت بود، نه بیشترینِ آن‌ها. این دقیقاً همان «چند ثانیه
+   * طول کشیدن لود بخش پیش‌فرض» است.
+   *
+   * حالا هر دو در همان لحظهٔ mount با Promise.all شروع می‌شوند. فهرست بخش‌ها
+   * عمومی است و به نشست وابستگی ندارد، پس هیچ دلیلی برای انتظار وجود نداشت.
+   * زمان کل = max(auth, departments) به‌جای auth + departments.
+   *
+   * نکتهٔ مهم: از `Promise.allSettled` استفاده می‌شود تا شکست یکی، دیگری را
+   * از بین نبرد (مثلاً اگر ذخیره‌سازی ابری پایین باشد، کاربرِ دارای نشست باید
+   * همچنان بتواند وارد شود).
+   */
   useEffect(() => {
     let cancelled = false;
-    const loadSession = async () => {
-      try {
-        const response = await resilientFetch('/api/auth/me', { cache: 'no-store' });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.user) {
-          if (!cancelled) {
-            setAuthenticatedUser(null);
-            setRole('guest');
-          }
-          return;
-        }
-        const user = result.user as AuthenticatedUser;
-        if (user.mustChangePassword) {
-          router.replace('/change-password');
-          return;
-        }
-        if (cancelled) return;
+
+    const loadSession = async (): Promise<AuthenticatedUser | null> => {
+      const response = await resilientFetch('/api/auth/me', { cache: 'no-store' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.user) return null;
+      return result.user as AuthenticatedUser;
+    };
+
+    const loadDepartmentOptions = async (): Promise<Department[]> => {
+      const response = await resilientFetch('/api/public/departments');
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || 'فهرست بخش‌ها دریافت نشد.');
+      return result.departments as Department[];
+    };
+
+    const bootstrap = async () => {
+      setDepartmentListStatus('loading');
+      // هر دو درخواست هم‌زمان روانه می‌شوند؛ هیچ‌کدام منتظر دیگری نمی‌ماند.
+      const [sessionOutcome, departmentsOutcome] = await Promise.allSettled([
+        loadSession(),
+        loadDepartmentOptions(),
+      ]);
+      if (cancelled) return;
+
+      // ۱) فهرست بخش‌ها — حتی اگر کاربر وارد شده باشد ذخیره می‌شود تا نام بخش
+      //    بلافاصله در دسترس باشد و منتظر بارگذاری کامل دیتابیس نماند.
+      const publicDepartments = departmentsOutcome.status === 'fulfilled'
+        ? departmentsOutcome.value
+        : null;
+      if (publicDepartments) {
+        setDepartments(publicDepartments);
+        setDepartmentListStatus('ready');
+      } else {
+        setDepartmentListStatus('error');
+      }
+
+      // ۲) نشست کاربر
+      const user = sessionOutcome.status === 'fulfilled' ? sessionOutcome.value : null;
+      if (user?.mustChangePassword) {
+        router.replace('/change-password');
+        return;
+      }
+
+      if (user) {
         setAuthenticatedUser(user);
         setRole(user.role === 'ADMIN' ? 'admin' : user.role === 'HEAD_NURSE' ? 'headnurse' : 'personnel');
         if (user.departmentId) {
           setSelectedDepartmentId(user.departmentId);
           localStorage.setItem('hospital_selected_dept_id', user.departmentId);
         }
-      } catch {
-        if (!cancelled) {
-          setAuthenticatedUser(null);
-          setRole('guest');
+      } else {
+        setAuthenticatedUser(null);
+        setRole('guest');
+        // انتخاب بخش پیش‌فرض فقط برای کاربر مهمان معنا دارد. این کار داخل
+        // به‌روزرسانی تابعی انجام می‌شود تا افکت به `selectedDepartmentId`
+        // وابسته نباشد؛ وابستگی قبلی باعث می‌شد کل واکشی با هر تغییر انتخاب
+        // بخش دوباره اجرا شود.
+        if (publicDepartments && publicDepartments.length > 0) {
+          setSelectedDepartmentId(current => {
+            if (publicDepartments.some(item => item.id === current)) return current;
+            const fallbackId = publicDepartments[0].id;
+            localStorage.setItem('hospital_selected_dept_id', fallbackId);
+            return fallbackId;
+          });
         }
-      } finally {
-        if (!cancelled) setIsAuthLoading(false);
       }
+
+      setIsAuthLoading(false);
     };
-    void loadSession();
+
+    void bootstrap();
     return () => { cancelled = true; };
   }, [router]);
-
-  useEffect(() => {
-    if (isAuthLoading || authenticatedUser) return;
-    let cancelled = false;
-    const loadDepartmentOptions = async () => {
-      setDepartmentListStatus('loading');
-      try {
-        const response = await resilientFetch('/api/public/departments');
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.success) throw new Error(result.error || 'فهرست بخش‌ها دریافت نشد.');
-        if (cancelled) return;
-        const publicDepartments = result.departments as Department[];
-        setDepartments(publicDepartments);
-        setDepartmentListStatus('ready');
-        if (publicDepartments.length > 0 && !publicDepartments.some(item => item.id === selectedDepartmentId)) {
-          setSelectedDepartmentId(publicDepartments[0].id);
-          localStorage.setItem('hospital_selected_dept_id', publicDepartments[0].id);
-        }
-      } catch {
-        if (!cancelled) setDepartmentListStatus('error');
-      }
-    };
-    void loadDepartmentOptions();
-    return () => { cancelled = true; };
-  }, [authenticatedUser, isAuthLoading, selectedDepartmentId]);
 
   const handlePortalLogin = async (portal: 'staff' | 'head-nurse') => {
     setAuthError('');
@@ -1048,6 +1095,24 @@ export default function Home() {
     return JSON.parse(JSON.stringify(current));
   };
 
+  /**
+   * پنجرهٔ ماه‌هایی که در بارگذاری اولیه گرفته می‌شوند: ماه جاری به‌همراه ماه قبل
+   * و بعد.
+   *
+   * چرا ماه‌های همسایه هم؟ کاربر معمولاً بین ماه‌های مجاور جابه‌جا می‌شود؛
+   * پیش‌واکشی آن‌ها ناوبری را آنی می‌کند در حالی که هزینهٔ آن ناچیز است. ماه‌های
+   * دورتر فقط در صورت نیاز (lazy) گرفته می‌شوند.
+   */
+  const buildMonthWindow = React.useCallback((year: number, month: number): string[] => {
+    const previous = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+    const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+    return [
+      `${previous.year}_${previous.month}`,
+      `${year}_${month}`,
+      `${next.year}_${next.month}`,
+    ];
+  }, []);
+
   const versionIdForResource = (resource: StorageResource): string => {
     switch (resource.type) {
       case 'departments': return 'departments';
@@ -1105,13 +1170,22 @@ export default function Home() {
         }
       }
 
+      // فقط ماه‌های موجود در وضعیت جدید بررسی می‌شوند و هرگز چیزی حذف نمی‌شود.
+      //
+      // این نکته با بارگذاری جزئی (فقط ماه جاری و همسایه‌ها) حیاتی است: ماهی که
+      // اصلاً بارگذاری نشده در `after.schedules` نیست، پس هیچ‌گاه به‌اشتباه
+      // «حذف‌شده» تلقی نمی‌شود و سند آن در ذخیره‌سازی دست‌نخورده می‌ماند.
       for (const [monthKey, nextSchedule] of Object.entries(after.schedules || {})) {
         const previousSchedule = before?.schedules?.[monthKey];
         if (!sameDocument(previousSchedule, nextSchedule)) {
           mutations.push({
             resource: { type: 'schedule', departmentId, monthKey },
             data: nextSchedule,
-            existed: previousSchedule !== undefined,
+            // ماهی که در این نشست بارگذاری نشده ممکن است روی سرور وجود داشته
+            // باشد؛ در آن حالت `If-None-Match: *` اشتباه است و باید با ETag تازه
+            // نوشته شود. مرجع درستیِ «وجود داشتن» فهرست ماه‌های سرور است.
+            existed: previousSchedule !== undefined ||
+              availableMonthKeysRef.current.includes(monthKey),
           });
         }
       }
@@ -1218,10 +1292,19 @@ export default function Home() {
   const fetchLatestSnapshot = async (): Promise<{ state: AppDatabaseState; versions: Record<string, string> }> => {
     // خواندن idempotent است، پس تلاش مجدد خودکار کاملاً امن است و یک اختلال
     // لحظه‌ای، مسیر بازیابی از تداخل را بی‌نتیجه نمی‌گذارد.
-    const response = await resilientFetch('/api/storage', { cache: 'no-store' });
+    //
+    // دقیقاً همان ماه‌هایی درخواست می‌شود که هم‌اکنون بارگذاری شده‌اند: اگر
+    // دامنه کوچک‌تر گرفته شود، ماه‌های در حال ویرایش از snapshot غایب می‌مانند و
+    // مرجِ پس از تداخل ناقص می‌شود.
+    const months = [...loadedMonthKeysRef.current];
+    const query = months.length > 0 ? `?months=${encodeURIComponent(months.join(','))}` : '';
+    const response = await resilientFetch(`/api/storage${query}`, { cache: 'no-store' });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.success || !result.state || !result.versions) {
       throw new Error(result.error || 'خواندن امن دیتابیس برای همگام‌سازی مجدد ناموفق بود.');
+    }
+    if (Array.isArray(result.availableMonths?.[selectedDepartmentId || 'sepehr'])) {
+      availableMonthKeysRef.current = result.availableMonths[selectedDepartmentId || 'sepehr'];
     }
     return { state: result.state as AppDatabaseState, versions: result.versions as Record<string, string> };
   };
@@ -1482,6 +1565,18 @@ export default function Home() {
     const dept = (nextDb.deptData || {})[deptId] as any;
     if (!dept) return nextDb;
 
+    // ⚠️ حفاظت در برابر از دست رفتن داده با بارگذاری جزئی:
+    // اگر برنامهٔ این ماه روی سرور وجود دارد ولی در این نشست بارگذاری نشده،
+    // ساختن یک سند خالی و نوشتن آن، برنامهٔ واقعی همان ماه را پاک می‌کرد.
+    // ثبت لاگ «بهترین تلاش» است و هرگز نباید داده‌ای را نابود کند، پس در این
+    // حالت از ثبت رویداد صرف‌نظر می‌شود.
+    const scheduleIsLoaded = dept.schedules?.[key] !== undefined;
+    const scheduleExistsOnServer = availableMonthKeysRef.current.includes(key);
+    if (!scheduleIsLoaded && scheduleExistsOnServer) {
+      console.warn(`[event-log] ماه ${key} بارگذاری نشده است؛ برای جلوگیری از بازنویسی، رویداد ثبت نشد.`);
+      return nextDb;
+    }
+
     const [yearPart, monthPart] = key.split('_');
     const existingSchedule = dept.schedules?.[key];
     const baseSchedule = existingSchedule || {
@@ -1565,7 +1660,14 @@ export default function Home() {
         // Reads and writes never overlap in this tab. This also prevents a late GET
         // from replacing newly written ETags with an older snapshot.
         await saveQueueRef.current;
-        const res = await resilientFetch('/api/storage', { cache: 'no-store' });
+        // فقط پنجرهٔ ماه جاری (ماه قبل، جاری، بعد) درخواست می‌شود، نه کل تاریخچه.
+        // این تنها تغییری است که بیشترین اثر را روی زمان لود اولیه دارد: بخشی با
+        // دو سال سابقه پیش‌تر ۲۴ سند برنامه را دانلود می‌کرد تا فقط یکی را نشان دهد.
+        const monthWindow = buildMonthWindow(currentYear, currentMonth);
+        const res = await resilientFetch(
+          `/api/storage?months=${encodeURIComponent(monthWindow.join(','))}`,
+          { cache: 'no-store' },
+        );
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success || !data.state || !data.versions) {
           throw new Error(data.error || 'خواندن امن دیتابیس ناموفق بود.');
@@ -1580,6 +1682,21 @@ export default function Home() {
         storageVersionsRef.current = data.versions;
         optimisticDbRef.current = updatedDb;
         storageWriteBlockedRef.current = false;
+
+        // ثبت اینکه چه ماه‌هایی بارگذاری شده و چه ماه‌هایی روی سرور موجود است.
+        // این دو با هم تضمین می‌کنند که ذخیره‌سازی بعدی، ماه‌های بارگذاری‌نشده را
+        // نه حذف کند و نه با پیش‌شرط اشتباه بنویسد.
+        const activeDeptId = updatedDb.deptData[selectedDepartmentId || 'sepehr']
+          ? (selectedDepartmentId || 'sepehr')
+          : updatedDb.departments[0]?.id;
+        availableMonthKeysRef.current = Array.isArray(data.availableMonths?.[activeDeptId])
+          ? data.availableMonths[activeDeptId]
+          : Object.keys(updatedDb.deptData[activeDeptId]?.schedules || {});
+        loadedMonthKeysRef.current = new Set(
+          Array.isArray(data.loadedMonths?.[activeDeptId])
+            ? data.loadedMonths[activeDeptId]
+            : Object.keys(updatedDb.deptData[activeDeptId]?.schedules || {}),
+        );
         setFullDbState(updatedDb);
         setStorageInfo({
           isConfigured: data.isConfigured,
@@ -1684,7 +1801,7 @@ export default function Home() {
     };
 
     loadDatabase();
-  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading]);
+  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading, buildMonthWindow]);
 
   const extractWarningDay = (warningText: string) => {
     const dayMatch = warningText.match(/روز (\d+)/);
@@ -5147,35 +5264,30 @@ export default function Home() {
           <div className="absolute top-0 bottom-0 right-0 w-2.5 bg-gradient-to-b from-emerald-600 via-teal-500 to-indigo-600"></div>
 
           <div className="mb-6 flex flex-col items-center">
-            <picture className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
-              <img
+            {/*
+              لوگو با next/image و priority بارگذاری می‌شود.
+
+              چرا این تغییر لازم بود؟ نسخهٔ قبلی به `/logo.png` اشاره می‌کرد که
+              اصلاً وجود نداشت. مرورگر ابتدا یک ۴۰۴ می‌گرفت، سپس زنجیرهٔ onError
+              به فایل SVG می‌رفت: ۵۶۴ کیلوبایت با ۶۱۲ مسیر برداری و بدون viewBox.
+              یعنی برای یک نشان ۸۰ پیکسلی، دو رفت‌وبرگشت شبکه و نیم مگابایت
+              داده — دقیقاً همان «چند ثانیه تأخیر و چشمک زدن لوگو».
+
+              اکنون همان تصویر به PNG ۱۶۰ پیکسلی (~۱۰ کیلوبایت) تبدیل شده و
+              `priority` آن را در همان HTML اولیه preload می‌کند، پس هیچ
+              رفت‌وبرگشت اضافه یا پرش چیدمان (layout shift) وجود ندارد.
+            */}
+            <div className="w-20 h-20 flex items-center justify-center transition-transform hover:scale-105 duration-300">
+              <Image
                 src="/logo.png"
                 alt="بیمارستان بعثت نهاجا"
+                width={80}
+                height={80}
+                priority
+                sizes="80px"
                 className="w-full h-full object-contain"
-                onError={(e) => {
-                  const imgEl = e.currentTarget;
-                  if (imgEl.src.endsWith('/logo.png')) {
-                    imgEl.src = '/logo.svg';
-                  } else if (imgEl.src.endsWith('/logo.svg')) {
-                    imgEl.src = '/logo.jpg';
-                  } else if (imgEl.src.endsWith('/logo.jpg')) {
-                    imgEl.src = '/logo.jpeg';
-                  } else {
-                    imgEl.style.display = 'none';
-                    const fallbackEl = document.getElementById('hospital-icon-fallback');
-                    if (fallbackEl) {
-                      fallbackEl.style.display = 'flex';
-                    }
-                  }
-                }}
               />
-              <div
-                id="hospital-icon-fallback"
-                className="hidden w-20 h-20 bg-emerald-50 rounded-2xl border border-emerald-200 shadow-inner flex items-center justify-center text-4xl"
-              >
-                🏥
-              </div>
-            </picture>
+            </div>
             <span className="text-[10px] text-amber-600 font-extrabold tracking-widest mt-2 uppercase">بیمارستان بعثت نهاجا</span>
           </div>
 

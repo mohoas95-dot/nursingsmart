@@ -10,6 +10,7 @@ import {
 import { NationalIdSchema, PasswordInputSchema } from '../../../../lib/auth/validation';
 import { dbRead, runInTransaction, withMutex } from '../../../../lib/db';
 import { registerFailedAttempt } from '../../../../lib/auth/failedAttempts';
+import { invalidateDepartmentCache } from '../../../../lib/cache/department-index';
 import {
   deleteDepartmentStorage,
   departmentExistsInIndex,
@@ -84,6 +85,9 @@ async function performDelete(
   // ابتدا اسناد ابری بخش به‌صورت دائمی پاک می‌شوند؛ اگر این مرحله خطا بدهد، حساب‌های
   // کاربری دست‌نخورده باقی می‌مانند و امکان تلاش مجدد وجود دارد.
   await deleteDepartmentStorage(targetDepartmentId);
+  // بخش حذف شد؛ کش فهرست عمومی بلافاصله باطل می‌شود تا بخشِ پاک‌شده در صفحهٔ
+  // ورود نمایش داده نشود.
+  invalidateDepartmentCache();
 
   // سپس تمام رکوردهای پایگاه‌داده مرتبط با بخش (نشست‌ها و کاربران) حذف قطعی می‌شوند.
   //
