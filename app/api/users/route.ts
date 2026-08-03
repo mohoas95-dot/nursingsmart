@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
           existing.departmentId === requestedDepartmentId) {
         // هش رمز پیش از تراکنش آماده می‌شود تا bcrypt قفل ردیف را نگه ندارد.
         const passwordHash = await hashPassword(DEFAULT_INITIAL_PASSWORD);
-        const reactivated = await runInTransaction(tx => tx.user.update({
+        const reactivated = await runInTransaction(async (tx) => tx.user.update({
           where: { id: existing.id },
           data: {
             personnelId: input.personnelId || null,
@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
 
       // If the existing user is the head nurse (sarparastar) of this department, link their personnelId
       if (existing.role === 'HEAD_NURSE' && existing.departmentId === requestedDepartmentId) {
-        const updated = await runInTransaction(tx => tx.user.update({
+        const updated = await runInTransaction(async (tx) => tx.user.update({
           where: { id: existing.id },
           data: { personnelId: input.personnelId || existing.personnelId || null },
         }), { label: 'user-link-headnurse' });

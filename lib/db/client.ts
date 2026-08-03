@@ -13,7 +13,7 @@
  * قواعد استفاده:
  *  - خواندن ساده → `dbRead(...)`
  *  - نوشتن تک‌عبارتی → `dbWrite(...)`
- *  - چند نوشتن مرتبط → `runInTransaction(tx => ...)`  (هرگز چند await جدا!)
+ *  - چند نوشتن مرتبط → `runInTransaction(async (tx) => ...)`  (هرگز چند await جدا!)
  */
 
 import { PrismaClient, type Prisma } from '@prisma/client';
@@ -147,15 +147,22 @@ export interface TransactionOptions extends RetryOptions {
  * S3). محاسبات سنگین را پیش از شروع تراکنش انجام دهید تا قفل‌ها زود آزاد شوند.
  */
 export function runInTransaction<T>(
-  operation: (tx: TransactionClient) => T | Promise<T>,
+  operation: (tx: TransactionClient) => Promise<T>,
   options: TransactionOptions = {},
-): Promise<Awaited<T>> {
+): Promise<T> {
   const label = options.label || 'db-transaction';
   const { maxWait, timeout, isolationLevel, ...retryOptions } = options;
 
-  return withDbRetry(async (): Promise<Awaited<T>> => {
+  return withDbRetry(async (): Promise<T> => {
     const startedAt = Date.now();
     try {
+      // ⚠️ نوع `operation` عمداً دقیقاً `=> Promise<T>` است، نه `=> T | Promise<T>`.
+      //
+      // `$transaction` دو اورلود دارد: یکی آرایه‌ای (`PrismaPromise[]`) و یکی
+      // تعاملی (`(tx) => Promise<R>`). اگر امضای ورودی را منعطف کنیم، تابع ما با
+      // اورلود تعاملی تطبیق پیدا نمی‌کند و TypeScript به اورلود آرایه‌ای برمی‌گردد
+      // که `unknown[]` برمی‌گرداند و کل استنتاج نوع می‌شکند.
+      // (این خطا در build واقعی Vercel ظاهر شد و باید همین‌طور سخت‌گیرانه بماند.)
       return await prisma.$transaction(operation, {
         maxWait: maxWait ?? TRANSACTION_DEFAULTS.maxWait,
         timeout: timeout ?? TRANSACTION_DEFAULTS.timeout,
@@ -177,9 +184,9 @@ export function runInTransaction<T>(
  * کاربر ندارد.
  */
 export function runInSerializableTransaction<T>(
-  operation: (tx: TransactionClient) => T | Promise<T>,
+  operation: (tx: TransactionClient) => Promise<T>,
   options: Omit<TransactionOptions, 'isolationLevel'> = {},
-): Promise<Awaited<T>> {
+): Promise<T> {
   return runInTransaction(operation, {
     ...options,
     isolationLevel: 'Serializable',

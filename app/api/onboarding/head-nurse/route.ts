@@ -105,7 +105,7 @@ async function performOnboarding(input: z.infer<typeof HeadNurseOnboardingSchema
   invalidateDepartmentCache();
 
   // مرحلهٔ ۳ — فعال‌سازی حساب پس از آماده شدن کامل بخش.
-  await runInTransaction(tx => tx.user.update({
+  await runInTransaction(async (tx) => tx.user.update({
     where: { id: userId },
     data: {
       firstName: input.firstName,
