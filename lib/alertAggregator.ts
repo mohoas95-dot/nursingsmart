@@ -64,8 +64,14 @@ export function aggregateWarnings(
     });
   }
   
-  // مرتب‌سازی حذف شد تا ترتیب ثابت بماند و با dismiss کردن هشدار، پرش رخ ندهد
-  // result.sort((a, b) => b.warningCount - a.warningCount);
+  // مرتب‌سازی بر اساس ترتیب پرسنل در فهرست اصلی تا ترتیب ثابت بماند
+  // و با حذف هشدار، پرش به نفر بعدی رخ ندهد
+  result.sort((a, b) => {
+    const indexA = personnelList.findIndex(p => p.id === a.personnelId);
+    const indexB = personnelList.findIndex(p => p.id === b.personnelId);
+    return indexA - indexB;
+  });
+
   return result;
 }
 

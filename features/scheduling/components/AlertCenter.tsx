@@ -80,6 +80,8 @@ export function AlertCenter(props: AlertCenterProps) {
 
   const generalAlerts = allAlerts.filter(a => a.groupType === 'general' && a.warnings.length > 0);
   const personnelAlerts = allAlerts.filter(a => a.groupType !== 'general' && a.warnings.length > 0);
+  // اولین نفر با هشدار فعال برای نمایش ترتیبی
+  const firstActivePersonId = personnelAlerts.length > 0 ? personnelAlerts[0].personnelId : null;
   const hasAlerts = allAlerts.filter(a => a.warnings.length > 0).length > 0;
 
   // Split general alerts into sub-categories
@@ -237,6 +239,7 @@ export function AlertCenter(props: AlertCenterProps) {
                   title="هشدارهای پرسنلی"
                   alerts={personnelAlerts}
                   isExpanded={expandedSections.personnel}
+                  firstActivePersonId={firstActivePersonId || undefined}
                   onToggle={() => onToggleSection('personnel')}
                   dismissedAlertWarnings={dismissedAlertWarnings}
                   onDismissAlert={onDismissAlert}
@@ -424,6 +427,7 @@ interface AlertSectionProps {
   extractWarningDay: (warningText: string) => number | null;
   colorScheme: 'indigo' | 'amber';
   badgeText: string;
+  firstActivePersonId?: string;
 }
 
 function AlertSection(props: AlertSectionProps) {
@@ -438,6 +442,7 @@ function AlertSection(props: AlertSectionProps) {
     extractWarningDay,
     colorScheme,
     badgeText,
+    firstActivePersonId,
   } = props;
 
   const activeCount = alerts.reduce(
@@ -493,7 +498,9 @@ function AlertSection(props: AlertSectionProps) {
               : 'border-blue-200 bg-blue-50/40';
 
         return (
-          <div key={alert.personnelId} className={`border rounded-2xl p-4 ${severityClasses}`}>
+          <div key={alert.personnelId} className={`border rounded-2xl p-4 transition-all ${severityClasses} ${
+            alert.personnelId === firstActivePersonId ? 'ring-2 ring-amber-400 shadow-lg bg-amber-50/30' : ''
+          }`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <span className={`text-sm font-black ${
