@@ -19,6 +19,7 @@ import {
 } from '../../../lib/auth/session';
 import type { AuthenticatedUser } from '../../../lib/auth/types';
 import { assertSameOrigin } from '../../../lib/auth/http';
+import { classifyDbError, describeDbError, isDatabaseError } from '../../../lib/db/errors';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -58,9 +59,31 @@ function errorResponse(error: unknown) {
       code: 'STORAGE_UNAVAILABLE',
       error: error.message,
       circuit: circuit.state,
+      // پیکربندی ناقص با تلاش مجدد درست نمی‌شود؛ فقط قطعی موقت گذراست.
+      retryable: error instanceof StorageUnavailableError,
     }, { status: 503 });
-    if (circuit.retryAfterMs > 0) {
-      response.headers.set('Retry-After', String(Math.max(1, Math.ceil(circuit.retryAfterMs / 1000))));
+    const retryAfterSeconds = circuit.retryAfterMs > 0
+      ? Math.max(1, Math.ceil(circuit.retryAfterMs / 1000))
+      : (error instanceof StorageUnavailableError ? 3 : 0);
+    if (retryAfterSeconds > 0) {
+      response.headers.set('Retry-After', String(retryAfterSeconds));
+    }
+    return response;
+  }
+
+  // احراز هویت این مسیر به پایگاه داده وابسته است، پس خطای گذرای دیتابیس هم
+  // ممکن است اینجا ظاهر شود و نباید به ۵۰۰ تبدیل گردد.
+  if (isDatabaseError(error)) {
+    const info = classifyDbError(error);
+    console.error('[storage-api] خطای پایگاه داده:', describeDbError(error));
+    const response = noStoreJson({
+      success: false,
+      code: info.retryable ? 'DB_TEMPORARILY_UNAVAILABLE' : `DB_${info.kind.toUpperCase()}`,
+      error: info.userMessage,
+      retryable: info.retryable,
+    }, { status: info.httpStatus });
+    if (info.retryAfterSeconds) {
+      response.headers.set('Retry-After', String(info.retryAfterSeconds));
     }
     return response;
   }

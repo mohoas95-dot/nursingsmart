@@ -11,11 +11,14 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Public department list read failed:', error);
+    // این فهرست در صفحهٔ ورود لازم است؛ اعلام گذرا بودن خطا به کلاینت اجازه
+    // می‌دهد خودکار تلاش مجدد کند و کاربر پشت یک پیام خطا گیر نکند.
     return NextResponse.json({
       success: false,
       error: error instanceof StorageUnavailableError
         ? 'فهرست بخش‌ها موقتاً در دسترس نیست.'
         : 'خطا در دریافت فهرست بخش‌ها.',
-    }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
+      retryable: true,
+    }, { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '3' } });
   }
 }

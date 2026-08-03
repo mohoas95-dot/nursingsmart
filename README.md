@@ -27,6 +27,12 @@ The granular object layout, optimistic-locking contract, circuit breaker, and on
 
 PostgreSQL/Prisma setup, national-ID login, session security, first-login password change, and the head-nurse password-reset workflow are documented in [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
 
+## Concurrency
+
+Transaction rules, the automatic retry layer for transient database errors (deadlocks, lock timeouts, pool exhaustion), duplicate-request protection, and the error-handling contract are documented in [`docs/CONCURRENCY.md`](docs/CONCURRENCY.md).
+
+All database access must go through `lib/db` (`dbRead` / `dbWrite` / `runInTransaction`) rather than the raw Prisma client. Health of the database and object storage is exposed at `GET /api/health`.
+
 ## Tests
 
 ```bash

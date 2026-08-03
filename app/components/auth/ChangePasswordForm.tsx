@@ -3,6 +3,8 @@
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { KeyRound, Loader2, LogOut } from 'lucide-react';
+import { fetchJson } from '../../../lib/http/resilient-fetch';
+import { useSubmitGuard } from '../../../features/shared/hooks/useSubmitGuard';
 
 export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolean }) {
   const router = useRouter();
@@ -10,45 +12,50 @@ export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolea
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
+
+  // ── جلوگیری از ارسال تکراری ────────────────────────────────────────────────
+  // پیش‌تر با `useState` تنها، دو کلیک سریع روی «ثبت» هر دو مقدار قدیمیِ
+  // submitting=false را می‌دیدند و دو درخواست هم‌زمان تغییر رمز ارسال می‌شد؛
+  // درخواست دوم با «رمز عبور فعلی نادرست است» رد می‌شد چون رمز همان لحظه عوض
+  // شده بود. محافظ ارسال با ref کار می‌کند و کلیک دوم را در همان تیک می‌بندد.
+  const submitGuard = useSubmitGuard(async () => {
+    const result = await fetchJson<{ redirectTo?: string }>('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    });
+    router.replace(result.redirectTo || '/');
+    router.refresh();
+  });
+
+  const logoutGuard = useSubmitGuard(async () => {
+    await fetchJson('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    router.replace('/login');
+    router.refresh();
+  });
+
+  const submitting = submitGuard.isRunning;
+  const loggingOut = logoutGuard.isRunning;
 
   const handleCancel = async () => {
     setError('');
-    setLoggingOut(true);
     try {
-      const response = await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'خروج انجام نشد.');
-      router.replace('/login');
-      router.refresh();
+      await logoutGuard.run();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'خطا در خروج از حساب.');
-      setLoggingOut(false);
     }
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
-    setSubmitting(true);
     try {
-      const response = await fetch('/api/auth/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || 'تغییر رمز انجام نشد.');
-      router.replace(result.redirectTo || '/');
-      router.refresh();
+      await submitGuard.run();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'خطا در تغییر رمز عبور.');
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -63,11 +70,11 @@ export function ChangePasswordForm({ isRequired = false }: { isRequired?: boolea
       <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} autoComplete="new-password" placeholder="رمز عبور جدید (دلخواه)" className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10" required />
       <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password" placeholder="تکرار رمز عبور جدید" className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-sm outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10" required />
       {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-center text-xs font-bold text-rose-700">{error}</p>}
-      <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white hover:bg-indigo-700 disabled:opacity-60">
+      <button type="submit" disabled={submitting || loggingOut} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-black text-white hover:bg-indigo-700 disabled:opacity-60">
         {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
         {submitting ? 'در حال ثبت...' : 'ثبت رمز جدید و ادامه'}
       </button>
-      <button type="button" onClick={handleCancel} disabled={loggingOut} className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-600 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-60">
+      <button type="button" onClick={handleCancel} disabled={loggingOut || submitting} className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-600 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-60">
         {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
         {loggingOut ? 'در حال خروج...' : 'انصراف و خروج'}
       </button>
