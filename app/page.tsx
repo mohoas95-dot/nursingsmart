@@ -739,7 +739,22 @@ export default function Home() {
 
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
     const rawWarns = rawScenario?.schedule?.warnings || rawScenario?.warnings || [];
-    const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
+    let filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
+    // پرسنل قفل‌شده: در سناریو نباید تغییری داشته باشند و هشداری هم برایشان صادر نشود
+    // چون در مبنا حل شده‌اند. این فیلتر هم در تولید سناریو و هم در نمایش آن اعمال می‌شود.
+    if (lockedRows.length > 0) {
+      const lockedNameSet = new Set(
+        personnel.filter(p => lockedRows.includes(p.id)).map(p => `${p.firstName} ${p.lastName}`)
+      );
+      if (lockedNameSet.size > 0) {
+        filteredGroup = filteredGroup.filter(w => {
+          for (const name of lockedNameSet) {
+            if (w.includes(name)) return false;
+          }
+          return true;
+        });
+      }
+    }
     // هشدارهای نادیده‌گرفته‌شده می‌تواند هم در لیست سراسری (مبنا) و هم در خود سناریو ذخیره شده باشد.
     const scenarioDismissed: string[] = rawScenario?.schedule?.dismissedWarnings || [];
     const combinedDismissed = [...dismissedWarnings, ...scenarioDismissed];
@@ -775,7 +790,7 @@ export default function Home() {
       monthlyDutyHours,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
+  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings, lockedRows]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
