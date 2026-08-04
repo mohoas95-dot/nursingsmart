@@ -52,8 +52,12 @@ export interface ScoredSchedule {
   weaknesses: string[];
   analysis: string;
   targetJobGroup?: JobGroup;
+  /** تعداد کل پیام‌های اعتبارسنج (تخلف مسدودکننده + نکتهٔ کیفیت). */
   relevantWarningCount: number;
+  /** تخلفات مسدودکننده؛ برای ورود به مقایسه باید دقیقاً صفر باشد. */
   relevantHardWarningCount: number;
+  /** پیام‌های ترجیحی/کیفی که مانع مقایسه و رأی‌گیری نیستند. */
+  advisoryWarningCount: number;
   pairwiseDifference?: Record<string, number>;
   /**
    * درصد شباهت به برنامهٔ مبنا (Working Roster). معیار اصلی رتبه‌بندی سناریوها
@@ -82,7 +86,8 @@ export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number],
   'Mandatory Rest:': 'لزوم استراحت اجباری',
 };
 
-export const MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO = 4;
+/** سناریوی فقط‌خواندنی با حتی یک تخلف مسدودکننده قابل پذیرش نیست. */
+export const MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO = 0;
 
 export const SCENARIO_WEIGHTS: Record<ScenarioType, ScenarioWeights> = {
   REQUESTS: { request: 70, fairness: 20, optimization: 10 },
@@ -97,9 +102,9 @@ export const SCENARIO_KEYS: Record<ScenarioType, ScenarioKey> = {
 };
 
 export const SCENARIO_TITLES: Record<ScenarioType, { title: string; shortTitle: string }> = {
-  REQUESTS: { title: 'سناریو A · نزدیک‌ترین به مبنا', shortTitle: 'نزدیک‌ترین به مبنا' },
-  FAIRNESS: { title: 'سناریو B · نزدیک به مبنا', shortTitle: 'نزدیک به مبنا' },
-  MIXED: { title: 'سناریو C · گسترده‌تر', shortTitle: 'گسترده‌تر' },
+  REQUESTS: { title: 'سناریو A · درخواست‌محور', shortTitle: 'درخواست‌محور' },
+  FAIRNESS: { title: 'سناریو B · عدالت‌محور', shortTitle: 'عدالت‌محور' },
+  MIXED: { title: 'سناریو C · تلفیقی', shortTitle: 'تلفیقی' },
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -424,7 +429,8 @@ function buildStrengthsAndWeaknesses(
   fairnessScore: number,
   optimizationScore: number,
   averageDutyDeviationHours: number,
-  warningCount: number
+  warningCount: number,
+  hardWarningCount: number
 ): { strengths: string[]; weaknesses: string[]; analysis: string } {
   const strengths: string[] = [];
   const weaknesses: string[] = [];
@@ -438,7 +444,8 @@ function buildStrengthsAndWeaknesses(
   else weaknesses.push('اختلاف بار کاری یا توزیع شیفت‌ها هنوز محسوس است');
 
   if (optimizationScore >= 90) strengths.push('پاکیزگی عملیاتی بالا و کمترین اصطکاک در اجرای برنامه');
-  else if (warningCount > 0) weaknesses.push('پیش از ورود به مقایسه نهایی باید هشدارهای باقی‌مانده رفع شوند');
+  else if (hardWarningCount > 0) weaknesses.push('این برنامه تخلف مسدودکننده دارد و اجازه ورود به مقایسه را ندارد');
+  else if (warningCount > 0) weaknesses.push('چند نکتهٔ کیفیت غیرمسدودکننده برای تصمیم‌گیری بهتر باقی مانده است');
 
   if (averageDutyDeviationHours > 18) {
     weaknesses.push('میانگین فاصله از ساعت موظفی بالاست و می‌تواند نارضایتی ایجاد کند');
@@ -531,7 +538,8 @@ export function evaluateScenarioSchedule(options: EvaluateScenarioOptions): Scor
     fairnessMetrics.fairnessScore,
     optimizationMetrics.optimizationScore,
     fairnessMetrics.averageDutyDeviationHours,
-    optimizationMetrics.warningCount
+    optimizationMetrics.warningCount,
+    optimizationMetrics.hardWarningCount
   );
 
   const labels = SCENARIO_TITLES[type];
@@ -569,6 +577,7 @@ export function evaluateScenarioSchedule(options: EvaluateScenarioOptions): Scor
     targetJobGroup,
     relevantWarningCount: schedule.warnings.length,
     relevantHardWarningCount: optimizationMetrics.hardWarningCount,
+    advisoryWarningCount: Math.max(0, schedule.warnings.length - optimizationMetrics.hardWarningCount),
   };
 }
 

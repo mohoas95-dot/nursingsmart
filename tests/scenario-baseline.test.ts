@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { generateAndScoreScenarios, MAX_SCENARIO_CANDIDATES } from '../lib/scenarioGenerator';
 import { solveNursingSchedule } from '../lib/solver';
-import type { Personnel, SystemSettings } from '../lib/types';
+import type { Personnel, ShiftRequest, SystemSettings } from '../lib/types';
 
 function person(id: string, group: 'nurse' | 'assistant' = 'nurse', opts: Partial<Personnel> = {}): Personnel {
   return {
@@ -58,14 +58,18 @@ test('without a working-roster baseline the engine returns no scenarios and a re
   assert.ok(result.generationLog.some(line => line.includes('برنامهٔ مبنا')));
 });
 
-test('scenarios are baseline-oriented: close to the roster, warning-free, and DISTINCT alternatives', () => {
+test('objective scenarios stay close enough to baseline, have zero blocking violations, and remain DISTINCT', () => {
   const { baseline, personnel } = buildBaseline();
 
   const result = generateAndScoreScenarios(
     1404, 2, personnel, [], settings, {}, undefined, null, 'nurse', baseline, []
   );
 
-  assert.ok(result.top3.length >= 1, 'expected at least one baseline-oriented scenario');
+  assert.ok(result.top3.length >= 1, 'expected at least one valid objective scenario');
+  assert.equal(result.top3[0].scenarioKey, 'A');
+  assert.equal(result.top3[0].type, 'REQUESTS');
+  assert.match(result.top3[0].title, /درخواست‌محور/);
+  assert.equal(new Set(result.top3.map(scenario => scenario.scenarioKey)).size, result.top3.length);
 
   for (const scenario of result.top3) {
     assert.equal(scenario.criticalWarningCount, 0, `scenario ${scenario.scenarioKey} still has level-A alerts`);
@@ -79,6 +83,35 @@ test('scenarios are baseline-oriented: close to the roster, warning-free, and DI
       `scenario ${scenario.scenarioKey} drifted too far from baseline`
     );
   }
+});
+
+test('A, B, and C optimize genuinely different objectives instead of receiving cosmetic labels', () => {
+  const { baseline, personnel } = buildBaseline();
+  const requestedOffDays = Object.entries(baseline.n1 || {})
+    .filter(([, shift]) => shift !== 'OFF')
+    .slice(0, 8)
+    .map(([day]) => Number(day));
+  const requests: ShiftRequest[] = [{
+    id: 'request-n1-off',
+    personnelId: 'n1',
+    requestType: 'OFF',
+    isEssential: true,
+    offHardness: 'soft',
+    scope: 'custom_days',
+    selectedDays: requestedOffDays,
+  }];
+
+  const result = generateAndScoreScenarios(
+    1404, 2, personnel, requests, settings, {}, undefined, null, 'nurse', baseline as any, []
+  );
+
+  assert.deepEqual(result.top3.map(scenario => scenario.scenarioKey), ['A', 'B', 'C']);
+  const [requestScenario, fairnessScenario, mixedScenario] = result.top3;
+  assert.ok(requestScenario.metrics.requestScore >= fairnessScenario.metrics.requestScore);
+  assert.ok(requestScenario.metrics.requestScore >= mixedScenario.metrics.requestScore);
+  assert.ok(fairnessScenario.metrics.fairnessScore >= requestScenario.metrics.fairnessScore);
+  assert.ok(fairnessScenario.metrics.fairnessScore >= mixedScenario.metrics.fairnessScore);
+  assert.ok(result.top3.every(scenario => scenario.relevantHardWarningCount === 0));
 });
 
 test('locked personnel are inherited from the baseline untouched', () => {
@@ -98,6 +131,20 @@ test('locked personnel are inherited from the baseline untouched', () => {
       assert.equal(scenarioRow[Number(day)], baselineRow[Number(day)],
         `locked personnel n1 must be inherited unchanged on day ${day}`);
     }
+  }
+});
+
+test('the legacy Personnel.locked flag is preserved just like a lockedRows entry', () => {
+  const { baseline, personnel } = buildBaseline();
+  personnel[0] = { ...personnel[0], locked: true };
+
+  const result = generateAndScoreScenarios(
+    1404, 2, personnel, [], settings, {}, undefined, null, 'nurse', baseline as any, []
+  );
+
+  assert.ok(result.top3.length >= 1);
+  for (const scenario of result.top3) {
+    assert.deepEqual(scenario.schedule.assignments.n1, baseline.n1);
   }
 });
 

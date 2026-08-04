@@ -1,27 +1,23 @@
 /**
- * Scenario Generator — معماری مبنامحور (Baseline-Oriented) — نسخهٔ عمیق‌تر
- * =======================================================================
+ * Scenario Generator — سه مسیر هدف‌محور بر پایهٔ برنامهٔ مبنا
+ * ===========================================================
  *
- * سناریوها «پیشنهادهای بهینه‌شده بر پایهٔ برنامهٔ مبنا» هستند: نزدیک به مبنا،
- * بدون هشدار بحرانی، و در صورت امکان پاک‌تر/درخواست‌پسندتر. موتور solver و تمام
- * قوانین (پوشش، سرشیفت، ساعات، قفل‌ها) بدون تغییر استفاده می‌شوند.
+ * A، B و C دیگر برچسب سه نسخهٔ تقریباً یکسان نیستند:
+ *   A) بیشترین رعایت درخواست‌ها
+ *   B) بیشترین عدالت در بار کاری
+ *   C) بهترین امتیاز تلفیقی
  *
- * چرا این نسخه بازنویسی شد؟ نسخهٔ پیشین تمام نامزدها را به همان یک پیکربندیِ مبنا
- * فرومی‌ریخت، چون: ۱) تغییرات کوچکِ تصادفی توسط reconcile برگردانده می‌شد یا از
- * آستانهٔ تمایز کمتر بود، و ۲) خودِ مبنا به‌عنوان «سناریو» لحاظ می‌شد.
- *
- * ریشه‌یابی تجربی نشان داد تنها **تعویض‌های حفظ‌کنندهٔ پوشش (coverage-preserving
- * row-swaps)** در reconcile دوام می‌آورند: اگر دو پرسنلِ گروه هدف، شیفت‌های روزهای
- * یک بازه را با هم عوض کنند، چندتاییِ شیفت‌های هر روز دست‌نخورده می‌ماند و موتور
- * جبران چیزی برای برگرداندن ندارد. این مکانیزمِ تولیدِ تنوع است.
+ * همهٔ مسیرها از مبنا شروع می‌شوند، با تعویض‌های coverage-preserving تنوع
+ * می‌سازند و پیش از پذیرش از یک دروازهٔ مشترک عبور می‌کنند: صفر تخلف
+ * مسدودکننده، حفظ قفل‌ها و فاصلهٔ کنترل‌شده از مبنا. پیام‌های ترجیحی به‌عنوان
+ * «نکتهٔ کیفیت» باقی می‌مانند و مانع گردش کار نیستند.
  *
  * خط‌لوله:
- *   ۱) ساخت برنامهٔ مبنا (تأییدشده).
- *   ۲) تولید نامزدهای متمایز (row-swap با طیفِ اندازهٔ متفاوت + نامزدهای درخواست‌محور).
- *   ۳) تعمیر واقعی هشدارهای سطح A.
- *   ۴) فیلتر کیفیت (سطح A یا فاصلهٔ زیاد).
- *   ۵) رتبه‌بندی بر اساس: شباهت ← کمترین هشدار غیربحرانی ← بیشترین درخواست.
- *   ۶) انتخاب حداکثر ۳ سناریوی متمایز (و متمایز از مبنا).
+ *   ۱) ساخت و اعتبارسنجی برنامهٔ مبنا.
+ *   ۲) تقسیم بودجه میان مولد درخواست‌محور، عدالت‌محور و تلفیقی.
+ *   ۳) تعمیر best-effort تخلفات مسدودکننده و اجرای verifier کامل.
+ *   ۴) حذف نامزد نامعتبر، ناقض قفل، تکراری یا بیش‌ازحد دور/نزدیک.
+ *   ۵) رتبه‌بندی مستقل برای هر تابع هدف و انتخاب حداکثر سه بدیل متمایز.
  */
 
 import { generateJalaliMonthCalendar } from './jalali';
@@ -39,7 +35,6 @@ import {
 import {
   calculateRequestSatisfactionPercent,
   evaluateScenarioSchedule,
-  filterWarningsForScenarioGroup,
   SCENARIO_KEYS,
   SCENARIO_TITLES,
   type ScoredSchedule,
@@ -48,11 +43,10 @@ import {
 import {
   areScenariosDistinctEnough,
   calculateBaselineDifferencePercent,
-  compareByObjective,
   countCriticalWarnings,
   evaluateBaselineObjective,
-  type ObjectiveRankable,
 } from '../domain/scenarios/objective';
+import { summarizeScenarioWarnings } from '../domain/scenarios/eligibility';
 
 // ---------------------------------------------------------------------------
 // قراردادهای عمومی (امضاهای عمومی بدون تغییر برای سازگاری با app/page.tsx)
@@ -94,7 +88,7 @@ export interface ScenarioGenerationOptions {
   lockedRows?: string[];
   onProgress?: (event: ScenarioProgressEvent) => void;
   yieldToUi?: () => Promise<void>;
-  /** بودجهٔ نامزدها (پیش‌فرض ۳۶، سقف ۵۰۰). */
+  /** بودجهٔ نامزدها (پیش‌فرض ۷۲، سقف ۵۰۰؛ میان سه هدف تقسیم می‌شود). */
   candidateBudget?: number;
 }
 
@@ -103,7 +97,7 @@ export interface ScenarioGenerationOptions {
 // ---------------------------------------------------------------------------
 
 export const MAX_SCENARIO_CANDIDATES = 500;
-const DEFAULT_CANDIDATE_BUDGET = 36;
+const DEFAULT_CANDIDATE_BUDGET = 72;
 const MAX_CRITICAL_REPAIR_STEPS = 24;
 /** بیشترین فاصلهٔ مجاز از مبنا برای قبول در فیلتر کیفیت (٪). */
 const MAX_BASELINE_DIFFERENCE_PERCENT = 35;
@@ -245,12 +239,18 @@ function buildScenarioContext(options: ScenarioGenerationOptions): ScenarioConte
   const { year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex,
     monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows = [] } = options;
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
-  const lockedIdSet = new Set(lockedRows);
+  // دو نمایش قفل در داده‌های قدیمی وجود دارد: lockedRows ماه و flag روی Personnel.
+  // هر دو باید از فضای جست‌وجو حذف و مستقیماً از مبنا ارث‌بری شوند.
+  const effectiveLockedRows = Array.from(new Set([
+    ...lockedRows,
+    ...personnelList.filter(person => person.locked).map(person => person.id),
+  ]));
+  const lockedIdSet = new Set(effectiveLockedRows);
   const targetPersonnel = personnelList.filter(person =>
     person.active && !lockedIdSet.has(person.id) && (!targetJobGroup || person.jobGroup === targetJobGroup));
   return {
     year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex,
-    monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows,
+    monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows: effectiveLockedRows,
     totalDays: calendar.length,
     targetPersonnel,
     targetPersonnelIds: targetPersonnel.map(person => person.id),
@@ -390,17 +390,88 @@ function buildRequestBiasedCandidate(
   if (violationDays.length === 0) return null;
 
   // همگروهیِ Q که شیفتش در روزهای نقض، درخواستِ P را برآورده می‌کند (و با P قابل‌تعویض است).
-  const partnerId = context.freeTargetIds.find(id => {
+  const eligiblePartners = context.freeTargetIds.filter(id => {
     if (id === ownerId) return false;
     return violationDays.some(day => {
       const partnerShift = getAssignedShift(baseline, id, day);
       return !partnerShift.startsWith('L') && isRequestSatisfiedForDay(request, partnerShift, day, context);
     });
   });
-  if (!partnerId) return null;
+  if (eligiblePartners.length === 0) return null;
+  const partnerId = eligiblePartners[Math.floor(random() * eligiblePartners.length)];
 
-  const days = violationDays.slice(0, 10); // محدود نگه‌داشتن دامنهٔ تغییر
+  // نقطهٔ شروع با seed تغییر می‌کند تا همهٔ نامزدهای درخواست‌محور به یک پاسخ
+  // فرو نریزند. پوشش روزانه با تعویض دو ردیف ثابت می‌ماند.
+  const start = violationDays.length > 1 ? Math.floor(random() * violationDays.length) : 0;
+  const rotatedDays = [...violationDays.slice(start), ...violationDays.slice(0, start)];
+  const days = rotatedDays.slice(0, Math.min(10, Math.max(2, rotatedDays.length)));
   const swapped = applyRowSwap(cloneAssignments(baseline.assignments), ownerId, partnerId, days);
+  const merged = mergePreservedAssignments(swapped, context);
+  return verifyScenarioSchedule(merged, context);
+}
+
+// ---- نامزد عدالت‌محور: انتقال بار از فرد پُربار به فرد کم‌بار ---------------
+
+const SHIFT_LOAD_HOURS: Readonly<Record<string, number>> = {
+  OFF: 0,
+  M: 6.5,
+  E: 6.5,
+  N: 12.5,
+  ME: 13,
+  EN: 19,
+  MN: 19,
+  MEN: 25.5,
+};
+
+function rowWorkloadHours(schedule: MonthlySchedule, personnelId: string, totalDays: number): number {
+  let total = 0;
+  for (let day = 1; day <= totalDays; day += 1) {
+    const shift = getAssignedShift(schedule, personnelId, day);
+    total += SHIFT_LOAD_HOURS[shift] || 0;
+  }
+  return total;
+}
+
+/**
+ * یک جابه‌جایی پوشش‌حافظ که بار کاری را از یکی از ردیف‌های پُربار به یکی از
+ * ردیف‌های کم‌بار منتقل می‌کند. پذیرش نهایی همچنان فقط پس از اجرای verifier
+ * کامل انجام می‌شود؛ بنابراین عدالت هرگز به قیمت نقض قانون به‌دست نمی‌آید.
+ */
+function buildFairnessBiasedCandidate(
+  baseline: MonthlySchedule, seed: number, context: ScenarioContext
+): MonthlySchedule | null {
+  if (context.freeTargetIds.length < 2) return null;
+  const random = createSeededRandom(seed * 2246822519 + 19);
+  const ranked = context.freeTargetIds
+    .map(id => ({ id, hours: rowWorkloadHours(baseline, id, context.totalDays) }))
+    .sort((left, right) => right.hours - left.hours || left.id.localeCompare(right.id));
+
+  const half = Math.max(1, Math.floor(ranked.length / 2));
+  const highPool = ranked.slice(0, half);
+  const lowPool = ranked.slice(-half).reverse();
+  const high = highPool[Math.floor(random() * highPool.length)];
+  const low = lowPool[Math.floor(random() * lowPool.length)];
+  if (!high || !low || high.id === low.id || high.hours <= low.hours) return null;
+
+  const transferableDays: Array<{ day: number; gain: number }> = [];
+  for (let day = 1; day <= context.totalDays; day += 1) {
+    const highShift = getAssignedShift(baseline, high.id, day);
+    const lowShift = getAssignedShift(baseline, low.id, day);
+    if (highShift.startsWith('L') || lowShift.startsWith('L') || highShift === lowShift) continue;
+    const gain = (SHIFT_LOAD_HOURS[highShift] || 0) - (SHIFT_LOAD_HOURS[lowShift] || 0);
+    if (gain > 0) transferableDays.push({ day, gain });
+  }
+  if (transferableDays.length === 0) return null;
+
+  transferableDays.sort((left, right) => right.gain - left.gain || left.day - right.day);
+  const maxChanges = Math.min(8, transferableDays.length);
+  const changeCount = Math.min(maxChanges, 2 + Math.floor(random() * Math.max(1, maxChanges - 1)));
+  const offset = transferableDays.length > changeCount
+    ? Math.floor(random() * (transferableDays.length - changeCount + 1))
+    : 0;
+  const days = transferableDays.slice(offset, offset + changeCount).map(item => item.day);
+
+  const swapped = applyRowSwap(cloneAssignments(baseline.assignments), high.id, low.id, days);
   const merged = mergePreservedAssignments(swapped, context);
   return verifyScenarioSchedule(merged, context);
 }
@@ -508,15 +579,23 @@ function repairCriticalAlerts(candidate: MonthlySchedule, baseline: MonthlySched
 
 interface ScoredCandidate {
   schedule: MonthlySchedule;
+  /** مسیری که واقعاً این نامزد را ساخته است؛ مانع برچسب‌گذاری صوری A/B/C می‌شود. */
+  sourceTrack: ScenarioType;
+  /** سنجش مشترک نامزد؛ metrics مستقل از برچسب نهایی و totalScore در اینجا تلفیقی است. */
   scored: ScoredSchedule;
   objective: ReturnType<typeof evaluateBaselineObjective>;
-  rankable: ObjectiveRankable;
 }
 
 function scoreCandidate(
-  schedule: MonthlySchedule, scenarioType: ScenarioType, id: number, baseline: MonthlySchedule, context: ScenarioContext
+  schedule: MonthlySchedule,
+  id: number,
+  sourceTrack: ScenarioType,
+  baseline: MonthlySchedule,
+  context: ScenarioContext
 ): ScoredCandidate {
-  const scored = evaluateScenario(schedule, scenarioType, id, context);
+  // تمام نامزدها یک‌بار با وزن تلفیقی سنجیده می‌شوند. هنگام انتخاب نهایی، همان
+  // برنامه با نوع واقعی A/B/C دوباره امتیازدهی می‌شود.
+  const scored = evaluateScenario(schedule, 'MIXED', id, context);
   const requestSatisfactionPercent = calculateRequestSatisfactionPercent(
     schedule, context.personnelList, context.requests, context.year, context.month,
     context.customHolidays, context.firstDayOfWeekIndex, context.targetJobGroup);
@@ -525,85 +604,175 @@ function scoreCandidate(
     targetPersonnelIds: context.targetPersonnelIds, totalDays: context.totalDays,
     lockedRows: context.lockedRows, requestSatisfactionPercent,
   });
-  const nonCriticalWarningCount = Math.max(0, schedule.warnings.length - objective.criticalWarningCount);
   scored.baselineSimilarityPercent = objective.similarityPercent;
   scored.baselineDifferencePercent = objective.baselineDifferencePercent;
   scored.criticalWarningCount = objective.criticalWarningCount;
-  scored.totalScore = objective.similarityPercent;
-  return {
-    schedule, scored, objective,
-    rankable: { similarityPercent: objective.similarityPercent, nonCriticalWarningCount, requestSatisfactionPercent },
-  };
+  return { schedule, sourceTrack, scored, objective };
 }
 
 // ---------------------------------------------------------------------------
-// فیلتر کیفیت + انتخاب
+// فیلتر کیفیت + انتخاب سه هدف واقعی
 // ---------------------------------------------------------------------------
+
+interface QualityFilterStats {
+  survivors: ScoredCandidate[];
+  droppedForCritical: number;
+  droppedForLocks: number;
+  droppedForDistance: number;
+  droppedIdentical: number;
+}
 
 function applyQualityFilter(
   candidates: ReadonlyArray<ScoredCandidate>, baseline: MonthlySchedule, context: ScenarioContext
-) {
+): QualityFilterStats {
   const survivors: ScoredCandidate[] = [];
   let droppedForCritical = 0;
+  let droppedForLocks = 0;
   let droppedForDistance = 0;
   let droppedIdentical = 0;
   for (const candidate of candidates) {
+    // دروازهٔ قطعی: حتی یک تخلف مسدودکننده در سناریوی فقط‌خواندنی مجاز نیست.
     if (!candidate.objective.criticalResolved) { droppedForCritical += 1; continue; }
+    if (!candidate.objective.locksPreserved) { droppedForLocks += 1; continue; }
     const difference = calculateBaselineDifferencePercent(baseline, candidate.schedule, context.targetPersonnelIds, context.totalDays);
     if (difference > MAX_BASELINE_DIFFERENCE_PERCENT) { droppedForDistance += 1; continue; }
-    // سناریو باید «بدیلِ واقعی» باشد: حداقل فاصلهٔ مشخصی از مبنا داشته باشد.
     if (difference < MIN_DIFFERENCE_FROM_BASELINE_PERCENT) { droppedIdentical += 1; continue; }
     survivors.push(candidate);
   }
-  return { survivors, droppedForCritical, droppedForDistance, droppedIdentical };
+  return { survivors, droppedForCritical, droppedForLocks, droppedForDistance, droppedIdentical };
 }
 
-function selectTopScenarios(survivors: ReadonlyArray<ScoredCandidate>, context: ScenarioContext): ScoredCandidate[] {
-  const ranked = [...survivors].sort((left, right) => compareByObjective(left.rankable, right.rankable));
-  const selected: ScoredCandidate[] = [];
-  for (const candidate of ranked) {
-    if (selected.length >= MAX_DISPLAYED_SCENARIOS) break;
-    const distinctFromAll = selected.every(chosen =>
-      areScenariosDistinctEnough(chosen.schedule, candidate.schedule, context.targetPersonnelIds, context.totalDays, MIN_DISTINCT_DIFFERENCE_PERCENT));
-    if (distinctFromAll) selected.push(candidate);
+const SCENARIO_OBJECTIVE_TRACKS: readonly ScenarioType[] = ['REQUESTS', 'FAIRNESS', 'MIXED'];
+
+interface SelectedObjectiveScenario {
+  type: ScenarioType;
+  candidate: ScoredCandidate;
+}
+
+function objectiveTrackScore(candidate: ScoredCandidate, type: ScenarioType): number {
+  if (type === 'REQUESTS') return candidate.scored.metrics.requestScore;
+  if (type === 'FAIRNESS') return candidate.scored.metrics.fairnessScore;
+  return candidate.scored.metrics.weightedTotal;
+}
+
+/** رتبه‌بندی مستقل برای هر مسیر؛ شباهت دیگر هدف غالب هر سه سناریو نیست. */
+function compareForObjectiveTrack(type: ScenarioType, left: ScoredCandidate, right: ScoredCandidate): number {
+  const scoreDifference = objectiveTrackScore(right, type) - objectiveTrackScore(left, type);
+  if (Math.abs(scoreDifference) > 0.0001) return scoreDifference;
+
+  // در تساوی هدف اصلی، نکات کیفیت کمتر و سپس هدف مکمل بهتر ترجیح دارد.
+  const leftAdvisory = summarizeScenarioWarnings(left.schedule.warnings).advisoryCount;
+  const rightAdvisory = summarizeScenarioWarnings(right.schedule.warnings).advisoryCount;
+  if (leftAdvisory !== rightAdvisory) return leftAdvisory - rightAdvisory;
+
+  // اگر همهٔ درخواست‌ها از قبل یکسان رعایت شده‌اند، A نباید بهترین نامزد عدالت
+  // را تصاحب کند؛ پایداری نسبت به مبنا tie-breaker طبیعی مسیر درخواست است.
+  if (type === 'REQUESTS' && left.objective.similarityPercent !== right.objective.similarityPercent) {
+    return right.objective.similarityPercent - left.objective.similarityPercent;
   }
-  return selected;
+  if (type === 'FAIRNESS' && left.scored.metrics.requestScore !== right.scored.metrics.requestScore) {
+    return right.scored.metrics.requestScore - left.scored.metrics.requestScore;
+  }
+  if (type === 'MIXED' && left.scored.metrics.optimizationScore !== right.scored.metrics.optimizationScore) {
+    return right.scored.metrics.optimizationScore - left.scored.metrics.optimizationScore;
+  }
+
+  // نزدیکی به مبنا فقط آخرین tie-breaker است، نه هویت هر سه سناریو.
+  return right.objective.similarityPercent - left.objective.similarityPercent;
+}
+
+function selectObjectiveScenarios(
+  survivors: ReadonlyArray<ScoredCandidate>, context: ScenarioContext
+): SelectedObjectiveScenario[] {
+  const selected: SelectedObjectiveScenario[] = [];
+  // عدالت محدودکننده‌ترین هدف است؛ ابتدا بهترین نامزد واقعی B رزرو می‌شود تا
+  // A در ماه‌های بدون درخواست (که requestScore همه ۱۰۰ است) آن را تصاحب نکند.
+  const selectionOrder: readonly ScenarioType[] = ['FAIRNESS', 'REQUESTS', 'MIXED'];
+  for (const type of selectionOrder) {
+    const ranked = [...survivors].sort((left, right) => {
+      const objectiveOrder = compareForObjectiveTrack(type, left, right);
+      if (objectiveOrder !== 0) return objectiveOrder;
+      const leftNative = left.sourceTrack === type ? 1 : 0;
+      const rightNative = right.sourceTrack === type ? 1 : 0;
+      return rightNative - leftNative;
+    });
+    const candidate = ranked.find(item => selected.every(chosen =>
+      areScenariosDistinctEnough(
+        chosen.candidate.schedule,
+        item.schedule,
+        context.targetPersonnelIds,
+        context.totalDays,
+        MIN_DISTINCT_DIFFERENCE_PERCENT
+      )
+    ));
+    if (candidate) selected.push({ type, candidate });
+    if (selected.length >= MAX_DISPLAYED_SCENARIOS) break;
+  }
+
+  // قرارداد UI/ذخیره‌سازی همیشه A سپس B سپس C است، مستقل از ترتیب رزرو بالا.
+  return selected.sort(
+    (left, right) => SCENARIO_OBJECTIVE_TRACKS.indexOf(left.type) - SCENARIO_OBJECTIVE_TRACKS.indexOf(right.type)
+  );
 }
 
 // ---------------------------------------------------------------------------
 // صورت‌بندی نتیجه
 // ---------------------------------------------------------------------------
 
-const SCENARIO_TYPE_BY_RANK: ScenarioType[] = ['REQUESTS', 'FAIRNESS', 'MIXED'];
-
-function rankableObject(c: ScoredCandidate): ObjectiveRankable { return c.rankable; }
+const SCENARIO_ID_BY_TYPE: Record<ScenarioType, number> = {
+  REQUESTS: 1,
+  FAIRNESS: 2,
+  MIXED: 3,
+};
 
 function finalizeScenarioResult(
-  selected: ReadonlyArray<ScoredCandidate>, baseline: MonthlySchedule,
-  filterStats: { survivors: ScoredCandidate[]; droppedForCritical: number; droppedForDistance: number; droppedIdentical: number },
+  selected: ReadonlyArray<SelectedObjectiveScenario>, baseline: MonthlySchedule,
+  filterStats: QualityFilterStats,
   candidateCount: number, generationLog: string[], context: ScenarioContext, startedAt: number
 ): ScenarioGenerationResult {
-  const ranked = [...selected].sort((left, right) => compareByObjective(rankableObject(left), rankableObject(right)));
-  const top3: ScoredSchedule[] = ranked.map((candidate, index) => {
-    const type = SCENARIO_TYPE_BY_RANK[index] ?? 'MIXED';
-    const labels = SCENARIO_TITLES[type];
+  const top3: ScoredSchedule[] = selected.map(({ type, candidate }) => {
+    const id = SCENARIO_ID_BY_TYPE[type];
+    const evaluated = evaluateScenario(candidate.schedule, type, id, context);
     return {
-      ...candidate.scored, id: index + 1, type, scenarioKey: SCENARIO_KEYS[type],
-      title: labels.title, shortTitle: labels.shortTitle,
+      ...evaluated,
+      id,
+      type,
+      scenarioKey: SCENARIO_KEYS[type],
+      title: SCENARIO_TITLES[type].title,
+      shortTitle: SCENARIO_TITLES[type].shortTitle,
+      baselineSimilarityPercent: candidate.objective.similarityPercent,
+      baselineDifferencePercent: candidate.objective.baselineDifferencePercent,
+      criticalWarningCount: candidate.objective.criticalWarningCount,
+      advisoryWarningCount: summarizeScenarioWarnings(candidate.schedule.warnings).advisoryCount,
       pairwiseDifference: { مبنا: candidate.objective.baselineDifferencePercent },
     };
   });
 
+  for (const scenario of top3) {
+    generationLog.push(
+      `${scenario.title}: امتیاز هدف ${scenario.totalScore.toFixed(1)}، ` +
+      `شباهت به مبنا ${(scenario.baselineSimilarityPercent ?? 0).toFixed(1)}٪، ` +
+      `${scenario.advisoryWarningCount} نکتهٔ کیفیت، بدون تخلف مسدودکننده.`
+    );
+  }
+
   if (top3.length === 0) {
     const reason = filterStats.droppedForCritical > 0
-      ? `هیچ سناریوی بدیلِ بدون‌هشدار تولید نشد؛ ${filterStats.droppedForCritical} نامزد حتی پس از تعمیر هنوز هشدار سطح A داشتند. برنامهٔ مبنا ${countCriticalWarnings(baseline.warnings)} هشدار بحرانی دارد.`
-      : filterStats.droppedIdentical === candidateCount
-        ? 'هیچ سناریوی بدیلِ واقعی تولید نشد: پرسنل آزادِ گروه هدف کافی نیست یا تمام نامزدها با مبنا یکی بودند.'
-        : filterStats.droppedForDistance > 0
-          ? `هیچ سناریوی بدیل تولید نشد: نامزدها برای رفع هشدارها بیش از سقف مجاز تغییر (${MAX_BASELINE_DIFFERENCE_PERCENT}٪) از مبنا فاصله گرفتند.`
-          : 'هیچ سناریوی بدیلِ مناسبی تولید نشد.';
+      ? `هیچ سناریوی بدیلِ مجاز برای مقایسه تولید نشد؛ ${filterStats.droppedForCritical} نامزد حتی پس از تعمیر تخلف مسدودکننده داشتند. برنامهٔ مبنا ${countCriticalWarnings(baseline.warnings)} تخلف مسدودکننده دارد.`
+      : filterStats.droppedForLocks > 0
+        ? `هیچ سناریویی پذیرفته نشد؛ ${filterStats.droppedForLocks} نامزد ردیف قفل‌شده را تغییر داده بودند.`
+        : filterStats.droppedIdentical === candidateCount
+          ? 'هیچ سناریوی بدیلِ واقعی تولید نشد: پرسنل آزادِ گروه هدف کافی نیست یا تمام نامزدها با مبنا یکی بودند.'
+          : filterStats.droppedForDistance > 0
+            ? `هیچ سناریوی بدیل تولید نشد: نامزدها بیش از سقف مجاز تغییر (${MAX_BASELINE_DIFFERENCE_PERCENT}٪) از مبنا فاصله گرفتند.`
+            : 'هیچ سناریوی بدیلِ معتبر و متمایزی تولید نشد.';
     generationLog.push(reason);
     console.warn('[scenario-generator]', reason);
+  } else if (top3.length < MAX_DISPLAYED_SCENARIOS) {
+    generationLog.push(
+      `فقط ${top3.length} سناریوی معتبر و به‌اندازهٔ کافی متمایز یافت شد؛ ` +
+      'فرآیند مقایسه می‌تواند با برنامهٔ مبنا و همین گزینه‌های سالم ادامه یابد.'
+    );
   }
 
   return {
@@ -626,43 +795,82 @@ function runBaselineOrientedEngine(
   const candidateBudget = Math.max(1, Math.min(MAX_SCENARIO_CANDIDATES, options.candidateBudget ?? DEFAULT_CANDIDATE_BUDGET));
   const generationLog: string[] = [];
 
+  const emptyFilterStats = (): QualityFilterStats => ({
+    survivors: [],
+    droppedForCritical: 0,
+    droppedForLocks: 0,
+    droppedForDistance: 0,
+    droppedIdentical: 0,
+  });
+
   if (!context.currentAssignments || Object.keys(context.currentAssignments).length === 0) {
     generationLog.push('برنامهٔ مبنا (Working Roster) هنوز تهیه نشده است؛ بدون مبنا، سناریوی بدیل قابل تولید نیست.');
-    return { result: finalizeScenarioResult([], { year: context.year, month: context.month, assignments: {}, shiftLeaders: {}, warnings: [] }, { survivors: [], droppedForCritical: 0, droppedForDistance: 0, droppedIdentical: 0 }, 0, generationLog, context, startedAt) };
+    return { result: finalizeScenarioResult([], { year: context.year, month: context.month, assignments: {}, shiftLeaders: {}, warnings: [] }, emptyFilterStats(), 0, generationLog, context, startedAt) };
   }
   if (context.freeTargetIds.length < 2) {
     generationLog.push(`تنها ${context.freeTargetIds.length} پرسنل آزادِ گروه هدف وجود دارد؛ برای تولید سناریوی بدیل حداقل ۲ نفر لازم است.`);
-    return { result: finalizeScenarioResult([], buildBaselineSchedule(context), { survivors: [], droppedForCritical: 0, droppedForDistance: 0, droppedIdentical: 0 }, 0, generationLog, context, startedAt) };
+    return { result: finalizeScenarioResult([], buildBaselineSchedule(context), emptyFilterStats(), 0, generationLog, context, startedAt) };
   }
 
   const baseline = buildBaselineSchedule(context);
-  const baselineCritical = countCriticalWarnings(baseline.warnings);
-  generationLog.push(`برنامهٔ مبنا ${baselineCritical} هشدار سطح A دارد؛ ${context.freeTargetIds.length} پرسنل آزاد، ${context.lockedRows.length} قفل‌شده (ارثی).`);
+  const baselineSummary = summarizeScenarioWarnings(baseline.warnings);
+  generationLog.push(
+    `برنامهٔ مبنا ${baselineSummary.blockingCount} تخلف مسدودکننده و ` +
+    `${baselineSummary.advisoryCount} نکتهٔ کیفیت دارد؛ ${context.freeTargetIds.length} پرسنل آزاد، ` +
+    `${context.lockedRows.length} قفل‌شده (ارثی).`
+  );
+
+  const signatureOf = (schedule: MonthlySchedule): string => context.targetPersonnelIds
+    .map(id => `${id}:${Array.from({ length: context.totalDays }, (_, index) => getAssignedShift(schedule, id, index + 1)).join(',')}`)
+    .join('|');
 
   const candidates: ScoredCandidate[] = [];
-  const scenarioCount = 3;
+  const seenCandidates = new Set<string>();
+  const scenarioCount = SCENARIO_OBJECTIVE_TRACKS.length;
   for (let seed = 1; seed <= candidateBudget; seed += 1) {
-    const scenarioIndex = Math.min(scenarioCount, Math.floor(((seed - 1) / candidateBudget) * scenarioCount) + 1);
+    // بودجه در سه بازهٔ واقعی تقسیم می‌شود تا نوار پیشرفت A/B/C با کاری که موتور
+    // انجام می‌دهد منطبق باشد، نه اینکه پس از پایان صرفاً برچسب‌ها عوض شوند.
+    const trackIndex = Math.min(
+      scenarioCount - 1,
+      Math.floor(((seed - 1) * scenarioCount) / candidateBudget)
+    );
+    const scenarioIndex = trackIndex + 1;
     reportProgress?.({ stage: 'scenario', scenarioIndex, scenarioCount, fraction: (seed - 1) / candidateBudget });
 
-    // یک‌سومِ نامزدها درخواست‌محور، بقیه تنوع (coverage-preserving row-swap).
-    const candidateSchedule = (seed % 3 === 0)
-      ? buildRequestBiasedCandidate(baseline, seed, context)
-      : buildDiversityCandidate(baseline, seed, context);
+    let candidateSchedule: MonthlySchedule | null = null;
+    if (trackIndex === 0) {
+      candidateSchedule = buildRequestBiasedCandidate(baseline, seed, context)
+        || buildDiversityCandidate(baseline, seed + candidateBudget, context);
+    } else if (trackIndex === 1) {
+      candidateSchedule = buildFairnessBiasedCandidate(baseline, seed, context)
+        || buildDiversityCandidate(baseline, seed + candidateBudget * 2, context);
+    } else {
+      candidateSchedule = buildDiversityCandidate(baseline, seed + candidateBudget * 3, context);
+    }
     if (!candidateSchedule) continue;
 
     const repaired = repairCriticalAlerts(candidateSchedule, baseline, context);
-    candidates.push(scoreCandidate(repaired, 'MIXED', seed, baseline, context));
+    const signature = signatureOf(repaired);
+    if (seenCandidates.has(signature)) continue;
+    seenCandidates.add(signature);
+    candidates.push(scoreCandidate(
+      repaired,
+      seed,
+      SCENARIO_OBJECTIVE_TRACKS[trackIndex],
+      baseline,
+      context
+    ));
   }
   reportProgress?.({ stage: 'scenario', scenarioIndex: scenarioCount, scenarioCount, fraction: 1 });
 
   const filterStats = applyQualityFilter(candidates, baseline, context);
-  generationLog.push(`فیلتر کیفیت: ${filterStats.survivors.length} نامزد بدیلِ بدون‌هشدار پذیرفته شد` +
-    `${filterStats.droppedForCritical ? `، ${filterStats.droppedForCritical} به‌خاطر هشدار سطح A` : ''}` +
+  generationLog.push(`دروازهٔ اعتبار: ${filterStats.survivors.length} نامزدِ بدون تخلف مسدودکننده پذیرفته شد` +
+    `${filterStats.droppedForCritical ? `، ${filterStats.droppedForCritical} به‌خاطر تخلف مسدودکننده` : ''}` +
+    `${filterStats.droppedForLocks ? `، ${filterStats.droppedForLocks} به‌خاطر نقض قفل` : ''}` +
     `${filterStats.droppedIdentical ? `، ${filterStats.droppedIdentical} چون با مبنا یکی بودند` : ''}` +
     `${filterStats.droppedForDistance ? `، ${filterStats.droppedForDistance} به‌خاطر فاصلهٔ زیاد` : ''}.`);
 
-  const selected = selectTopScenarios(filterStats.survivors, context);
+  const selected = selectObjectiveScenarios(filterStats.survivors, context);
   return { result: finalizeScenarioResult(selected, baseline, filterStats, candidates.length, generationLog, context, startedAt) };
 }
 

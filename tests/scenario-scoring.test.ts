@@ -195,7 +195,7 @@ test('group filtering keeps only the warnings that belong to the selected job gr
   assert.equal(countHardConstraintWarnings(nurseWarnings), 2);
 });
 
-test('hard warnings are extracted correctly and up to 4 remain eligible for scenario generation', () => {
+test('hard warnings are extracted correctly and read-only scenarios require zero blocking violations', () => {
   const warnings = [
     'Coverage Shortage: کمبود نیرو (پرستار) در روز 1 شیفت M',
     'Overstaffing: نیروی مازاد (پرستار) در روز 2 شیفت M',
@@ -208,7 +208,7 @@ test('hard warnings are extracted correctly and up to 4 remain eligible for scen
   const hardWarnings = getHardConstraintWarnings(warnings);
   assert.equal(hardWarnings.length, 5);
   assert.equal(countHardConstraintWarnings(warnings), 5);
-  assert.equal(MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO, 4);
-  assert.equal(isHardWarningCountAcceptable(4), true);
-  assert.equal(isHardWarningCountAcceptable(5), false);
+  assert.equal(MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO, 0);
+  assert.equal(isHardWarningCountAcceptable(0), true);
+  assert.equal(isHardWarningCountAcceptable(1), false);
 });

@@ -74,7 +74,7 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
           <div className="flex flex-wrap items-center gap-2 mb-1">
             {isHard && (
               <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-rose-200 bg-white text-rose-700">
-                هشدار سخت
+                تخلف مسدودکننده
               </span>
             )}
             {day !== null && (
@@ -106,7 +106,7 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
             </div>
 
             <p className="text-xs font-bold text-slate-600 leading-6 max-w-3xl">
-              همه هشدارهای این برنامه در یک فهرست یکپارچه نمایش داده می‌شوند. هشدارهای سخت فقط با برچسب مشخص شده‌اند و از بقیه جدا نشده‌اند.
+              پیام‌های اعتبارسنجی در دو سطح نمایش داده می‌شوند: تخلفات مسدودکننده که باید صفر باشند، و نکات کیفیت که اطلاع‌رسانی‌اند و مانع مقایسه و رأی‌گیری نمی‌شوند.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -115,9 +115,9 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
                 <div className={`text-lg font-black ${scenario.relevantWarningCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>{scenario.relevantWarningCount}</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
-                <div className="text-[10px] font-black text-slate-500 mb-1">هشدارهای سخت</div>
+                <div className="text-[10px] font-black text-slate-500 mb-1">تخلفات مسدودکننده</div>
                 <div className={`text-lg font-black ${scenario.relevantHardWarningCount === 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{scenario.relevantHardWarningCount}</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-1">تا ۴ مورد، برنامه همچنان ساخته می‌شود.</div>
+                <div className="text-[10px] font-bold text-slate-400 mt-1">حد مجاز برای سناریوی فقط‌خواندنی: صفر</div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
                 <div className="text-[10px] font-black text-slate-500 mb-1">امتیاز فعلی سیستم</div>
@@ -125,8 +125,8 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
                 <div className="text-[10px] font-black text-slate-500 mb-1">وضعیت برنامه</div>
-                <div className={`text-sm font-black ${scenario.relevantWarningCount === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {scenario.relevantWarningCount === 0 ? 'آماده ورود به مقایسه' : 'نیازمند رفع هشدار'}
+                <div className={`text-sm font-black ${scenario.relevantHardWarningCount === 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {scenario.relevantHardWarningCount === 0 ? 'مجاز برای ورود به مقایسه' : 'غیرمجاز تا رفع تخلف'}
                 </div>
               </div>
             </div>
@@ -223,14 +223,14 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
               <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 flex items-start gap-2 text-[11px] font-bold text-slate-600 leading-6">
                 <ShieldCheck className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
                 <div>
-                  پس از رفع کامل هشدارهای همین برنامه، سیستم امتیازهای نهایی آن را برای مقایسه ثبت می‌کند. اگر سرپرستار هنوز نخواهد مقایسه را آغاز کند، کادر شروع امتیازدهی در همان صفحه باقی می‌ماند.
+                  تنها تخلفات مسدودکننده جلوی ورود به مقایسه را می‌گیرند. نکات کیفیت برای تصمیم بهتر سرپرستار و پرسنل نمایش داده می‌شوند، اما سناریوی فقط‌خواندنی را در بن‌بست قرار نمی‌دهند.
                 </div>
               </div>
 
               <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 flex items-start gap-2 text-[11px] font-bold text-indigo-900 leading-6">
                 <Sparkles className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
                 <div>
-                  در صورت ویرایش دستی هر سلول، همین برنامه دوباره ارزیابی می‌شود و اگر قبلاً وارد مرحله امتیازدهی یا نظرسنجی شده باشد، برای حفظ صحت تصمیم‌گیری به مرحله رفع هشدار بازمی‌گردد.
+                  سناریوها قابل ویرایش مستقیم نیستند. اگر قوانین یا برنامهٔ مبنا تغییر کند، سیستم پیش از مقایسه و تأیید نهایی دوباره اعتبارسنجی می‌کند و گزینهٔ نامعتبر را کنار می‌گذارد.
                 </div>
               </div>
             </>

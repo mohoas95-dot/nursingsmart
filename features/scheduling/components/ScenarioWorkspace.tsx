@@ -16,7 +16,6 @@ import {
   Lock,
   Play,
   Star,
-  Trophy,
   Users,
   X,
 } from 'lucide-react';
@@ -260,8 +259,8 @@ function ManagePanel(props: ManagePanelProps) {
     if (count >= 3) return null;
     const log = workflow.generationLog || [];
     const diag = log.length > 0 ? log[log.length - 1] : '';
-    if (count === 0) return 'هیچ بدیلِ بدون‌هشداری یافت نشد.';
-    return diag || 'سایر نامزدها یا هشدار بحرانی داشتند یا تکراری بودند.';
+    if (count === 0) return 'هیچ بدیلِ فاقد تخلف مسدودکننده‌ای یافت نشد.';
+    return diag || 'سایر نامزدها تخلف مسدودکننده داشتند، تکراری بودند یا تنوع کافی نداشتند.';
   }, [workflow.scenarios.length, workflow.generationLog]);
 
   const targetIds = React.useMemo(
@@ -285,18 +284,13 @@ function ManagePanel(props: ManagePanelProps) {
     return liveSimilarityById.get(key) ?? (options.find(o => o.key === key)?.scenario?.baselineSimilarityPercent ?? 0);
   };
 
-  const ranking = React.useMemo(() => {
-    const ranked = [...options].filter(o => !o.isBaseline).sort((a, b) => similarityOf(b.key) - similarityOf(a.key));
-    const map = new Map<string, number>();
-    ranked.forEach((o, i) => map.set(o.key, i + 1));
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, liveSimilarityById]);
-
   if (!activeOption) return null;
 
   const activeSimilarity = similarityOf(activeKey);
-  const activeRank = activeOption.isBaseline ? 0 : (ranking.get(activeKey) || 0);
+  const activeScenario = activeOption.scenario;
+  const activeBlockingCount = activeScenario?.relevantHardWarningCount ?? 0;
+  const activeAdvisoryCount = activeScenario?.advisoryWarningCount
+    ?? Math.max(0, (activeScenario?.relevantWarningCount ?? 0) - activeBlockingCount);
   const tally = tallyFor(votes, activeKey);
 
   return (
@@ -333,11 +327,19 @@ function ManagePanel(props: ManagePanelProps) {
       {/* خلاصهٔ گزینهٔ فعال + کنش‌ها، در یک نوار خطی */}
       <div className="px-4 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200/70 bg-white/60 text-[11px]">
         <span className="font-black text-slate-700">{activeOption.isBaseline ? 'برنامه مبنا' : activeOption.scenario?.title}</span>
-        {!activeOption.isBaseline && (
-          <span className="font-bold text-slate-500">شباهت به مبنا: {toPersianDigits(activeSimilarity.toFixed(1))}٪</span>
-        )}
-        {workflow.comparisonStartedAt && activeRank > 0 && (
-          <span className="font-black text-amber-700 inline-flex items-center gap-1"><Trophy className="w-3 h-3" /> رتبه {toPersianDigits(activeRank)}</span>
+        {!activeOption.isBaseline && activeScenario && (
+          <>
+            <span className="font-black text-slate-700">امتیاز هدف: {toPersianDigits(activeScenario.totalScore.toFixed(1))}٪</span>
+            <span className="font-bold text-slate-500">شباهت به مبنا: {toPersianDigits(activeSimilarity.toFixed(1))}٪</span>
+            {activeBlockingCount === 0 ? (
+              <span className="font-black text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> بدون تخلف مسدودکننده</span>
+            ) : (
+              <span className="font-black text-rose-700">{toPersianDigits(activeBlockingCount)} تخلف مسدودکننده</span>
+            )}
+            {activeAdvisoryCount > 0 && (
+              <span className="font-bold text-amber-700">{toPersianDigits(activeAdvisoryCount)} نکتهٔ کیفیت (غیرمسدودکننده)</span>
+            )}
+          </>
         )}
         {tally.count > 0 && (
           <span className="font-black text-slate-700 inline-flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {toPersianDigits(tally.average.toFixed(1))} ({toPersianDigits(tally.count)} رای)</span>
@@ -362,13 +364,13 @@ function ManagePanel(props: ManagePanelProps) {
       {/* توضیح کوتاه یک‌خطی */}
       <div className="px-4 py-2 flex items-center gap-2 text-[11px] font-bold text-slate-500 border-b border-slate-200/70">
         <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-        <span>سناریوها فقط‌خواندنی‌اند؛ کمترین تغییر نسبت به مبنا را نشان می‌دهند و برای ویرایش باید به برنامهٔ مبنا بازگردید.</span>
+        <span>سناریوها فقط‌خواندنی و قانون‌مند هستند: A درخواست‌محور، B عدالت‌محور و C تلفیقی است. نکات کیفیت مانع مقایسه نیستند؛ تخلف مسدودکننده هرگز پذیرفته نمی‌شود.</span>
       </div>
 
       {canManage && countReason && (
         <div className="px-4 py-2 flex items-center gap-2 text-[11px] font-bold text-sky-900 bg-sky-50/80 border-b border-slate-200/70">
           <Info className="w-3.5 h-3.5 text-sky-500 shrink-0" />
-          <span><span className="font-black">{workflow.scenarios.length === 0 ? 'برنامهٔ بدیلی تولید نشد. ' : `${toPersianDigits(workflow.scenarios.length)} سناریو به‌جای ۳ تولید شد. `}</span>{countReason}</span>
+          <span><span className="font-black">{workflow.scenarios.length === 0 ? 'برنامهٔ بدیلی تولید نشد. ' : `${toPersianDigits(workflow.scenarios.length)} سناریوی سالم به‌جای ۳ مورد پیدا شد. `}</span>{countReason}</span>
         </div>
       )}
 
@@ -378,7 +380,7 @@ function ManagePanel(props: ManagePanelProps) {
           <div className="text-[10px] font-bold text-slate-500">
             {workflow.votingOpen
               ? `برنامه‌های در رأی‌گیری: ${voteOptions.length === 0 ? '—' : voteOptions.map((_, i) => `گزینه ${toPersianDigits(i + 1)}`).join('، ')}`
-              : (workflow.comparisonStartedAt ? 'برای شروع رأی‌گیری، برنامه‌های موردنظر را انتخاب کنید.' : 'پس از رفع هشدارها، مقایسه را آغاز کنید.')}
+              : (workflow.comparisonStartedAt ? 'برای شروع رأی‌گیری، برنامه‌های موردنظر را انتخاب کنید.' : 'سناریوها هنگام شروع مقایسه یک‌بار دیگر با قوانین فعلی اعتبارسنجی می‌شوند.')}
           </div>
           <div className="flex items-center gap-1.5">
             {canManage && workflow.scenarios.length > 0 && !workflow.comparisonStartedAt && (

@@ -77,6 +77,10 @@ import {
   filterWarningsForScenarioGroup,
   type ScoredSchedule,
 } from '../lib/scoring';
+import {
+  canScenarioAdvance,
+  summarizeScenarioWarnings,
+} from '../domain/scenarios/eligibility';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
 import {
   DEFAULT_CUSTOM_HOLIDAY_TITLE,
@@ -738,39 +742,59 @@ export default function Home() {
   const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'] as any;
 
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
-    const rawWarns = rawScenario?.schedule?.warnings || rawScenario?.warnings || [];
-    const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
-    const activeWarnings = filterActiveWarnings(filteredGroup, dismissedWarnings);
+    const rawSchedule: MonthlySchedule = rawScenario?.schedule || {
+      year: currentYear,
+      month: currentMonth,
+      assignments: {},
+      shiftLeaders: {},
+      warnings: [],
+    };
 
-    if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
-      return {
-        ...rawScenario,
-        warnings: activeWarnings,
-        relevantWarningCount: activeWarnings.length,
-        schedule: {
-          ...(rawScenario.schedule || {}),
-          warnings: activeWarnings,
-        },
-      } as ScoredSchedule;
-    }
-    return evaluateScenarioSchedule({
+    // هشدار ذخیره‌شده ممکن است متعلق به قوانین/پرسنل قدیمی باشد. هر بار که سند
+    // سناریو hydrate می‌شود، خود assignmentها با منبع حقیقت فعلی دوباره راستی‌آزمایی
+    // می‌شوند. dismissedWarnings فقط وضعیت نمایش است و هرگز صلاحیت را تغییر نمی‌دهد.
+    const verification = verifyCoverageAndLeaders(
+      currentYear,
+      currentMonth,
+      personnel,
+      rawSchedule.assignments || {},
+      normalizeSettings(settings),
+      customHolidays,
+      firstDayOfWeekIndex === -1 ? undefined : firstDayOfWeekIndex,
+      requests
+    );
+    const verifiedWarnings = filterWarningsForScenarioGroup(verification.warnings, personnel, group);
+    const verifiedSchedule: MonthlySchedule = {
+      ...rawSchedule,
+      year: currentYear,
+      month: currentMonth,
+      shiftLeaders: verification.shiftLeaders,
+      warnings: verifiedWarnings,
+    };
+    const type = rawScenario?.type || (index === 0 ? 'REQUESTS' : index === 1 ? 'FAIRNESS' : 'MIXED');
+    const evaluated = evaluateScenarioSchedule({
       id: rawScenario?.id ?? index + 1,
-      type: rawScenario?.type || (index === 0 ? 'REQUESTS' : index === 1 ? 'FAIRNESS' : 'MIXED'),
-      schedule: {
-        ...(rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
-        warnings: activeWarnings,
-      },
+      type,
+      schedule: verifiedSchedule,
       personnelList: personnel,
       requests,
       settings: normalizeSettings(settings),
       year: currentYear,
       month: currentMonth,
       customHolidays,
-      firstDayOfWeekIndex,
+      firstDayOfWeekIndex: firstDayOfWeekIndex === -1 ? undefined : firstDayOfWeekIndex,
       monthlyDutyHours,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
+
+    return {
+      ...rawScenario,
+      ...evaluated,
+      schedule: verifiedSchedule,
+      criticalWarningCount: evaluated.relevantHardWarningCount,
+      advisoryWarningCount: evaluated.advisoryWarningCount,
+    } as ScoredSchedule;
+  }, [currentMonth, currentYear, customHolidays, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
@@ -2115,7 +2139,7 @@ export default function Home() {
 
   const alertCenterContextDescription = React.useMemo(() => {
     if (currentScenarioNurse || currentScenarioAssistant) {
-      return 'با تغییر برنامه فعال در جدول، همین پنجره نارنجی هم بلافاصله با هشدارهای همان برنامه به‌روزرسانی می‌شود.';
+      return 'پیام‌های همین سناریوی فقط‌خواندنی نمایش داده می‌شوند؛ نکات کیفیت اطلاع‌رسانی‌اند و فقط تخلفات مسدودکننده جلوی مقایسه را می‌گیرند.';
     }
     return 'در حال حاضر هشدارهای برنامه مبنا نمایش داده می‌شود.';
   }, [currentScenarioAssistant, currentScenarioNurse]);
@@ -2954,29 +2978,54 @@ export default function Home() {
 
   const reevaluateScenarioForGroup = React.useCallback((scenario: ScoredSchedule, group: JobGroup, scheduleOverride?: MonthlySchedule): ScoredSchedule => {
     const baseSchedule = scheduleOverride || scenario.schedule;
-    const currentDismissed = dismissedWarningsRef.current || [];
-    const activeWarnings = filterActiveWarnings(
-      filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group),
-      currentDismissed
+    const currentPersonnel = personnelRef.current;
+    const currentRequests = requestsRef.current;
+    const currentSettings = normalizeSettings(settingsRef.current);
+    const currentFirstDay = firstDayRef.current === -1 ? undefined : firstDayRef.current;
+
+    // امتیازدهی بدون اجرای verifier یک کنترل صوری بود: warnings قدیمی دوباره
+    // شمرده می‌شدند. اینجا assignment واقعی با قوانین همین لحظه بررسی می‌شود.
+    const verification = verifyCoverageAndLeaders(
+      currentYear,
+      currentMonth,
+      currentPersonnel,
+      baseSchedule.assignments,
+      currentSettings,
+      holidaysRef.current,
+      currentFirstDay,
+      currentRequests
+    );
+    const verifiedWarnings = filterWarningsForScenarioGroup(
+      verification.warnings,
+      currentPersonnel,
+      group
     );
     const normalizedSchedule: MonthlySchedule = {
       ...baseSchedule,
-      warnings: activeWarnings,
+      shiftLeaders: verification.shiftLeaders,
+      warnings: verifiedWarnings,
     };
-    return evaluateScenarioSchedule({
+    const evaluated = evaluateScenarioSchedule({
       id: scenario.id,
       type: scenario.type,
       schedule: normalizedSchedule,
-      personnelList: personnelRef.current,
-      requests: requestsRef.current,
-      settings: normalizeSettings(settingsRef.current),
+      personnelList: currentPersonnel,
+      requests: currentRequests,
+      settings: currentSettings,
       year: currentYear,
       month: currentMonth,
       customHolidays: holidaysRef.current,
-      firstDayOfWeekIndex: firstDayRef.current === -1 ? undefined : firstDayRef.current,
+      firstDayOfWeekIndex: currentFirstDay,
       monthlyDutyHours: monthlyDutyHoursRef.current,
       targetJobGroup: group,
     });
+    return {
+      ...scenario,
+      ...evaluated,
+      schedule: normalizedSchedule,
+      criticalWarningCount: evaluated.relevantHardWarningCount,
+      advisoryWarningCount: evaluated.advisoryWarningCount,
+    };
   }, [currentMonth, currentYear]);
 
   const buildPairwiseDifferences = React.useCallback((scenariosList: ScoredSchedule[], group: JobGroup) => {
@@ -3171,7 +3220,7 @@ export default function Home() {
 
       if (top3.length === 0) {
         const joined = generationLog.length > 0 ? `\n\nجزئیات: \n- ${generationLog.join('\n- ')}` : '';
-        alert(`هیچ سناریوی مناسبی برای این گروه تولید نشد. در معماری مبنامحور، سناریو تنها وقتی نمایش داده می‌شود که تمام هشدارهای سطح A (بحرانی) آن واقعاً رفع شده و فاصله‌اش از برنامهٔ مبنا در بازهٔ مجاز باشد.${joined}`);
+        alert(`هیچ سناریوی مناسبی برای این گروه تولید نشد. فقط سناریویی نمایش داده می‌شود که تخلف مسدودکننده نداشته باشد، قفل‌ها را حفظ کند و به‌اندازهٔ کافی از مبنا متمایز باشد.${joined}`);
       }
 
       progress.beginPhase('persist');
@@ -3238,6 +3287,18 @@ export default function Home() {
     const jobGroup = forcedGroup || selectedScenario.targetJobGroup || null;
     if (!jobGroup) return;
 
+    // تأیید نهایی هم باید همان دروازهٔ مولد/مقایسه را اجرا کند؛ ممکن است پس از
+    // رأی‌گیری قوانین، درخواست‌ها یا پرسنل تغییر کرده باشند.
+    const scenarioToApply = reevaluateScenarioForGroup(selectedScenario, jobGroup);
+    const preflightSummary = summarizeScenarioWarnings(scenarioToApply.schedule.warnings);
+    if (!preflightSummary.eligible) {
+      alert(
+        `این سناریو اکنون ${preflightSummary.blockingCount} تخلف مسدودکننده دارد و قابل اعمال نیست. ` +
+        'سناریوها را با اطلاعات فعلی دوباره تولید کنید.'
+      );
+      return;
+    }
+
     const deptId = selectedDepartmentId || 'sepehr';
     const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
     const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
@@ -3249,6 +3310,18 @@ export default function Home() {
 
     const persistenceAdapter: SchedulePersistence = {
       saveSchedule: async (newSchedule: any) => {
+        const finalGroupWarnings = filterWarningsForScenarioGroup(
+          newSchedule.warnings || [],
+          personnelRef.current,
+          jobGroup
+        );
+        const finalSummary = summarizeScenarioWarnings(finalGroupWarnings);
+        if (!finalSummary.eligible) {
+          throw new Error(
+            `اعتبارسنجی نهایی ${finalSummary.blockingCount} تخلف مسدودکننده پیدا کرد؛ برنامه ذخیره نشد.`
+          );
+        }
+
         const nextDb = getFreshDbCopy();
         if (!nextDb.deptData) nextDb.deptData = {};
 
@@ -3317,7 +3390,7 @@ export default function Home() {
 
     const mockSolver = (y: any, m: any, p: any, req: any, set: any, h: any, fd: any, mdh: any) => {
       const baseResult = solveWithPriority(y, m, p, req, set, h, fd, mdh);
-      return { assignments: selectedScenario.schedule.assignments, warnings: baseResult.warnings };
+      return { assignments: scenarioToApply.schedule.assignments, warnings: baseResult.warnings };
     };
 
     const result = await runOptimizerFacade(
@@ -3362,7 +3435,7 @@ export default function Home() {
       category: 'schedule',
       severity: 'success',
       title: `برنامه نهایی ${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} اعمال و ثبت شد`,
-      detail: `${selectedScenario.title} — امتیاز ${selectedScenario.totalScore.toFixed(1)} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear} — ${result.personnelUpdated} نفر به‌روزرسانی شدند`,
+      detail: `${scenarioToApply.title} — امتیاز ${scenarioToApply.totalScore.toFixed(1)} — ماه ${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear} — ${result.personnelUpdated} نفر به‌روزرسانی شدند`,
     });
 
     setSelectedScenarioIndexForGroup(jobGroup, -1);
@@ -3409,23 +3482,74 @@ export default function Home() {
   const handleStartScenarioComparison = async (jobGroup: JobGroup) => {
     const workflow = getWorkflowForGroup(jobGroup);
     if (!workflow || workflow.scenarios.length === 0) return;
-    if (workflow.scenarios.some(scenario => scenario.relevantWarningCount > 0)) {
-      alert('تا زمانی که هشدارهای هر سه سناریو به صفر نرسند، مقایسه و امتیازدهی شروع نمی‌شود.');
+    if (!schedule) {
+      alert('برنامهٔ مبنا در دسترس نیست؛ ابتدا برنامهٔ ماه را بارگذاری کنید.');
       return;
     }
 
-    const rescored = buildPairwiseDifferences(
-      workflow.scenarios.map(scenario => reevaluateScenarioForGroup(scenario, jobGroup)),
+    // همان سیاستی که مولد استفاده می‌کند اینجا نیز روی دادهٔ تازه اجرا می‌شود؛
+    // نه relevantWarningCount ذخیره‌شده و نه «نادیده گرفتن» یک پیام، مجوز عبور نیست.
+    const baselineVerification = verifyCoverageAndLeaders(
+      currentYear,
+      currentMonth,
+      personnelRef.current,
+      schedule.assignments,
+      normalizeSettings(settingsRef.current),
+      holidaysRef.current,
+      firstDayRef.current === -1 ? undefined : firstDayRef.current,
+      requestsRef.current
+    );
+    const baselineWarnings = filterWarningsForScenarioGroup(
+      baselineVerification.warnings,
+      personnelRef.current,
       jobGroup
     );
+    const baselineSummary = summarizeScenarioWarnings(baselineWarnings);
+    if (!baselineSummary.eligible) {
+      alert(
+        `برنامهٔ مبنا ${baselineSummary.blockingCount} تخلف مسدودکننده دارد. ` +
+        'برای جلوگیری از رأی‌گیری روی یک برنامهٔ نامعتبر، ابتدا تخلفات برنامهٔ مبنا را رفع کنید.'
+      );
+      return;
+    }
 
+    const freshlyVerified = workflow.scenarios.map(scenario =>
+      reevaluateScenarioForGroup(scenario, jobGroup)
+    );
+    const eligibleScenarios = freshlyVerified.filter(scenario =>
+      canScenarioAdvance(scenario.schedule.warnings)
+    );
+    const rejectedCount = freshlyVerified.length - eligibleScenarios.length;
+
+    if (eligibleScenarios.length === 0) {
+      alert(
+        'هیچ سناریوی معتبرِ فاقد تخلف مسدودکننده باقی نمانده است. ' +
+        'قوانین یا برنامهٔ مبنا از زمان تولید تغییر کرده‌اند؛ لطفاً سناریوها را دوباره تولید کنید.'
+      );
+      return;
+    }
+
+    const rescored = buildPairwiseDifferences(eligibleScenarios, jobGroup);
     await persistScenarioWorkflow(jobGroup, current => ({
       targetJobGroup: jobGroup,
       scenarios: rescored,
-      generationLog: current?.generationLog || [],
+      generationLog: [
+        ...(current?.generationLog || []),
+        rejectedCount > 0
+          ? `${rejectedCount} سناریوی قدیمی پس از اعتبارسنجی تازه به‌علت تخلف مسدودکننده کنار گذاشته شد.`
+          : 'تمام سناریوها پیش از شروع مقایسه دوباره اعتبارسنجی شدند؛ تخلف مسدودکننده صفر است.',
+      ].slice(-12),
       comparisonStartedAt: new Date().toISOString(),
       votingOpen: false,
-    }), { resetVotes: false });
+    }), { resetVotes: rejectedCount > 0 });
+
+    setSelectedScenarioIndexForGroup(jobGroup, -1);
+    if (rejectedCount > 0) {
+      alert(
+        `${rejectedCount} سناریوی نامعتبر کنار گذاشته شد. مقایسه با برنامهٔ مبنا و ` +
+        `${eligibleScenarios.length} سناریوی سالم ادامه پیدا می‌کند.`
+      );
+    }
   };
 
   const handleToggleScenarioVoting = async (jobGroup: JobGroup) => {
@@ -3470,7 +3594,7 @@ export default function Home() {
   const confirmVotingSetup = async () => {
     if (!votingSetup) return;
     const { group, selected } = votingSetup;
-    if (selected.size === 0) { alert('حداقل یک برنامه را برای رأی‌گیری انتخاب کنید.'); return; }
+    if (selected.size < 2) { alert('برای رأی‌گیری باید حداقل دو برنامه (برای مثال مبنا و یک سناریو) انتخاب شوند.'); return; }
     await persistScenarioWorkflow(group, current => {
       if (!current) return null;
       return { ...current, voteOptions: [...selected], votingOpen: true };
@@ -6103,7 +6227,7 @@ export default function Home() {
                   </span>
                 </div>
                 <p className="text-[11px] font-bold text-slate-500">
-                  از این بخش می‌توانید برای هر گروه شغلی تا ۳ برنامه پیشنهادی معتبر تولید کنید تا پس از رفع هشدار، وارد مقایسه و نظرسنجی شوند.
+                  برای هر گروه تا سه برنامهٔ قانون‌مند تولید می‌شود: A درخواست‌محور، B عدالت‌محور و C تلفیقی. فقط تخلفات مسدودکننده مانع مقایسه‌اند؛ نکات کیفیت اطلاع‌رسانی هستند.
                 </p>
               </div>
             </div>

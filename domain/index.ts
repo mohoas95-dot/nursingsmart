@@ -132,6 +132,17 @@ export {
 export type { AssignmentMap, ConsecutiveRunSummary } from './scheduling/smart-rules';
 
 // ============================================================================
+// Scenario Eligibility — دروازهٔ واحد مقایسه، رأی‌گیری و تأیید نهایی
+// ============================================================================
+
+export {
+  canScenarioAdvance,
+  summarizeScenarioWarnings,
+} from './scenarios/eligibility';
+
+export type { ScenarioWarningSummary } from './scenarios/eligibility';
+
+// ============================================================================
 // Alert Lifecycle — چرخهٔ عمر هشدارها (پاک‌سازی خودکار هشدارهای رفع‌شده)
 // ============================================================================
 
