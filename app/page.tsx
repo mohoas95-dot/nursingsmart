@@ -4440,10 +4440,26 @@ export default function Home() {
 
     const scenarioContext = getScenarioEditingContext(pId);
     if (scenarioContext) {
-      // اصل بازطراحی: سناریوها فقط‌خواندنی‌اند. هیچ ویرایش مستقیمی روی آن‌ها انجام
-      // نمی‌شود. برنامهٔ مبنا (Working Roster) تنها منبع حقیقت است و ویرایش فقط
-      // روی آن صورت می‌گیرد؛ سپس سناریوها دوباره تولید می‌شوند.
-      alert('سناریوها فقط‌خواندنی هستند. برای ویرایش، ابتدا با دکمهٔ «بازگشت به برنامه مبنا» به برنامهٔ اصلی بازگردید، تغییرات را روی برنامهٔ مبنا اعمال کنید و سپس دوباره سناریو تولید کنید.');
+      // سناریوها اکنون توسط سرپرستار قابل ویرایش دستی هستند.
+      // محدودیت‌های قفل برنامه (finalized / lockedRows) همچنان اعمال می‌شود تا
+      // یکپارچگی با برنامهٔ مبنا حفظ شود، اما پیام «فقط‌خواندنی» حذف شده است.
+      const person = personnel.find(per => per.id === pId);
+      if (person) {
+        const monthKeyLocal = `${currentYear}_${currentMonth}`;
+        const finalizedMonthsForGroup = person.jobGroup === 'nurse' ? finalizedNursesMonths : finalizedAssistantsMonths;
+        const editCheck = canEditShiftCell({
+          jobGroup: person.jobGroup,
+          personnelId: pId,
+          finalizedMonths: finalizedMonthsForGroup,
+          lockedRows,
+          monthKey: monthKeyLocal,
+        });
+        if (!editCheck.allowed && editCheck.message) {
+          alert(editCheck.message);
+          return;
+        }
+      }
+      setEditingCell({ pId, day });
       return;
     }
 
@@ -4529,11 +4545,14 @@ export default function Home() {
               [scenarioContext.group]: {
                 ...groupRecord,
                 scenarios: rescoredScenarios,
+                // پس از ویرایش دستی توسط سرپرستار، مقایسه حفظ می‌شود تا کاربر بتواند
+                // بلافاصله تفاوت با مبنا را ببیند؛ فقط رأی‌گیری بسته می‌شود چون
+                // محتوای سناریو تغییر کرده و آرای قبلی بی‌اعتبار است.
                 votingOpen: false,
-                comparisonStartedAt: undefined,
+                comparisonStartedAt: groupRecord.comparisonStartedAt || new Date().toISOString(),
                 generationLog: [
                   ...(groupRecord.generationLog || []),
-                  `سناریوی ${groupRecord.scenarios[scenarioContext.scenarioIndex]?.scenarioKey || '?'} پس از ویرایش دستی دوباره به مرحله رفع هشدار بازگشت.`,
+                  `سناریوی ${groupRecord.scenarios[scenarioContext.scenarioIndex]?.scenarioKey || '?'} توسط سرپرستار ویرایش دستی شد.`,
                 ].slice(-5),
               },
             };
