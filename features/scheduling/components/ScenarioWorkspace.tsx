@@ -9,6 +9,7 @@ import {
   Activity,
   BarChart3,
   CheckCircle2,
+  Edit,
   Eye,
   GitCompareArrows,
   Info,
@@ -341,7 +342,11 @@ function ManagePanel(props: ManagePanelProps) {
         {tally.count > 0 && (
           <span className="font-black text-slate-700 inline-flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {toPersianDigits(tally.average.toFixed(1))} ({toPersianDigits(tally.count)} رای)</span>
         )}
-        <span className="inline-flex items-center gap-1 text-slate-400 font-bold"><Lock className="w-3 h-3" /> فقط‌خواندنی</span>
+        {activeOption.isBaseline ? (
+          <span className="inline-flex items-center gap-1 text-emerald-600 font-bold"><Edit className="w-3 h-3" /> قابل ویرایش دستی</span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-slate-400 font-bold"><Lock className="w-3 h-3" /> فقط‌خواندنی</span>
+        )}
         <div className="flex items-center gap-1.5 mr-auto">
           <button type="button" onClick={() => onSelectOption(activeKey)} disabled={!activeOption.isBaseline && activeKey === BASELINE_OPTION_KEY}
             className="text-[10px] font-black px-2.5 py-1.5 rounded-lg border bg-white border-slate-200 text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1">
