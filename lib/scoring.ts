@@ -55,6 +55,15 @@ export interface ScoredSchedule {
   relevantWarningCount: number;
   relevantHardWarningCount: number;
   pairwiseDifference?: Record<string, number>;
+  /**
+   * درصد شباهت به برنامهٔ مبنا (Working Roster). معیار اصلی رتبه‌بندی سناریوها
+   * در معماری مبنامحور (۰ تا ۱۰۰). فقط روی پرسنل هدف سنجیده می‌شود.
+   */
+  baselineSimilarityPercent?: number;
+  /** درصد فاصله از برنامهٔ مبنا (مکمل شباهت). */
+  baselineDifferencePercent?: number;
+  /** تعداد هشدارهای سطح A (بحرانی) — همان relevantHardWarningCount با نام صریح. */
+  criticalWarningCount?: number;
 }
 
 export const HARD_WARNING_PREFIXES = [
@@ -88,9 +97,9 @@ export const SCENARIO_KEYS: Record<ScenarioType, ScenarioKey> = {
 };
 
 export const SCENARIO_TITLES: Record<ScenarioType, { title: string; shortTitle: string }> = {
-  REQUESTS: { title: 'سناریو A · درخواست‌محور', shortTitle: 'درخواست‌محور' },
-  FAIRNESS: { title: 'سناریو B · عدالت‌محور', shortTitle: 'عدالت‌محور' },
-  MIXED: { title: 'سناریو C · تلفیقی', shortTitle: 'تلفیقی' },
+  REQUESTS: { title: 'سناریو A · نزدیک‌ترین به مبنا', shortTitle: 'نزدیک‌ترین به مبنا' },
+  FAIRNESS: { title: 'سناریو B · نزدیک به مبنا', shortTitle: 'نزدیک به مبنا' },
+  MIXED: { title: 'سناریو C · گسترده‌تر', shortTitle: 'گسترده‌تر' },
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -266,6 +275,28 @@ function calculateRequestScore(
     requestSatisfiedWeight: Number(satisfiedWeight.toFixed(2)),
     requestTotalWeight: Number(totalWeight.toFixed(2)),
   };
+}
+
+/**
+ * درصد رضایت از درخواست‌های پرسنل را به‌صورت خالص محاسبه می‌کند.
+ *
+ * در معماری مبنامحور، این عدد فقط به‌عنوان «tiebreaker پس‌زمینه» (اولویت ۴ تابع
+ * هدف) استفاده می‌شود و هرگز در رابط کاربری نمایش داده نمی‌شود. تابع خالص است تا
+ * توسط لایهٔ domain/scenarios/objective قابل مصرف باشد.
+ */
+export function calculateRequestSatisfactionPercent(
+  schedule: MonthlySchedule,
+  personnelList: readonly Personnel[],
+  requests: readonly ShiftRequest[],
+  year: number,
+  month: number,
+  customHolidays: Readonly<Record<number, string>>,
+  firstDayOfWeekIndex: number | undefined,
+  targetJobGroup?: JobGroup
+): number {
+  return calculateRequestScore(
+    schedule, personnelList, requests, year, month, customHolidays, firstDayOfWeekIndex, targetJobGroup
+  ).requestScore;
 }
 
 function calculateFairnessScore(
