@@ -109,7 +109,7 @@ import { runOptimizerFacade, applyManualShiftChangeFacade } from '../features/sc
 import type { SchedulePersistence, ScheduleUIFeedback } from '../features/scheduling/facades/shift-write-facade';
 import { AddPersonnelModal } from '../features/personnel/components/AddPersonnelModal';
 import { AlertCenter } from '../features/scheduling/components/AlertCenter';
-import { ScenarioWorkspace, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
+import { ScenarioWorkspace, BASELINE_OPTION_KEY, type ScenarioWorkflowView } from '../features/scheduling/components/ScenarioWorkspace';
 import { PrintScheduleSheet } from '../features/scheduling/components/PrintScheduleSheet';
 import { RequestCardStack } from '../features/requests/components/RequestCardStack';
 import { printHtmlSnapshot } from '../lib/print/print-snapshot';
@@ -785,6 +785,7 @@ export default function Home() {
         generationLog: rawGroup.generationLog || [],
         comparisonStartedAt: rawGroup.comparisonStartedAt,
         votingOpen: !!rawGroup.votingOpen,
+        voteOptions: Array.isArray(rawGroup.voteOptions) ? rawGroup.voteOptions.map(String) : undefined,
       };
     };
 
@@ -806,16 +807,18 @@ export default function Home() {
   const normalizedScenarioVotes = React.useMemo(() => {
     if (!scenarioVotesRaw) return { nurse: {} as Record<number, Record<string, number>>, assistant: {} as Record<number, Record<string, number>> };
     const hasGroupKeys = scenarioVotesRaw.nurse !== undefined || scenarioVotesRaw.assistant !== undefined;
-    if (hasGroupKeys) {
-      return {
-        nurse: scenarioVotesRaw.nurse || {},
-        assistant: scenarioVotesRaw.assistant || {},
-      };
-    }
-    return {
-      nurse: scenarioVotesRaw as Record<number, Record<string, number>>,
-      assistant: {},
+    const rawGroups = hasGroupKeys
+      ? { nurse: scenarioVotesRaw.nurse || {}, assistant: scenarioVotesRaw.assistant || {} }
+      : { nurse: scenarioVotesRaw as Record<string, any>, assistant: {} };
+    // کلیدها به رشته تبدیل می‌شوند (optionKey = 'baseline' | id سناریو).
+    const coerce = (g: any): Record<string, Record<string, number>> => {
+      const out: Record<string, Record<string, number>> = {};
+      for (const [opt, users] of Object.entries(g || {})) {
+        out[String(opt)] = (users as any) || {};
+      }
+      return out;
     };
+    return { nurse: coerce(rawGroups.nurse), assistant: coerce(rawGroups.assistant) };
   }, [scenarioVotesRaw]);
 
   const [selectedScenarioIndexNurse, setSelectedScenarioIndexNurse] = useState<number>(-1);
@@ -3168,7 +3171,7 @@ export default function Home() {
 
       if (top3.length === 0) {
         const joined = generationLog.length > 0 ? `\n\nجزئیات: \n- ${generationLog.join('\n- ')}` : '';
-        alert(`هیچ سناریوی معتبر و به‌اندازه کافی متفاوتی برای این گروه تولید نشد. سناریو فقط وقتی کنار گذاشته می‌شود که تعداد هشدارهای سخت آن به ۵ مورد یا بیشتر برسد.${joined}`);
+        alert(`هیچ سناریوی مناسبی برای این گروه تولید نشد. در معماری مبنامحور، سناریو تنها وقتی نمایش داده می‌شود که تمام هشدارهای سطح A (بحرانی) آن واقعاً رفع شده و فاصله‌اش از برنامهٔ مبنا در بازهٔ مجاز باشد.${joined}`);
       }
 
       progress.beginPhase('persist');
@@ -3365,8 +3368,8 @@ export default function Home() {
     setSelectedScenarioIndexForGroup(jobGroup, -1);
   };
 
-  const handleVoteScenario = async (scenarioId: number, rating: number, forcedGroup?: JobGroup) => {
-    if (!authenticatedUser || !authenticatedUser.id) return;
+  const handleVoteOption = async (optionKey: string, rating: number, forcedGroup?: JobGroup) => {
+    if (!authenticatedUser) return;
     const userId = role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser.id || 'headnurse');
 
     const deptId = selectedDepartmentId || 'sepehr';
@@ -3376,13 +3379,7 @@ export default function Home() {
     if (!oldDept) return;
 
     const monthKeyLocal = `${currentYear}_${currentMonth}`;
-    const scenariosForMonth = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKeyLocal]);
-    const targetGroup = forcedGroup ||
-      (scenariosForMonth.nurse?.scenarios.some(scenario => scenario.id === scenarioId) ? 'nurse' : null) ||
-      (scenariosForMonth.assistant?.scenarios.some(scenario => scenario.id === scenarioId) ? 'assistant' : null) ||
-      (role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.jobGroup : null);
-
-    if (!targetGroup) return;
+    const targetGroup = forcedGroup || (role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.jobGroup : 'nurse');
 
     const existingVotes = (oldDept.scenarioVotes || {})[monthKeyLocal] as any;
     const votesMonth = existingVotes && (existingVotes.nurse !== undefined || existingVotes.assistant !== undefined)
@@ -3392,8 +3389,8 @@ export default function Home() {
     const groupVotes = votesMonth[targetGroup] || {};
     votesMonth[targetGroup] = {
       ...groupVotes,
-      [scenarioId]: {
-        ...(groupVotes[scenarioId] || {}),
+      [optionKey]: {
+        ...(groupVotes[optionKey] || {}),
         [userId]: rating,
       },
     };
@@ -3443,6 +3440,80 @@ export default function Home() {
       };
     }, { showBusyOverlay: false });
   };
+
+  // ====== رأی‌گیری: گزینه‌ها، انتخاب سرپرستار، رأی پرسنل، به‌روزرسانی زنده ======
+  const [votingSetup, setVotingSetup] = React.useState<{ group: JobGroup; selected: Set<string> } | null>(null);
+
+  const selectedOptionKeyForGroup = React.useCallback((group: JobGroup): string | null => {
+    const wf = getWorkflowForGroup(group);
+    const idx = getSelectedScenarioIndexForGroup(group);
+    if (!wf || idx < 0) return null;
+    const sc = wf.scenarios[idx];
+    return sc ? String(sc.id) : null;
+  }, [getWorkflowForGroup, getSelectedScenarioIndexForGroup]);
+
+  const onSelectOptionForGroup = React.useCallback((group: JobGroup, key: string | null) => {
+    if (key === null || key === BASELINE_OPTION_KEY) {
+      setSelectedScenarioIndexForGroup(group, -1);
+      return;
+    }
+    setSelectedScenarioByIdForGroup(group, Number(key));
+  }, [setSelectedScenarioIndexForGroup, setSelectedScenarioByIdForGroup]);
+
+  const openVotingSetup = React.useCallback((group: JobGroup) => {
+    const wf = getWorkflowForGroup(group);
+    if (!wf || !wf.comparisonStartedAt) return;
+    const all = [BASELINE_OPTION_KEY, ...wf.scenarios.map(s => String(s.id))];
+    setVotingSetup({ group, selected: new Set(all) });
+  }, [getWorkflowForGroup]);
+
+  const confirmVotingSetup = async () => {
+    if (!votingSetup) return;
+    const { group, selected } = votingSetup;
+    if (selected.size === 0) { alert('حداقل یک برنامه را برای رأی‌گیری انتخاب کنید.'); return; }
+    await persistScenarioWorkflow(group, current => {
+      if (!current) return null;
+      return { ...current, voteOptions: [...selected], votingOpen: true };
+    }, { showBusyOverlay: false });
+    setVotingSetup(null);
+  };
+
+  // به‌روزرسانی زندهٔ آرا هنگام فعال‌بودن رأی‌گیری (هر ۷ ثانیه).
+  React.useEffect(() => {
+    if (!nurseWorkflow?.votingOpen && !assistantWorkflow?.votingOpen) return;
+    const deptId = selectedDepartmentId || 'sepehr';
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const snap = await fetchLatestSnapshot();
+        if (cancelled) return;
+        const dept = snap.state.deptData[deptId] as any;
+        const cur = optimisticDbRef.current;
+        if (!dept || !cur || !cur.deptData[deptId]) return;
+        const mergeVotes = (localAny: any, serverAny: any) => {
+          const out: any = {};
+          for (const g of ['nurse', 'assistant']) {
+            const l = localAny?.[g] || {}; const sv = serverAny?.[g] || {};
+            const merged: any = { ...sv };
+            for (const [opt, users] of Object.entries(l)) merged[opt] = { ...(merged[opt] || {}), ...(users as any) };
+            if (Object.keys(merged).length) out[g] = merged;
+          }
+          return out;
+        };
+        const newVotes = mergeVotes(cur.deptData[deptId].scenarioVotes?.[monthKey], dept.scenarioVotes?.[monthKey]);
+        cur.deptData[deptId] = {
+          ...cur.deptData[deptId],
+          scenarioVotes: { ...(cur.deptData[deptId].scenarioVotes || {}), [monthKey]: newVotes },
+          ...(dept.activeScenarios?.[monthKey] ? { activeScenarios: { ...(cur.deptData[deptId].activeScenarios || {}), [monthKey]: dept.activeScenarios[monthKey] } } : {}),
+        };
+        setFullDbState({ ...cur });
+      } catch { /* best-effort live tally */ }
+    };
+    const interval = setInterval(tick, 7000);
+    return () => { cancelled = true; clearInterval(interval); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nurseWorkflow?.votingOpen, assistantWorkflow?.votingOpen, selectedDepartmentId, monthKey]);
 
   const handleToggleLock = async (jobGroup: JobGroup) => {
     if (role === 'personnel') return;
@@ -4369,11 +4440,10 @@ export default function Home() {
 
     const scenarioContext = getScenarioEditingContext(pId);
     if (scenarioContext) {
-      if (lockedRows.includes(pId)) {
-        alert('این ردیف قفل شده است و قابل ویرایش نیست.');
-        return;
-      }
-      setEditingCell({ pId, day });
+      // اصل بازطراحی: سناریوها فقط‌خواندنی‌اند. هیچ ویرایش مستقیمی روی آن‌ها انجام
+      // نمی‌شود. برنامهٔ مبنا (Working Roster) تنها منبع حقیقت است و ویرایش فقط
+      // روی آن صورت می‌گیرد؛ سپس سناریوها دوباره تولید می‌شوند.
+      alert('سناریوها فقط‌خواندنی هستند. برای ویرایش، ابتدا با دکمهٔ «بازگشت به برنامه مبنا» به برنامهٔ اصلی بازگردید، تغییرات را روی برنامهٔ مبنا اعمال کنید و سپس دوباره سناریو تولید کنید.');
       return;
     }
 
@@ -6299,34 +6369,40 @@ export default function Home() {
               {nurseWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && nurseWorkflow.votingOpen)) && (
                 <ScenarioWorkspace
                   group="nurse"
+                  mode={role === 'personnel' ? 'vote' : 'manage'}
                   workflow={nurseWorkflow}
-                  selectedScenarioId={currentScenarioNurse?.id ?? null}
+                  selectedOptionKey={selectedOptionKeyForGroup('nurse')}
                   canManage={role === 'headnurse' || role === 'admin'}
-                  canVote={Boolean(role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && nurseWorkflow.votingOpen)}
                   currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
                   votes={normalizedScenarioVotes.nurse}
-                  onSelectScenario={(scenarioId) => setSelectedScenarioByIdForGroup('nurse', scenarioId)}
+                  baselineSchedule={schedule}
+                  personnel={personnel}
+                  onSelectOption={(key) => onSelectOptionForGroup('nurse', key)}
                   onStartComparison={() => handleStartScenarioComparison('nurse')}
+                  onRequestStartVoting={() => openVotingSetup('nurse')}
                   onToggleVoting={() => handleToggleScenarioVoting('nurse')}
                   onFinalize={(scenario) => handleApplyScenario(scenario, 'nurse')}
-                  onVote={(scenarioId, rating) => handleVoteScenario(scenarioId, rating, 'nurse')}
+                  onVoteOption={(optionKey, rating) => handleVoteOption(optionKey, rating, 'nurse')}
                 />
               )}
 
               {assistantWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && assistantWorkflow.votingOpen)) && (
                 <ScenarioWorkspace
                   group="assistant"
+                  mode={role === 'personnel' ? 'vote' : 'manage'}
                   workflow={assistantWorkflow}
-                  selectedScenarioId={currentScenarioAssistant?.id ?? null}
+                  selectedOptionKey={selectedOptionKeyForGroup('assistant')}
                   canManage={role === 'headnurse' || role === 'admin'}
-                  canVote={Boolean(role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && assistantWorkflow.votingOpen)}
                   currentUserId={role === 'personnel' && selectedPersonnelUser ? selectedPersonnelUser.id : (authenticatedUser?.id || null)}
                   votes={normalizedScenarioVotes.assistant}
-                  onSelectScenario={(scenarioId) => setSelectedScenarioByIdForGroup('assistant', scenarioId)}
+                  baselineSchedule={schedule}
+                  personnel={personnel}
+                  onSelectOption={(key) => onSelectOptionForGroup('assistant', key)}
                   onStartComparison={() => handleStartScenarioComparison('assistant')}
+                  onRequestStartVoting={() => openVotingSetup('assistant')}
                   onToggleVoting={() => handleToggleScenarioVoting('assistant')}
                   onFinalize={(scenario) => handleApplyScenario(scenario, 'assistant')}
-                  onVote={(scenarioId, rating) => handleVoteScenario(scenarioId, rating, 'assistant')}
+                  onVoteOption={(optionKey, rating) => handleVoteOption(optionKey, rating, 'assistant')}
                 />
               )}
 
@@ -8535,6 +8611,42 @@ export default function Home() {
         </div>
       </main>
 
+
+      {votingSetup && (() => {
+        const wf = getWorkflowForGroup(votingSetup.group);
+        if (!wf) return null;
+        const all = [BASELINE_OPTION_KEY, ...wf.scenarios.map(s => String(s.id))];
+        const toggle = (k: string) => setVotingSetup(prev => {
+          if (!prev) return prev;
+          const next = new Set(prev.selected);
+          if (next.has(k)) next.delete(k); else next.add(k);
+          return { ...prev, selected: next };
+        });
+        const labelFor = (k: string) => k === BASELINE_OPTION_KEY ? 'برنامهٔ مبنا' : `برنامه ${wf.scenarios.find(s => String(s.id) === k)?.scenarioKey}`;
+        return (
+          <div className="fixed inset-0 z-[80] bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 print:hidden animate-fade-in" dir="rtl" onClick={() => setVotingSetup(null)}>
+            <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <h3 className="text-sm font-black text-slate-800">انتخاب برنامه‌های رأی‌گیری — {votingSetup.group === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'}</h3>
+                <button type="button" onClick={() => setVotingSetup(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer"><X className="w-4 h-4" /></button>
+              </div>
+              <p className="text-[11px] font-bold text-slate-500">تیک برنامه‌هایی که می‌خواهید به رأی گذاشته شوند را بزنید (شامل خود برنامهٔ مبنا). برای پرسنل به‌صورت «گزینه ۱، گزینه ۲، ...» نمایش داده می‌شود.</p>
+              <div className="space-y-2">
+                {all.map(k => (
+                  <label key={k} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 cursor-pointer hover:bg-slate-50">
+                    <input type="checkbox" checked={votingSetup.selected.has(k)} onChange={() => toggle(k)} className="w-4 h-4 accent-indigo-600 rounded border-slate-300" />
+                    <span className="text-xs font-black text-slate-700">{labelFor(k)}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button type="button" onClick={() => setVotingSetup(null)} className="text-xs font-black px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer">انصراف</button>
+                <button type="button" onClick={confirmVotingSetup} className="text-xs font-black px-3 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer">شروع رأی‌گیری</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <DeleteConfirmModal
         isOpen={!!deleteTarget}
