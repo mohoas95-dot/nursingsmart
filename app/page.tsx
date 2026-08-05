@@ -3570,7 +3570,7 @@ export default function Home() {
         ...current,
         votingOpen: !current.votingOpen,
       };
-    }, { showBusyOverlay: false });
+    }, { showBusyOverlay: false, resetVotes: !workflow.votingOpen });
   };
 
   // ====== رأی‌گیری: گزینه‌ها، انتخاب سرپرستار، رأی پرسنل، به‌روزرسانی زنده ======
@@ -3606,7 +3606,7 @@ export default function Home() {
     await persistScenarioWorkflow(group, current => {
       if (!current) return null;
       return { ...current, voteOptions: [...selected], votingOpen: true };
-    }, { showBusyOverlay: false });
+    }, { showBusyOverlay: false, resetVotes: true });
     setVotingSetup(null);
   };
 
