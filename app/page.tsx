@@ -926,7 +926,7 @@ export default function Home() {
     if (role === 'personnel' && selectedPersonnelUser?.jobGroup !== 'nurse' && selectedScenarioIndexNurse !== -1) {
       setSelectedScenarioIndexNurse(-1);
     }
-    if (role === 'personnel' && (!nurseWorkflow?.votingOpen) && selectedScenarioIndexNurse !== -1) {
+    if (role === 'personnel' && (!nurseWorkflow?.comparisonStartedAt) && selectedScenarioIndexNurse !== -1) {
       setSelectedScenarioIndexNurse(-1);
     }
   }, [role, selectedPersonnelUser, nurseWorkflow, selectedScenarioIndexNurse]);
@@ -935,7 +935,7 @@ export default function Home() {
     if (role === 'personnel' && selectedPersonnelUser?.jobGroup !== 'assistant' && selectedScenarioIndexAssistant !== -1) {
       setSelectedScenarioIndexAssistant(-1);
     }
-    if (role === 'personnel' && (!assistantWorkflow?.votingOpen) && selectedScenarioIndexAssistant !== -1) {
+    if (role === 'personnel' && (!assistantWorkflow?.comparisonStartedAt) && selectedScenarioIndexAssistant !== -1) {
       setSelectedScenarioIndexAssistant(-1);
     }
   }, [role, selectedPersonnelUser, assistantWorkflow, selectedScenarioIndexAssistant]);
@@ -6527,7 +6527,7 @@ export default function Home() {
           {activeTab === 'schedule' && (
             <div className="space-y-6">
 
-              {nurseWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && nurseWorkflow.votingOpen)) && (
+              {nurseWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && !!nurseWorkflow.comparisonStartedAt)) && (
                 <ScenarioWorkspace
                   group="nurse"
                   mode={role === 'personnel' ? 'vote' : 'manage'}
@@ -6547,7 +6547,7 @@ export default function Home() {
                 />
               )}
 
-              {assistantWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && assistantWorkflow.votingOpen)) && (
+              {assistantWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && !!assistantWorkflow.comparisonStartedAt)) && (
                 <ScenarioWorkspace
                   group="assistant"
                   mode={role === 'personnel' ? 'vote' : 'manage'}

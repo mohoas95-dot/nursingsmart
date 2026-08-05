@@ -160,6 +160,26 @@ function submittedVoteForUser(
   return null;
 }
 
+function winningVoteOption(
+  votes: Record<string, Record<string, number>>,
+  voteOptions: readonly string[]
+): string | null {
+  let winner: string | null = null;
+  let winnerTally: { average: number; count: number } = { average: -1, count: -1 };
+  for (const key of voteOptions) {
+    const tally = tallyFor(votes, key);
+    if (
+      !winner ||
+      tally.average > winnerTally.average ||
+      (Math.abs(tally.average - winnerTally.average) < 0.001 && tally.count > winnerTally.count)
+    ) {
+      winner = key;
+      winnerTally = tally;
+    }
+  }
+  return winner;
+}
+
 /**
  * آیا برنامهٔ شیفت‌های این پرسنل در همهٔ گزینه‌های رأی‌گیری یکی (ثابت) است؟
  * برای پرسنل قفل‌شده/بدون‌تغییر ⇒ حق رأی ندارد.
@@ -210,9 +230,23 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
     return max;
   }, [options]);
 
-  // گزینهٔ فعال (پیش‌فرض: در حالت رأی‌گیری اولین گزینه، در حالت مدیریت مبنا).
-  const activeKey = selectedOptionKey ?? (mode === 'vote' ? (voteOptions[0] ?? BASELINE_OPTION_KEY) : BASELINE_OPTION_KEY);
+  const winnerKey = React.useMemo(() => winningVoteOption(votes, voteOptions), [votes, voteOptions]);
+  // گزینهٔ فعال: هنگام رأی‌گیری اولین گزینه، پس از پایان رأی‌گیری گزینهٔ برنده نمایش داده می‌شود.
+  const defaultVoteKey = workflow.votingOpen ? (voteOptions[0] ?? BASELINE_OPTION_KEY) : (winnerKey ?? voteOptions[0] ?? BASELINE_OPTION_KEY);
+  const activeKey = selectedOptionKey ?? (mode === 'vote' ? defaultVoteKey : BASELINE_OPTION_KEY);
   const activeOption = options.find(o => o.key === activeKey) || options[0] || null;
+
+  const autoSelectedWinnerRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (mode !== 'vote' || !activeOption) return;
+    if (!workflow.votingOpen && winnerKey && autoSelectedWinnerRef.current !== winnerKey) {
+      autoSelectedWinnerRef.current = winnerKey;
+      if (selectedOptionKey !== winnerKey) onSelectOption(winnerKey);
+      return;
+    }
+    if (selectedOptionKey !== null) return;
+    onSelectOption(activeKey);
+  }, [mode, selectedOptionKey, activeOption, activeKey, onSelectOption, workflow.votingOpen, winnerKey]);
 
   if (mode === 'vote') {
     return (
@@ -441,7 +475,7 @@ function VotePanel(props: {
   currentUserId: string | null; personnel: readonly Personnel[] | undefined; totalDays: number;
   onSelectOption: (key: string | null) => void; onVoteOption: (key: string, rating: number) => void | Promise<void>;
 }) {
-  const { meta, options, voteOptions, activeKey, votes, currentUserId, personnel, totalDays, onSelectOption, onVoteOption } = props;
+  const { meta, workflow, options, voteOptions, activeKey, votes, currentUserId, personnel, totalDays, onSelectOption, onVoteOption } = props;
 
   const userFixed = React.useMemo(
     () => isPersonnelScheduleFixed(currentUserId, voteOptions, options, personnel, totalDays),
@@ -451,7 +485,10 @@ function VotePanel(props: {
   const submittedVote = submittedVoteForUser(votes, voteOptions, currentUserId);
   const [localSubmittedVote, setLocalSubmittedVote] = React.useState<{ optionKey: string; rating: number } | null>(null);
   const effectiveSubmittedVote = submittedVote || localSubmittedVote;
+  const winnerKey = React.useMemo(() => winningVoteOption(votes, voteOptions), [votes, voteOptions]);
+  const winnerLabel = winnerKey ? label(voteOptions.indexOf(winnerKey)) : null;
   const submittedLabel = effectiveSubmittedVote ? label(voteOptions.indexOf(effectiveSubmittedVote.optionKey)) : null;
+  const votingEnded = !workflow.votingOpen;
   const [pendingRating, setPendingRating] = React.useState<number>(effectiveSubmittedVote?.rating || 0);
   const [isSubmittingVote, setIsSubmittingVote] = React.useState(false);
 
@@ -482,7 +519,7 @@ function VotePanel(props: {
   const activeTally = tallyFor(votes, activeKey);
 
   const confirmAndSubmitVote = async () => {
-    if (effectiveSubmittedVote || isSubmittingVote) return;
+    if (votingEnded || effectiveSubmittedVote || isSubmittingVote) return;
     const rating = pendingRating || 3;
     const optionLabel = label(voteOptions.indexOf(activeKey));
     const ok = window.confirm(`آیا از ثبت رأی برای ${optionLabel} با امتیاز ${toPersianDigits(rating)} مطمئن هستید؟ پس از تأیید، رأی شما غیرقابل تغییر خواهد بود.`);
@@ -502,7 +539,9 @@ function VotePanel(props: {
         <div className="flex items-center gap-2">
           <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${meta.badge}`}>{meta.label}</span>
           <h3 className="text-xs font-black text-slate-800">رأی‌گیری برنامه‌ها</h3>
-          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">فعال</span>
+          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${workflow.votingOpen ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
+            {workflow.votingOpen ? 'فعال' : 'پایان‌یافته'}
+          </span>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           {voteOptions.map((key, idx) => {
@@ -520,13 +559,17 @@ function VotePanel(props: {
       <div className="px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-2.5">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-black text-slate-700">به {label(voteOptions.indexOf(activeKey))} امتیاز می‌دهید:</span>
-          <StarRating value={effectiveSubmittedVote ? (effectiveSubmittedVote.optionKey === activeKey ? effectiveSubmittedVote.rating : 0) : pendingRating} onVote={effectiveSubmittedVote ? undefined : setPendingRating} size="sm" />
-          <button type="button" onClick={confirmAndSubmitVote} disabled={!!effectiveSubmittedVote || isSubmittingVote}
+          <StarRating value={effectiveSubmittedVote ? (effectiveSubmittedVote.optionKey === activeKey ? effectiveSubmittedVote.rating : 0) : pendingRating} onVote={votingEnded || effectiveSubmittedVote ? undefined : setPendingRating} size="sm" />
+          <button type="button" onClick={confirmAndSubmitVote} disabled={votingEnded || !!effectiveSubmittedVote || isSubmittingVote}
             className="text-[10px] font-black px-3 py-1.5 rounded-lg text-white bg-slate-900 hover:bg-black disabled:bg-slate-300 disabled:cursor-not-allowed inline-flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" /> {effectiveSubmittedVote ? 'رأی ثبت شد' : (isSubmittingVote ? 'در حال ثبت...' : 'ثبت رای')}
+            <CheckCircle2 className="w-3.5 h-3.5" /> {votingEnded ? 'رأی‌گیری تمام شد' : (effectiveSubmittedVote ? 'رأی ثبت شد' : (isSubmittingVote ? 'در حال ثبت...' : 'ثبت رای'))}
           </button>
         </div>
-        {effectiveSubmittedVote ? (
+        {votingEnded && winnerKey ? (
+          <div className="flex items-center gap-2 text-[11px] font-black text-emerald-700">
+            <Trophy className="w-3.5 h-3.5" /> {winnerLabel} بیشترین رأی را آورد و تصویب شد.
+          </div>
+        ) : effectiveSubmittedVote ? (
           <div className="flex items-center gap-2 text-[11px] font-black text-emerald-700">
             <Lock className="w-3.5 h-3.5" /> رأی شما برای {submittedLabel} ثبت و غیرقابل تغییر شد.
           </div>
