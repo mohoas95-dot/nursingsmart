@@ -147,17 +147,14 @@ function tallyFor(votes: Record<string, Record<string, number>>, optionKey: stri
   return { average: values.reduce((s, v) => s + v, 0) / values.length, count: values.length };
 }
 
-function submittedVoteForUser(
+function submittedRatingForOption(
   votes: Record<string, Record<string, number>>,
-  voteOptions: readonly string[],
+  optionKey: string,
   currentUserId: string | null
-): { optionKey: string; rating: number } | null {
-  if (!currentUserId) return null;
-  for (const key of voteOptions) {
-    const rating = votes[key]?.[currentUserId];
-    if (typeof rating === 'number' && rating > 0) return { optionKey: key, rating };
-  }
-  return null;
+): number {
+  if (!currentUserId) return 0;
+  const rating = votes[optionKey]?.[currentUserId];
+  return typeof rating === 'number' && rating > 0 ? rating : 0;
 }
 
 function winningVoteOption(
@@ -483,20 +480,26 @@ function VotePanel(props: {
     [currentUserId, voteOptions, options, personnel, totalDays]
   );
   const label = (idx: number) => `گزینه ${toPersianDigits(idx + 1)}`;
-  const submittedVote = submittedVoteForUser(votes, voteOptions, currentUserId);
-  const [localSubmittedVote, setLocalSubmittedVote] = React.useState<{ optionKey: string; rating: number } | null>(null);
-  const effectiveSubmittedVote = submittedVote || localSubmittedVote;
+  const [localSubmittedRatings, setLocalSubmittedRatings] = React.useState<Record<string, number>>({});
+  const serverSubmittedRating = submittedRatingForOption(votes, activeKey, currentUserId);
+  const effectiveSubmittedRating = serverSubmittedRating || localSubmittedRatings[activeKey] || 0;
   const winnerKey = React.useMemo(() => winningVoteOption(votes, voteOptions), [votes, voteOptions]);
   const winnerLabel = winnerKey ? label(voteOptions.indexOf(winnerKey)) : null;
-  const submittedLabel = effectiveSubmittedVote ? label(voteOptions.indexOf(effectiveSubmittedVote.optionKey)) : null;
+  const activeLabel = label(voteOptions.indexOf(activeKey));
   const votingEnded = !workflow.votingOpen;
-  const [pendingRating, setPendingRating] = React.useState<number>(effectiveSubmittedVote?.rating || 0);
+  const [pendingRating, setPendingRating] = React.useState<number>(effectiveSubmittedRating || 0);
   const [isSubmittingVote, setIsSubmittingVote] = React.useState(false);
 
   React.useEffect(() => {
-    if (submittedVote) setLocalSubmittedVote(null);
-    setPendingRating((submittedVote || localSubmittedVote)?.rating || 0);
-  }, [activeKey, submittedVote?.optionKey, submittedVote?.rating, localSubmittedVote?.optionKey, localSubmittedVote?.rating]);
+    if (serverSubmittedRating > 0 && localSubmittedRatings[activeKey]) {
+      setLocalSubmittedRatings(prev => {
+        const next = { ...prev };
+        delete next[activeKey];
+        return next;
+      });
+    }
+    setPendingRating(effectiveSubmittedRating || 0);
+  }, [activeKey, serverSubmittedRating, effectiveSubmittedRating, localSubmittedRatings]);
 
   if (voteOptions.length === 0) {
     return (
@@ -520,15 +523,14 @@ function VotePanel(props: {
   const activeTally = tallyFor(votes, activeKey);
 
   const confirmAndSubmitVote = async () => {
-    if (votingEnded || effectiveSubmittedVote || isSubmittingVote) return;
+    if (votingEnded || effectiveSubmittedRating > 0 || isSubmittingVote) return;
     const rating = pendingRating || 3;
-    const optionLabel = label(voteOptions.indexOf(activeKey));
-    const ok = window.confirm(`آیا از ثبت رأی برای ${optionLabel} با امتیاز ${toPersianDigits(rating)} مطمئن هستید؟ پس از تأیید، رأی شما غیرقابل تغییر خواهد بود.`);
+    const ok = window.confirm(`آیا از ثبت رأی برای ${activeLabel} با امتیاز ${toPersianDigits(rating)} مطمئن هستید؟ پس از تأیید، رأی شما برای همین گزینه غیرقابل تغییر خواهد بود.`);
     if (!ok) return;
     setIsSubmittingVote(true);
     try {
       await onVoteOption(activeKey, rating);
-      setLocalSubmittedVote({ optionKey: activeKey, rating });
+      setLocalSubmittedRatings(prev => ({ ...prev, [activeKey]: rating }));
     } finally {
       setIsSubmittingVote(false);
     }
@@ -559,20 +561,20 @@ function VotePanel(props: {
 
       <div className="px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-2.5">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] font-black text-slate-700">به {label(voteOptions.indexOf(activeKey))} امتیاز می‌دهید:</span>
-          <StarRating value={effectiveSubmittedVote ? (effectiveSubmittedVote.optionKey === activeKey ? effectiveSubmittedVote.rating : 0) : pendingRating} onVote={votingEnded || effectiveSubmittedVote ? undefined : setPendingRating} size="sm" />
-          <button type="button" onClick={confirmAndSubmitVote} disabled={votingEnded || !!effectiveSubmittedVote || isSubmittingVote}
+          <span className="text-[11px] font-black text-slate-700">به {activeLabel} امتیاز می‌دهید:</span>
+          <StarRating value={effectiveSubmittedRating || pendingRating} onVote={votingEnded || effectiveSubmittedRating > 0 ? undefined : setPendingRating} size="sm" />
+          <button type="button" onClick={confirmAndSubmitVote} disabled={votingEnded || effectiveSubmittedRating > 0 || isSubmittingVote}
             className="text-[10px] font-black px-3 py-1.5 rounded-lg text-white bg-slate-900 hover:bg-black disabled:bg-slate-300 disabled:cursor-not-allowed inline-flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" /> {votingEnded ? 'رأی‌گیری تمام شد' : (effectiveSubmittedVote ? 'رأی ثبت شد' : (isSubmittingVote ? 'در حال ثبت...' : 'ثبت رای'))}
+            <CheckCircle2 className="w-3.5 h-3.5" /> {votingEnded ? 'رأی‌گیری تمام شد' : (effectiveSubmittedRating > 0 ? 'رأی ثبت شد' : (isSubmittingVote ? 'در حال ثبت...' : 'ثبت رای'))}
           </button>
         </div>
         {votingEnded && winnerKey ? (
           <div className="flex items-center gap-2 text-[11px] font-black text-emerald-700">
             <Trophy className="w-3.5 h-3.5" /> {winnerLabel} بیشترین رأی را آورد و تصویب شد.
           </div>
-        ) : effectiveSubmittedVote ? (
+        ) : effectiveSubmittedRating > 0 ? (
           <div className="flex items-center gap-2 text-[11px] font-black text-emerald-700">
-            <Lock className="w-3.5 h-3.5" /> رأی شما برای {submittedLabel} ثبت و غیرقابل تغییر شد.
+            <Lock className="w-3.5 h-3.5" /> رأی شما برای {activeLabel} ثبت و غیرقابل تغییر شد؛ می‌توانید به گزینه‌های دیگر هم یک‌بار رأی بدهید.
           </div>
         ) : (
           <div className="flex items-center gap-2 text-[11px] font-black text-slate-600">
@@ -604,7 +606,7 @@ function VotePanel(props: {
           );
         })}
       </div>
-      <p className="px-4 pb-3 text-[10px] font-bold text-slate-400">با کلیک روی گزینه ۱، گزینه ۲ و ... همان برنامه در جدول نمایش داده می‌شود. پس از ثبت و تأیید، رأی شما غیرقابل تغییر است.</p>
+      <p className="px-4 pb-3 text-[10px] font-bold text-slate-400">با کلیک روی گزینه ۱، گزینه ۲ و ... همان برنامه در جدول نمایش داده می‌شود. برای هر گزینه فقط یک‌بار می‌توانید رأی ثبت کنید و همان رأی غیرقابل تغییر است.</p>
     </section>
   );
 }
