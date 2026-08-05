@@ -126,7 +126,7 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
               <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
                 <div className="text-[10px] font-black text-slate-500 mb-1">وضعیت برنامه</div>
                 <div className={`text-sm font-black ${scenario.relevantWarningCount === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {scenario.relevantWarningCount === 0 ? 'آماده ورود به مقایسه' : 'نیازمند رفع هشدار'}
+                  {scenario.relevantWarningCount === 0 ? 'بدون هشدار فعال' : 'قابل مقایسه با هشدار'}
                 </div>
               </div>
             </div>
@@ -223,14 +223,14 @@ export function ScenarioWarningsModal(props: ScenarioWarningsModalProps) {
               <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 flex items-start gap-2 text-[11px] font-bold text-slate-600 leading-6">
                 <ShieldCheck className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
                 <div>
-                  پس از رفع کامل هشدارهای همین برنامه، سیستم امتیازهای نهایی آن را برای مقایسه ثبت می‌کند. اگر سرپرستار هنوز نخواهد مقایسه را آغاز کند، کادر شروع امتیازدهی در همان صفحه باقی می‌ماند.
+                  هشدارها فقط برای تصمیم‌گیری بهتر نمایش داده می‌شوند و مانع شروع مقایسه، امتیازدهی یا رأی‌گیری نیستند. در صورت تمایل می‌توانید پیش از ادامه آن‌ها را اصلاح کنید.
                 </div>
               </div>
 
               <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 flex items-start gap-2 text-[11px] font-bold text-indigo-900 leading-6">
                 <Sparkles className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
                 <div>
-                  در صورت ویرایش دستی هر سلول، همین برنامه دوباره ارزیابی می‌شود و اگر قبلاً وارد مرحله امتیازدهی یا نظرسنجی شده باشد، برای حفظ صحت تصمیم‌گیری به مرحله رفع هشدار بازمی‌گردد.
+                  در صورت ویرایش دستی هر سلول، همین برنامه دوباره ارزیابی می‌شود و امتیازها/تفاوت‌ها با وضعیت جدید به‌روز می‌مانند؛ هشدارهای باقی‌مانده فقط نقش اطلاع‌رسانی دارند.
                 </div>
               </div>
             </>

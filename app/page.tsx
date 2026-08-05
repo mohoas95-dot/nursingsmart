@@ -73,6 +73,7 @@ import {
 import { generateAndScoreScenariosWithProgress } from '../lib/scenarioGenerator';
 import {
   calculateScenarioDifferencePercent,
+  countHardConstraintWarnings,
   evaluateScenarioSchedule,
   filterWarningsForScenarioGroup,
   type ScoredSchedule,
@@ -737,24 +738,29 @@ export default function Home() {
   const monthKey = `${currentYear}_${currentMonth}`;
   const deptData = optimisticDbRef.current?.deptData?.[selectedDepartmentId || 'sepehr'] as any;
 
-  const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
-    const rawWarns = rawScenario?.schedule?.warnings || rawScenario?.warnings || [];
-    let filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
-    // پرسنل قفل‌شده: در سناریو نباید تغییری داشته باشند و هشداری هم برایشان صادر نشود
-    // چون در مبنا حل شده‌اند. این فیلتر هم در تولید سناریو و هم در نمایش آن اعمال می‌شود.
-    if (lockedRows.length > 0) {
-      const lockedNameSet = new Set(
-        personnel.filter(p => lockedRows.includes(p.id)).map(p => `${p.firstName} ${p.lastName}`)
-      );
-      if (lockedNameSet.size > 0) {
-        filteredGroup = filteredGroup.filter(w => {
-          for (const name of lockedNameSet) {
-            if (w.includes(name)) return false;
-          }
-          return true;
-        });
+  const preserveLockedRowsInScenarioSchedule = React.useCallback((candidate: MonthlySchedule): MonthlySchedule => {
+    if (!schedule || lockedRows.length === 0) return candidate;
+
+    const nextAssignments: Record<string, Record<number, ShiftType>> = {
+      ...(candidate.assignments || {}),
+    };
+    for (const personnelId of lockedRows) {
+      if (schedule.assignments[personnelId]) {
+        nextAssignments[personnelId] = { ...schedule.assignments[personnelId] };
       }
     }
+
+    return {
+      ...candidate,
+      assignments: nextAssignments,
+    };
+  }, [schedule, lockedRows]);
+
+  const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
+    const rawSchedule: MonthlySchedule = rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] };
+    const scenarioSchedule = preserveLockedRowsInScenarioSchedule(rawSchedule);
+    const rawWarns = rawSchedule.warnings || rawScenario?.warnings || [];
+    const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group, lockedRows);
     // هشدارهای نادیده‌گرفته‌شده می‌تواند هم در لیست سراسری (مبنا) و هم در خود سناریو ذخیره شده باشد.
     const scenarioDismissed: string[] = rawScenario?.schedule?.dismissedWarnings || [];
     const combinedDismissed = [...dismissedWarnings, ...scenarioDismissed];
@@ -765,8 +771,9 @@ export default function Home() {
         ...rawScenario,
         warnings: activeWarnings,
         relevantWarningCount: activeWarnings.length,
+        relevantHardWarningCount: countHardConstraintWarnings(activeWarnings),
         schedule: {
-          ...(rawScenario.schedule || {}),
+          ...scenarioSchedule,
           warnings: activeWarnings,
           dismissedWarnings: scenarioDismissed,
         },
@@ -776,7 +783,7 @@ export default function Home() {
       id: rawScenario?.id ?? index + 1,
       type: rawScenario?.type || (index === 0 ? 'REQUESTS' : index === 1 ? 'FAIRNESS' : 'MIXED'),
       schedule: {
-        ...(rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
+        ...scenarioSchedule,
         warnings: activeWarnings,
         dismissedWarnings: scenarioDismissed,
       },
@@ -790,7 +797,7 @@ export default function Home() {
       monthlyDutyHours,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings, lockedRows]);
+  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, lockedRows, monthlyDutyHours, personnel, preserveLockedRowsInScenarioSchedule, requests, settings]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
@@ -854,24 +861,19 @@ export default function Home() {
     ? assistantWorkflow.scenarios[selectedScenarioIndexAssistant] || null
     : null;
 
+  const scenarioOptionLabel = React.useCallback((workflow: ScenarioWorkflowGroup | null, scenario: ScoredSchedule | null): string => {
+    if (!workflow || !scenario) return '';
+    const optionKeys = workflow.voteOptions && workflow.voteOptions.length > 0
+      ? workflow.voteOptions.map(String)
+      : [BASELINE_OPTION_KEY, ...workflow.scenarios.map(item => String(item.id))];
+    const optionIndex = optionKeys.indexOf(String(scenario.id));
+    return optionIndex >= 0 ? `گزینه ${toPersianDigits(optionIndex + 1)}` : 'گزینه';
+  }, []);
+
   const displayedSchedule = React.useMemo(() => {
     const preserveLockedRows = (candidate: MonthlySchedule | null): MonthlySchedule | null => {
       if (!candidate) return candidate;
-      if (!schedule || lockedRows.length === 0) return candidate;
-
-      const nextAssignments: Record<string, Record<number, ShiftType>> = {
-        ...candidate.assignments,
-      };
-      for (const personnelId of lockedRows) {
-        if (schedule.assignments[personnelId]) {
-          nextAssignments[personnelId] = { ...schedule.assignments[personnelId] };
-        }
-      }
-
-      return {
-        ...candidate,
-        assignments: nextAssignments,
-      };
+      return preserveLockedRowsInScenarioSchedule(candidate);
     };
 
     if (!schedule && !currentScenarioNurse && !currentScenarioAssistant) return schedule;
@@ -910,7 +912,7 @@ export default function Home() {
       } as MonthlySchedule);
     }
     return schedule;
-  }, [schedule, personnel, currentScenarioNurse, currentScenarioAssistant, lockedRows]);
+  }, [schedule, personnel, currentScenarioNurse, currentScenarioAssistant, preserveLockedRowsInScenarioSchedule]);
 
   // Compiled reports from current schedule dynamically and reactively
   React.useEffect(() => {
@@ -933,7 +935,7 @@ export default function Home() {
     if (role === 'personnel' && selectedPersonnelUser?.jobGroup !== 'nurse' && selectedScenarioIndexNurse !== -1) {
       setSelectedScenarioIndexNurse(-1);
     }
-    if (role === 'personnel' && (!nurseWorkflow?.votingOpen) && selectedScenarioIndexNurse !== -1) {
+    if (role === 'personnel' && (!nurseWorkflow?.comparisonStartedAt) && selectedScenarioIndexNurse !== -1) {
       setSelectedScenarioIndexNurse(-1);
     }
   }, [role, selectedPersonnelUser, nurseWorkflow, selectedScenarioIndexNurse]);
@@ -942,7 +944,7 @@ export default function Home() {
     if (role === 'personnel' && selectedPersonnelUser?.jobGroup !== 'assistant' && selectedScenarioIndexAssistant !== -1) {
       setSelectedScenarioIndexAssistant(-1);
     }
-    if (role === 'personnel' && (!assistantWorkflow?.votingOpen) && selectedScenarioIndexAssistant !== -1) {
+    if (role === 'personnel' && (!assistantWorkflow?.comparisonStartedAt) && selectedScenarioIndexAssistant !== -1) {
       setSelectedScenarioIndexAssistant(-1);
     }
   }, [role, selectedPersonnelUser, assistantWorkflow, selectedScenarioIndexAssistant]);
@@ -3086,10 +3088,11 @@ export default function Home() {
   }, []);
 
   const reevaluateScenarioForGroup = React.useCallback((scenario: ScoredSchedule, group: JobGroup, scheduleOverride?: MonthlySchedule): ScoredSchedule => {
-    const baseSchedule = scheduleOverride || scenario.schedule;
+    const baseSchedule = preserveLockedRowsInScenarioSchedule(scheduleOverride || scenario.schedule);
     const currentDismissed = dismissedWarningsRef.current || [];
+    const currentLocked = lockedRowsRef.current;
     const activeWarnings = filterActiveWarnings(
-      filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group),
+      filterWarningsForScenarioGroup(baseSchedule.warnings || [], personnelRef.current, group, currentLocked),
       currentDismissed
     );
     const normalizedSchedule: MonthlySchedule = {
@@ -3110,7 +3113,7 @@ export default function Home() {
       monthlyDutyHours: monthlyDutyHoursRef.current,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear]);
+  }, [currentMonth, currentYear, preserveLockedRowsInScenarioSchedule]);
 
   const buildPairwiseDifferences = React.useCallback((scenariosList: ScoredSchedule[], group: JobGroup) => {
     const totalDays = getJalaliMonthDays(currentYear, currentMonth);
@@ -3520,6 +3523,12 @@ export default function Home() {
       : { nurse: {}, assistant: {} };
 
     const groupVotes = votesMonth[targetGroup] || {};
+    const existingRatingForOption = groupVotes[optionKey]?.[userId];
+    if (typeof existingRatingForOption === 'number' && existingRatingForOption > 0) {
+      alert('رأی شما برای این گزینه قبلاً ثبت شده و قابل تغییر نیست.');
+      return;
+    }
+
     votesMonth[targetGroup] = {
       ...groupVotes,
       [optionKey]: {
@@ -3542,11 +3551,7 @@ export default function Home() {
   const handleStartScenarioComparison = async (jobGroup: JobGroup) => {
     const workflow = getWorkflowForGroup(jobGroup);
     if (!workflow || workflow.scenarios.length === 0) return;
-    if (workflow.scenarios.some(scenario => scenario.relevantWarningCount > 0)) {
-      alert('تا زمانی که هشدارهای هر سه سناریو به صفر نرسند، مقایسه و امتیازدهی شروع نمی‌شود.');
-      return;
-    }
-
+    // وجود هشدار صرفاً اطلاع‌رسانی است و نباید مانع شروع مقایسه/امتیازدهی شود.
     const rescored = buildPairwiseDifferences(
       workflow.scenarios.map(scenario => reevaluateScenarioForGroup(scenario, jobGroup)),
       jobGroup
@@ -3571,7 +3576,7 @@ export default function Home() {
         ...current,
         votingOpen: !current.votingOpen,
       };
-    }, { showBusyOverlay: false });
+    }, { showBusyOverlay: false, resetVotes: !workflow.votingOpen });
   };
 
   // ====== رأی‌گیری: گزینه‌ها، انتخاب سرپرستار، رأی پرسنل، به‌روزرسانی زنده ======
@@ -3607,7 +3612,7 @@ export default function Home() {
     await persistScenarioWorkflow(group, current => {
       if (!current) return null;
       return { ...current, voteOptions: [...selected], votingOpen: true };
-    }, { showBusyOverlay: false });
+    }, { showBusyOverlay: false, resetVotes: true });
     setVotingSetup(null);
   };
 
@@ -4655,14 +4660,20 @@ export default function Home() {
             const groupRecord = monthScenarios[scenarioContext.group];
             if (!groupRecord) throw new Error('سناریوی انتخاب‌شده برای ویرایش پیدا نشد.');
 
-            const filteredWarnings = filterWarningsForScenarioGroup(newSchedule.warnings || [], currentPersonnel, scenarioContext.group);
+            const scenarioSafeSchedule = preserveLockedRowsInScenarioSchedule(newSchedule);
+            const filteredWarnings = filterWarningsForScenarioGroup(
+              scenarioSafeSchedule.warnings || [],
+              currentPersonnel,
+              scenarioContext.group,
+              currentLocked
+            );
             const rescoredScenarios = buildPairwiseDifferences(
               groupRecord.scenarios.map((scenario, index) => {
                 if (index !== scenarioContext.scenarioIndex) return scenario;
                 const existingDismissed: string[] = (scenario.schedule as any)?.dismissedWarnings || [];
                 const prunedDismissed = pruneDismissedWarnings(filteredWarnings, existingDismissed);
                 const nextScheduleWithPrunedDismissed = {
-                  ...newSchedule,
+                  ...scenarioSafeSchedule,
                   warnings: filteredWarnings,
                   dismissedWarnings: prunedDismissed,
                   lockedRows: currentLocked,
@@ -6259,7 +6270,7 @@ export default function Home() {
                   </span>
                 </div>
                 <p className="text-[11px] font-bold text-slate-500">
-                  از این بخش می‌توانید برای هر گروه شغلی تا ۳ برنامه پیشنهادی معتبر تولید کنید تا پس از رفع هشدار، وارد مقایسه و نظرسنجی شوند.
+                  از این بخش می‌توانید برای هر گروه شغلی تا ۳ برنامه پیشنهادی معتبر تولید کنید؛ هشدارها قابل بررسی‌اند اما مانع ورود به مقایسه و نظرسنجی نیستند.
                 </p>
               </div>
             </div>
@@ -6522,7 +6533,7 @@ export default function Home() {
           {activeTab === 'schedule' && (
             <div className="space-y-6">
 
-              {nurseWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && nurseWorkflow.votingOpen)) && (
+              {nurseWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'nurse' && !!nurseWorkflow.comparisonStartedAt)) && (
                 <ScenarioWorkspace
                   group="nurse"
                   mode={role === 'personnel' ? 'vote' : 'manage'}
@@ -6542,7 +6553,7 @@ export default function Home() {
                 />
               )}
 
-              {assistantWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && assistantWorkflow.votingOpen)) && (
+              {assistantWorkflow && (role === 'headnurse' || role === 'admin' || (role === 'personnel' && selectedPersonnelUser?.jobGroup === 'assistant' && !!assistantWorkflow.comparisonStartedAt)) && (
                 <ScenarioWorkspace
                   group="assistant"
                   mode={role === 'personnel' ? 'vote' : 'manage'}
@@ -6571,12 +6582,12 @@ export default function Home() {
                   </h3>
                   {currentScenarioNurse && (
                     <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                      برنامه فعال پرستاران: {currentScenarioNurse.title}
+                      {role === 'personnel' ? scenarioOptionLabel(nurseWorkflow, currentScenarioNurse) : `برنامه فعال پرستاران: ${currentScenarioNurse.title}`}
                     </span>
                   )}
                   {currentScenarioAssistant && (
                     <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      برنامه فعال کمک‌بهیاران: {currentScenarioAssistant.title}
+                      {role === 'personnel' ? scenarioOptionLabel(assistantWorkflow, currentScenarioAssistant) : `برنامه فعال کمک‌بهیاران: ${currentScenarioAssistant.title}`}
                     </span>
                   )}
                   <p className="text-slate-400 text-xs font-semibold">تعداد روزها: {calendarDays.length} روز / {calendarDays.filter(c => c.isHoliday).length} روز تعطیلات</p>

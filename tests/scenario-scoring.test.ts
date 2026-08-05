@@ -195,6 +195,22 @@ test('group filtering keeps only the warnings that belong to the selected job gr
   assert.equal(countHardConstraintWarnings(nurseWarnings), 2);
 });
 
+test('scenario warning filtering suppresses warnings for locked personnel', () => {
+  const warnings = [
+    'Coverage Shortage: کمبود نیرو (پرستار) در روز 3 شیفت M',
+    'Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای n1 test از روز 1 (M) تا روز 6 (M)',
+    'Mismatched Request: برای n2 test در روز 2 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است',
+  ];
+
+  const nurseWarnings = filterWarningsForScenarioGroup(warnings, personnel, 'nurse', ['n1']);
+
+  assert.deepEqual(nurseWarnings, [
+    'Coverage Shortage: کمبود نیرو (پرستار) در روز 3 شیفت M',
+    'Mismatched Request: برای n2 test در روز 2 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است',
+  ]);
+  assert.equal(countHardConstraintWarnings(nurseWarnings), 1);
+});
+
 test('hard warnings are extracted correctly and up to 4 remain eligible for scenario generation', () => {
   const warnings = [
     'Coverage Shortage: کمبود نیرو (پرستار) در روز 1 شیفت M',
