@@ -3514,6 +3514,15 @@ export default function Home() {
       : { nurse: {}, assistant: {} };
 
     const groupVotes = votesMonth[targetGroup] || {};
+    const existingUserVote = Object.values(groupVotes).some((optionVotes: any) => {
+      const existingRating = optionVotes?.[userId];
+      return typeof existingRating === 'number' && existingRating > 0;
+    });
+    if (existingUserVote) {
+      alert('رأی شما قبلاً ثبت شده و قابل تغییر نیست.');
+      return;
+    }
+
     votesMonth[targetGroup] = {
       ...groupVotes,
       [optionKey]: {
