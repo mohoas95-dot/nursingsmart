@@ -739,8 +739,26 @@ export default function Home() {
 
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
     const rawWarns = rawScenario?.schedule?.warnings || rawScenario?.warnings || [];
-    const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
-    const activeWarnings = filterActiveWarnings(filteredGroup, dismissedWarnings);
+    let filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group);
+    // پرسنل قفل‌شده: در سناریو نباید تغییری داشته باشند و هشداری هم برایشان صادر نشود
+    // چون در مبنا حل شده‌اند. این فیلتر هم در تولید سناریو و هم در نمایش آن اعمال می‌شود.
+    if (lockedRows.length > 0) {
+      const lockedNameSet = new Set(
+        personnel.filter(p => lockedRows.includes(p.id)).map(p => `${p.firstName} ${p.lastName}`)
+      );
+      if (lockedNameSet.size > 0) {
+        filteredGroup = filteredGroup.filter(w => {
+          for (const name of lockedNameSet) {
+            if (w.includes(name)) return false;
+          }
+          return true;
+        });
+      }
+    }
+    // هشدارهای نادیده‌گرفته‌شده می‌تواند هم در لیست سراسری (مبنا) و هم در خود سناریو ذخیره شده باشد.
+    const scenarioDismissed: string[] = rawScenario?.schedule?.dismissedWarnings || [];
+    const combinedDismissed = [...dismissedWarnings, ...scenarioDismissed];
+    const activeWarnings = filterActiveWarnings(filteredGroup, combinedDismissed);
 
     if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
       return {
@@ -750,6 +768,7 @@ export default function Home() {
         schedule: {
           ...(rawScenario.schedule || {}),
           warnings: activeWarnings,
+          dismissedWarnings: scenarioDismissed,
         },
       } as ScoredSchedule;
     }
@@ -759,6 +778,7 @@ export default function Home() {
       schedule: {
         ...(rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] }),
         warnings: activeWarnings,
+        dismissedWarnings: scenarioDismissed,
       },
       personnelList: personnel,
       requests,
@@ -770,7 +790,7 @@ export default function Home() {
       monthlyDutyHours,
       targetJobGroup: group,
     });
-  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings]);
+  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, monthlyDutyHours, personnel, requests, settings, lockedRows]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
@@ -2013,39 +2033,108 @@ export default function Home() {
 
   // ====== درخواست ۵: توابع مدیریت هشدارها ======
   const handleDismissAlert = (warningText: string) => {
-    // اگر قبلاً نادیده گرفته شده، بازگردانی کن
-    if (dismissedAlertWarnings[warningText]) {
+    const isRestoring = !!dismissedAlertWarnings[warningText];
+    // به‌روزرسانی فوری حافظه برای بازخورد آنی در UI (هم مبنا هم سناریو)
+    if (isRestoring) {
       const newDismissed = { ...dismissedAlertWarnings };
       delete newDismissed[warningText];
       setDismissedAlertWarnings(newDismissed);
-      // همچنین از dismissedWarnings حذف کن
       const updated = dismissedWarnings.filter(w => w !== warningText);
       setDismissedWarnings(updated);
-      // ذخیره در دیتابیس
-      const key = `${currentYear}_${currentMonth}`;
-      const nextDb = getFreshDbCopy();
-      const deptId = selectedDepartmentId || 'sepehr';
-      const oldDept = nextDb.deptData[deptId];
-      if (oldDept && oldDept.schedules?.[key]) {
-        const updatedDept = {
-          ...oldDept,
-          schedules: {
-            ...oldDept.schedules,
-            [key]: {
-              ...oldDept.schedules[key],
-              dismissedWarnings: updated
-            }
-          }
-        };
-        nextDb.deptData[deptId] = updatedDept;
-        saveDbState(nextDb, { showBusyOverlay: false });
-      }
     } else {
       setDismissedAlertWarnings(prev => ({
         ...prev,
         [warningText]: true
       }));
-      handleDismissWarning(warningText);
+    }
+
+    const key = `${currentYear}_${currentMonth}`;
+    const deptId = selectedDepartmentId || 'sepehr';
+
+    // اگر سناریویی فعال است (A/B/C)، نادیده‌گرفتن/بازگردانی باید روی همان سناریو ذخیره شود،
+    // دقیقاً مثل برنامه مبنا. این باعث می‌شود هشدار سناریو هم قابل حل/نادیده باشد.
+    const hasActiveScenario = !!(currentScenarioNurse || currentScenarioAssistant);
+    if (hasActiveScenario) {
+      try {
+        const nextDb = getFreshDbCopy();
+        if (!nextDb.deptData) nextDb.deptData = {};
+        const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
+        const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[key]);
+
+        let changed = false;
+        for (const g of ['nurse', 'assistant'] as const) {
+          const groupRecord = (monthScenarios as any)[g];
+          if (!groupRecord || !Array.isArray(groupRecord.scenarios)) continue;
+          // اگر سناریوی خاصی انتخاب شده، فقط همان را تغییر بده؛ اگر هر دو فعال‌اند (merged)، هر دو را.
+          const shouldUpdateGroup = (g === 'nurse' && currentScenarioNurse) || (g === 'assistant' && currentScenarioAssistant);
+          if (!shouldUpdateGroup) continue;
+
+          const newScenarios = groupRecord.scenarios.map((sc: any, idx: number) => {
+            const isSelected = (g === 'nurse' && idx === selectedScenarioIndexNurse) || (g === 'assistant' && idx === selectedScenarioIndexAssistant);
+            // اگر هیچ انتخاب خاصی نداریم (نباید اتفاق بیفتد) یا این سناریو انتخاب شده است
+            if (selectedScenarioIndexNurse === -1 && selectedScenarioIndexAssistant === -1) return sc;
+            if (!isSelected) return sc;
+            const existingDismissed: string[] = sc.schedule?.dismissedWarnings || [];
+            const newDismissed = isRestoring ? existingDismissed.filter((w: string) => w !== warningText) : [...existingDismissed, warningText].filter((v: string, i: number, a: string[]) => a.indexOf(v) === i);
+            changed = true;
+            return {
+              ...sc,
+              schedule: {
+                ...sc.schedule,
+                dismissedWarnings: newDismissed,
+              },
+            };
+          });
+
+          if (changed) {
+            (monthScenarios as any)[g] = {
+              ...groupRecord,
+              scenarios: newScenarios,
+            };
+          }
+        }
+
+        if (changed) {
+          nextDb.deptData[deptId] = {
+            ...oldDept,
+            activeScenarios: {
+              ...(oldDept.activeScenarios || {}),
+              [key]: monthScenarios,
+            },
+          } as any;
+          void saveDbState(nextDb, { showBusyOverlay: false });
+        }
+      } catch (e) {
+        console.error('Error updating scenario dismissed warnings:', e);
+      }
+    }
+
+    // برای مبنا فقط وقتی سناریویی فعال نیست ذخیره کن؛ وقتی سناریو فعال است،
+    // نادیده‌گرفتن فقط روی همان سناریو ذخیره می‌شود (رفتار دقیقاً مثل مبنا ولی برای سناریو).
+    if (!hasActiveScenario) {
+      if (isRestoring) {
+        const nextDb = getFreshDbCopy();
+        const oldDept = nextDb.deptData[deptId];
+        if (oldDept && oldDept.schedules?.[key]) {
+          const updatedDept = {
+            ...oldDept,
+            schedules: {
+              ...oldDept.schedules,
+              [key]: {
+                ...oldDept.schedules[key],
+                dismissedWarnings: dismissedWarnings.filter(w => w !== warningText)
+              }
+            }
+          };
+          nextDb.deptData[deptId] = updatedDept;
+          void saveDbState(nextDb, { showBusyOverlay: false });
+        }
+      } else {
+        handleDismissWarning(warningText);
+      }
+    } else if (isRestoring) {
+      // در حالت بازگردانی سناریو، آرایه سراسری dismissedWarnings هم قبلاً پاک شد؛
+      // نیازی به ذخیره مبنا نیست، چون هشدار مربوط به سناریو است.
     }
   };
 
@@ -2078,20 +2167,64 @@ export default function Home() {
     const nextDb = getFreshDbCopy();
     const deptId = selectedDepartmentId || 'sepehr';
     const oldDept = nextDb.deptData[deptId];
+    if (!oldDept) return;
 
-    if (oldDept && oldDept.schedules?.[key]) {
-      nextDb.deptData[deptId] = {
-        ...oldDept,
-        schedules: {
-          ...oldDept.schedules,
-          [key]: {
-            ...oldDept.schedules[key],
-            dismissedWarnings: []
-          }
+    const nextDeptData: any = { ...oldDept };
+
+    if (oldDept.schedules?.[key]) {
+      nextDeptData.schedules = {
+        ...oldDept.schedules,
+        [key]: {
+          ...oldDept.schedules[key],
+          dismissedWarnings: []
         }
       };
-      await saveDbState(nextDb, { showBusyOverlay: false });
     }
+
+    // بازگردانی هشدارهای نادیده‌گرفته‌شده سناریوها (A/B/C) هم دقیقاً مثل مبنا
+    if (oldDept.activeScenarios?.[key]) {
+      const monthScenarios = normalizeScenarioMonthRecord(oldDept.activeScenarios[key]);
+      const cleaned: any = {};
+      for (const g of ['nurse', 'assistant'] as const) {
+        const groupRecord = (monthScenarios as any)[g];
+        if (!groupRecord || !Array.isArray(groupRecord.scenarios)) continue;
+        cleaned[g] = {
+          ...groupRecord,
+          scenarios: groupRecord.scenarios.map((sc: any) => ({
+            ...sc,
+            schedule: {
+              ...sc.schedule,
+              dismissedWarnings: [],
+            },
+          })),
+        };
+      }
+      // اگر ماه فقط یک گروه داشت (legacy shape)، آن را هم پاک کن
+      if ((oldDept.activeScenarios[key] as any).scenarios) {
+        const legacy = oldDept.activeScenarios[key] as any;
+        nextDeptData.activeScenarios = {
+          ...(oldDept.activeScenarios || {}),
+          [key]: {
+            ...legacy,
+            scenarios: legacy.scenarios.map((sc: any) => ({
+              ...sc,
+              schedule: { ...sc.schedule, dismissedWarnings: [] },
+            })),
+          },
+        };
+      } else {
+        nextDeptData.activeScenarios = {
+          ...(oldDept.activeScenarios || {}),
+          [key]: {
+            ...(oldDept.activeScenarios[key] as any),
+            ...cleaned,
+          },
+        };
+      }
+    }
+
+    nextDb.deptData[deptId] = nextDeptData;
+    await saveDbState(nextDb, { showBusyOverlay: false });
   };
 
   const visibleWarnings = React.useMemo(() => {
@@ -4440,10 +4573,26 @@ export default function Home() {
 
     const scenarioContext = getScenarioEditingContext(pId);
     if (scenarioContext) {
-      // اصل بازطراحی: سناریوها فقط‌خواندنی‌اند. هیچ ویرایش مستقیمی روی آن‌ها انجام
-      // نمی‌شود. برنامهٔ مبنا (Working Roster) تنها منبع حقیقت است و ویرایش فقط
-      // روی آن صورت می‌گیرد؛ سپس سناریوها دوباره تولید می‌شوند.
-      alert('سناریوها فقط‌خواندنی هستند. برای ویرایش، ابتدا با دکمهٔ «بازگشت به برنامه مبنا» به برنامهٔ اصلی بازگردید، تغییرات را روی برنامهٔ مبنا اعمال کنید و سپس دوباره سناریو تولید کنید.');
+      // سناریوها اکنون توسط سرپرستار قابل ویرایش دستی هستند.
+      // محدودیت‌های قفل برنامه (finalized / lockedRows) همچنان اعمال می‌شود تا
+      // یکپارچگی با برنامهٔ مبنا حفظ شود، اما پیام «فقط‌خواندنی» حذف شده است.
+      const person = personnel.find(per => per.id === pId);
+      if (person) {
+        const monthKeyLocal = `${currentYear}_${currentMonth}`;
+        const finalizedMonthsForGroup = person.jobGroup === 'nurse' ? finalizedNursesMonths : finalizedAssistantsMonths;
+        const editCheck = canEditShiftCell({
+          jobGroup: person.jobGroup,
+          personnelId: pId,
+          finalizedMonths: finalizedMonthsForGroup,
+          lockedRows,
+          monthKey: monthKeyLocal,
+        });
+        if (!editCheck.allowed && editCheck.message) {
+          alert(editCheck.message);
+          return;
+        }
+      }
+      setEditingCell({ pId, day });
       return;
     }
 
@@ -4510,14 +4659,18 @@ export default function Home() {
             const rescoredScenarios = buildPairwiseDifferences(
               groupRecord.scenarios.map((scenario, index) => {
                 if (index !== scenarioContext.scenarioIndex) return scenario;
+                const existingDismissed: string[] = (scenario.schedule as any)?.dismissedWarnings || [];
+                const prunedDismissed = pruneDismissedWarnings(filteredWarnings, existingDismissed);
+                const nextScheduleWithPrunedDismissed = {
+                  ...newSchedule,
+                  warnings: filteredWarnings,
+                  dismissedWarnings: prunedDismissed,
+                  lockedRows: currentLocked,
+                };
                 return reevaluateScenarioForGroup(
                   scenario,
                   scenarioContext.group,
-                  {
-                    ...newSchedule,
-                    warnings: filteredWarnings,
-                    lockedRows: currentLocked,
-                  }
+                  nextScheduleWithPrunedDismissed as any
                 );
               }),
               scenarioContext.group
@@ -4529,11 +4682,14 @@ export default function Home() {
               [scenarioContext.group]: {
                 ...groupRecord,
                 scenarios: rescoredScenarios,
+                // پس از ویرایش دستی توسط سرپرستار، مقایسه حفظ می‌شود تا کاربر بتواند
+                // بلافاصله تفاوت با مبنا را ببیند؛ فقط رأی‌گیری بسته می‌شود چون
+                // محتوای سناریو تغییر کرده و آرای قبلی بی‌اعتبار است.
                 votingOpen: false,
-                comparisonStartedAt: undefined,
+                comparisonStartedAt: groupRecord.comparisonStartedAt || new Date().toISOString(),
                 generationLog: [
                   ...(groupRecord.generationLog || []),
-                  `سناریوی ${groupRecord.scenarios[scenarioContext.scenarioIndex]?.scenarioKey || '?'} پس از ویرایش دستی دوباره به مرحله رفع هشدار بازگشت.`,
+                  `سناریوی ${groupRecord.scenarios[scenarioContext.scenarioIndex]?.scenarioKey || '?'} توسط سرپرستار ویرایش دستی شد.`,
                 ].slice(-5),
               },
             };
