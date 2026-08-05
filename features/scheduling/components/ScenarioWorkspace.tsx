@@ -370,7 +370,7 @@ function ManagePanel(props: ManagePanelProps) {
           <div className="text-[10px] font-bold text-slate-500">
             {workflow.votingOpen
               ? `برنامه‌های در رأی‌گیری: ${voteOptions.length === 0 ? '—' : voteOptions.map((_, i) => `گزینه ${toPersianDigits(i + 1)}`).join('، ')}`
-              : (workflow.comparisonStartedAt ? 'برای شروع رأی‌گیری، برنامه‌های موردنظر را انتخاب کنید.' : 'پس از رفع هشدارها، مقایسه را آغاز کنید.')}
+              : (workflow.comparisonStartedAt ? 'برای شروع رأی‌گیری، برنامه‌های موردنظر را انتخاب کنید.' : 'در صورت نیاز هشدارها را بررسی کنید؛ شروع مقایسه مجاز است.')}
           </div>
           <div className="flex items-center gap-1.5">
             {canManage && workflow.scenarios.length > 0 && !workflow.comparisonStartedAt && (

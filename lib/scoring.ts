@@ -165,13 +165,34 @@ function warningTargetsGroup(
   return false;
 }
 
+function warningTargetsLockedPersonnel(
+  warning: string,
+  personnelList: readonly Personnel[],
+  lockedRows?: ReadonlyArray<string> | ReadonlySet<string>
+): boolean {
+  if (!lockedRows) return false;
+  const isLocked = (id: string) => 'has' in lockedRows ? lockedRows.has(id) : lockedRows.includes(id);
+  for (const person of personnelList) {
+    if (!isLocked(person.id)) continue;
+    const fullName = `${person.firstName} ${person.lastName}`;
+    if (warning.includes(fullName)) return true;
+  }
+  return false;
+}
+
 export function filterWarningsForScenarioGroup(
   warnings: readonly string[],
   personnelList: readonly Personnel[],
-  targetJobGroup?: JobGroup
+  targetJobGroup?: JobGroup,
+  lockedRows?: ReadonlyArray<string> | ReadonlySet<string>
 ): string[] {
-  if (!targetJobGroup) return [...warnings];
-  return warnings.filter(warning => warningTargetsGroup(warning, personnelList, targetJobGroup));
+  return warnings.filter(warning => {
+    // هشدارهای سناریویی که به پرسنل قفل‌شده اشاره دارند پنهان می‌شوند؛
+    // برنامهٔ این نفرات از مبنا ارث‌بری می‌شود و در سناریو نباید دوباره مسئله‌ساز شود.
+    if (warningTargetsLockedPersonnel(warning, personnelList, lockedRows)) return false;
+    if (!targetJobGroup) return true;
+    return warningTargetsGroup(warning, personnelList, targetJobGroup);
+  });
 }
 
 export function isHardConstraintWarning(warning: string): boolean {

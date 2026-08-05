@@ -186,49 +186,17 @@ function verifyScenarioSchedule(
     context.customHolidays, context.firstDayOfWeekIndex, context.requests
   );
 
-  const relevantWarnings = filterWarningsForScenarioGroups(verification.warnings, context.personnelList, context.targetJobGroup, context.lockedIdSet);
+  const relevantWarnings = filterWarningsForScenarioGroup(
+    verification.warnings,
+    context.personnelList,
+    context.targetJobGroup,
+    context.lockedIdSet
+  );
 
   return {
     year: context.year, month: context.month, assignments: reconciled,
     shiftLeaders: verification.shiftLeaders, warnings: relevantWarnings,
   };
-}
-
-/**
- * فیلتر هشدارها برای گروه هدف. (نسخهٔ محلی تا وابستگی دایره‌ای با lib/scoring
- * برای این فراخوانی کمتر شود؛ منطق همان filterWarningsForScenarioGroup است.)
- */
-function filterWarningsForScenarioGroups(
-  warnings: ReadonlyArray<string>,
-  personnelList: readonly Personnel[],
-  targetJobGroup?: JobGroup,
-  lockedIdSet?: ReadonlySet<string>
-): string[] {
-  const normalized = (w: string) => w.replace('کمک بهیار', 'کمک‌بهیار');
-  // پرسنل قفل‌شده: چون در مبنا حل شده‌اند، در سناریو نباید تغییری داشته باشند و هشداری برایشان صادر نشود.
-  const isLockedPersonnelWarning = (warning: string): boolean => {
-    if (!lockedIdSet || lockedIdSet.size === 0) return false;
-    for (const person of personnelList) {
-      if (!lockedIdSet.has(person.id)) continue;
-      if (warning.includes(`${person.firstName} ${person.lastName}`)) return true;
-    }
-    return false;
-  };
-
-  return warnings.filter(warning => {
-    if (isLockedPersonnelWarning(warning)) return false;
-    if (!targetJobGroup) return true;
-    const w = normalized(warning);
-    const mentionsAssistant = w.includes('کمک‌بهیار') || w.includes('بهیار');
-    const mentionsNurse = w.includes('پرستار');
-    const mentionsLeader = w.includes('سرشیفت');
-    if (mentionsAssistant && !mentionsNurse) return targetJobGroup === 'assistant';
-    if ((mentionsNurse || mentionsLeader) && !mentionsAssistant) return targetJobGroup === 'nurse';
-    for (const person of personnelList) {
-      if (warning.includes(`${person.firstName} ${person.lastName}`)) return person.jobGroup === targetJobGroup;
-    }
-    return false;
-  });
 }
 
 function applyCellEdit(
