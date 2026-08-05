@@ -861,6 +861,15 @@ export default function Home() {
     ? assistantWorkflow.scenarios[selectedScenarioIndexAssistant] || null
     : null;
 
+  const scenarioOptionLabel = React.useCallback((workflow: ScenarioWorkflowGroup | null, scenario: ScoredSchedule | null): string => {
+    if (!workflow || !scenario) return '';
+    const optionKeys = workflow.voteOptions && workflow.voteOptions.length > 0
+      ? workflow.voteOptions.map(String)
+      : [BASELINE_OPTION_KEY, ...workflow.scenarios.map(item => String(item.id))];
+    const optionIndex = optionKeys.indexOf(String(scenario.id));
+    return optionIndex >= 0 ? `گزینه ${toPersianDigits(optionIndex + 1)}` : 'گزینه';
+  }, []);
+
   const displayedSchedule = React.useMemo(() => {
     const preserveLockedRows = (candidate: MonthlySchedule | null): MonthlySchedule | null => {
       if (!candidate) return candidate;
@@ -6576,12 +6585,12 @@ export default function Home() {
                   </h3>
                   {currentScenarioNurse && (
                     <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                      برنامه فعال پرستاران: {currentScenarioNurse.title}
+                      {role === 'personnel' ? scenarioOptionLabel(nurseWorkflow, currentScenarioNurse) : `برنامه فعال پرستاران: ${currentScenarioNurse.title}`}
                     </span>
                   )}
                   {currentScenarioAssistant && (
                     <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      برنامه فعال کمک‌بهیاران: {currentScenarioAssistant.title}
+                      {role === 'personnel' ? scenarioOptionLabel(assistantWorkflow, currentScenarioAssistant) : `برنامه فعال کمک‌بهیاران: ${currentScenarioAssistant.title}`}
                     </span>
                   )}
                   <p className="text-slate-400 text-xs font-semibold">تعداد روزها: {calendarDays.length} روز / {calendarDays.filter(c => c.isHoliday).length} روز تعطیلات</p>

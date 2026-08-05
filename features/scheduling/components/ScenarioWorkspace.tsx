@@ -230,23 +230,24 @@ export function ScenarioWorkspace(props: ScenarioWorkspaceProps) {
     return max;
   }, [options]);
 
+  const userScheduleFixed = React.useMemo(
+    () => isPersonnelScheduleFixed(currentUserId, voteOptions, options, personnel, totalDays),
+    [currentUserId, voteOptions, options, personnel, totalDays]
+  );
   const winnerKey = React.useMemo(() => winningVoteOption(votes, voteOptions), [votes, voteOptions]);
-  // گزینهٔ فعال: هنگام رأی‌گیری اولین گزینه، پس از پایان رأی‌گیری گزینهٔ برنده نمایش داده می‌شود.
-  const defaultVoteKey = workflow.votingOpen ? (voteOptions[0] ?? BASELINE_OPTION_KEY) : (winnerKey ?? voteOptions[0] ?? BASELINE_OPTION_KEY);
+  // گزینهٔ فعال: برای پرسنل، تا وقتی خودشان گزینه‌ای را انتخاب نکنند برنامهٔ مبنا نمایش می‌ماند؛
+  // پس از پایان رأی‌گیری، فقط برای افراد مشمول رأی، گزینهٔ برنده خودکار نمایش داده می‌شود.
+  const defaultVoteKey = !workflow.votingOpen && !userScheduleFixed ? (winnerKey ?? BASELINE_OPTION_KEY) : BASELINE_OPTION_KEY;
   const activeKey = selectedOptionKey ?? (mode === 'vote' ? defaultVoteKey : BASELINE_OPTION_KEY);
   const activeOption = options.find(o => o.key === activeKey) || options[0] || null;
 
   const autoSelectedWinnerRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (mode !== 'vote' || !activeOption) return;
-    if (!workflow.votingOpen && winnerKey && autoSelectedWinnerRef.current !== winnerKey) {
-      autoSelectedWinnerRef.current = winnerKey;
-      if (selectedOptionKey !== winnerKey) onSelectOption(winnerKey);
-      return;
-    }
-    if (selectedOptionKey !== null) return;
-    onSelectOption(activeKey);
-  }, [mode, selectedOptionKey, activeOption, activeKey, onSelectOption, workflow.votingOpen, winnerKey]);
+    if (mode !== 'vote' || userScheduleFixed || workflow.votingOpen || !winnerKey) return;
+    if (autoSelectedWinnerRef.current === winnerKey) return;
+    autoSelectedWinnerRef.current = winnerKey;
+    if (selectedOptionKey !== winnerKey) onSelectOption(winnerKey);
+  }, [mode, userScheduleFixed, selectedOptionKey, onSelectOption, workflow.votingOpen, winnerKey]);
 
   if (mode === 'vote') {
     return (
