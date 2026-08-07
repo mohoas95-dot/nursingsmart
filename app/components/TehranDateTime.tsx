@@ -100,7 +100,7 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
     <section
       dir="rtl"
       aria-label="تاریخ و ساعت تهران"
-      className="tdt-card group relative overflow-hidden rounded-2xl sm:rounded-[26px] border border-[#C8EBD9] px-3 py-3 sm:px-7 sm:py-7"
+      className="tdt-card group relative overflow-hidden rounded-2xl sm:rounded-[26px] border border-[#C8EBD9] px-3 py-3 sm:px-6 sm:py-4"
       style={{
         background: 'linear-gradient(135deg, #F3FBF7 0%, #E6F7EF 42%, #D4F3E6 100%)',
         boxShadow: '0 10px 32px rgba(15, 157, 122, 0.10)',
@@ -163,7 +163,7 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
         {/* ----- ساعت آنالوگ (چپ بصری) ----- */}
         <div className="order-1 flex shrink-0 items-center justify-center sm:order-3">
           <div
-            className="tdt-clock relative h-20 w-20 sm:h-[130px] sm:w-[130px] lg:h-[145px] lg:w-[145px] rounded-full bg-white"
+            className="tdt-clock relative h-20 w-20 sm:h-[96px] sm:w-[96px] lg:h-[104px] lg:w-[104px] rounded-full bg-white"
             style={{
               boxShadow:
                 '0 8px 22px rgba(15,157,122,0.16), 0 2px 0 rgba(255,255,255,0.95) inset, 0 -1px 0 rgba(0,0,0,0.03) inset',
@@ -226,14 +226,14 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
           </p>
 
           <p
-            className="mt-0.5 sm:mt-2 text-xs sm:text-[26px] lg:text-[28px] leading-snug font-bold text-[#0B6B52] truncate max-w-full"
+            className="mt-0.5 sm:mt-1.5 text-xs sm:text-lg lg:text-xl leading-snug font-bold text-[#0B6B52] truncate max-w-full"
             style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
           >
             {now ? formatPersianLongDate(now) : 'در حال دریافت تاریخ…'}
           </p>
 
           <p
-            className="mt-0.5 sm:mt-1 font-mono text-xl sm:text-[48px] lg:text-[52px] font-extrabold leading-none tracking-tight text-[#0B6B52] tabular-nums"
+            className="mt-0.5 sm:mt-1 font-mono text-xl sm:text-[34px] lg:text-[38px] font-extrabold leading-none tracking-tight text-[#0B6B52] tabular-nums"
             style={{ fontFamily: 'var(--font-vazirmatn), ui-sans-serif, system-ui, sans-serif', fontWeight: 800 }}
             dir="ltr"
             aria-live="polite"
@@ -242,7 +242,7 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
           </p>
 
           {/* بج فصل جاری — مثلاً «تابستان ١۴٠۵ ☀️» */}
-          <div className="mt-1.5 sm:mt-4 inline-flex items-center gap-1 sm:gap-2 rounded-full border border-[#C6EBD9] bg-white/80 px-2.5 py-0.5 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[12px] font-bold text-[#0F9D7A] shadow-[0_2px_8px_rgba(15,157,122,0.08)] backdrop-blur-sm">
+          <div className="mt-1.5 sm:mt-2 inline-flex items-center gap-1 sm:gap-2 rounded-full border border-[#C6EBD9] bg-white/80 px-2.5 py-0.5 sm:px-3 sm:py-1 text-[10px] sm:text-[11px] font-bold text-[#0F9D7A] shadow-[0_2px_8px_rgba(15,157,122,0.08)] backdrop-blur-sm">
             <span>{now ? formatPersianSeasonChip(now) : '—'}</span>
           </div>
         </div>
@@ -254,9 +254,9 @@ export default function TehranDateTime({ lastSync: _lastSync }: { lastSync?: str
             tabIndex={0}
             aria-label="تقویم امروز"
             title="امروز به وقت ایران"
-            className="tdt-cal-btn relative grid h-10 w-10 sm:h-[64px] sm:w-[64px] lg:h-[72px] lg:w-[72px] place-items-center overflow-hidden rounded-full border border-[#C6EBD9] bg-white/75 text-[#0F9D7A] shadow-[0_4px_14px_rgba(15,157,122,0.12)] backdrop-blur-md transition-transform duration-200 ease-out hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F9D7A]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#E6F7EF] active:scale-95 cursor-default"
+            className="tdt-cal-btn relative grid h-10 w-10 sm:h-[48px] sm:w-[48px] lg:h-[52px] lg:w-[52px] place-items-center overflow-hidden rounded-full border border-[#C6EBD9] bg-white/75 text-[#0F9D7A] shadow-[0_4px_14px_rgba(15,157,122,0.12)] backdrop-blur-md transition-transform duration-200 ease-out hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0F9D7A]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#E6F7EF] active:scale-95 cursor-default"
           >
-            <CalendarDays className="relative z-[1] h-[18px] w-[18px] sm:h-7 sm:w-7 lg:h-8 lg:w-8" strokeWidth={1.75} aria-hidden="true" />
+            <CalendarDays className="relative z-[1] h-[18px] w-[18px] sm:h-5 sm:w-5 lg:h-6 lg:w-6" strokeWidth={1.75} aria-hidden="true" />
             <span className="tdt-ripple" aria-hidden="true" />
           </button>
         </div>

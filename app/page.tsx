@@ -2492,7 +2492,7 @@ export default function Home() {
   }, [displayedSchedule, currentYear, currentMonth, personnel, requests, customHolidays, firstDayOfWeekIndex, visibleWarnings]);
 
   // UI Tabs & Active View
-  const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'profile'>('schedule');
+  const [activeTab, setActiveTab] = useState<'schedule' | 'personnel' | 'requests' | 'reports' | 'settings' | 'calendar' | 'occasions' | 'profile'>('schedule');
   const [isMonthDrawerOpen, setIsMonthDrawerOpen] = useState<boolean>(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: 'personnel' | 'request'; label: string } | null>(null);
   const [isNavOpen, setIsNavOpen] = useState<boolean>(false);
@@ -5902,6 +5902,24 @@ export default function Home() {
                 <span>داشبورد زمان‌بندی</span>
               </button>
 
+              {role === 'personnel' && (
+                <button
+                  onClick={() => {
+                    setActiveTab('occasions');
+                    setIsNavOpen(false);
+                  }}
+                  className={`w-full px-6 py-3 flex items-center gap-3 text-right hover:text-white transition-all cursor-pointer ${
+                    activeTab === 'occasions'
+                      ? 'bg-blue-600/20 text-blue-400 border-r-4 border-blue-400 font-extrabold'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  id="tab-occasions-drawer"
+                >
+                  <span className="text-lg leading-none">📆</span>
+                  <span>تقویم و مناسبت‌ها</span>
+                </button>
+              )}
+
               {role !== 'personnel' && (
                 <button
                   onClick={() => {
@@ -6125,7 +6143,7 @@ export default function Home() {
           <section
             aria-label="انتخاب بازه برنامه‌ریزی"
             title={monthTheme.seasonLabel}
-            className="relative overflow-hidden rounded-2xl sm:rounded-[24px] border border-[#EEF2F5] bg-white px-3 py-2.5 sm:px-7 sm:py-7 shadow-[0_4px_16px_rgba(15,23,42,0.04)] sm:shadow-[0_8px_30px_rgba(15,23,42,0.04)] animate-period-select"
+            className="relative overflow-hidden rounded-2xl sm:rounded-[24px] border border-[#EEF2F5] bg-white px-3 py-2.5 sm:px-6 sm:py-5 shadow-[0_4px_16px_rgba(15,23,42,0.04)] sm:shadow-[0_8px_30px_rgba(15,23,42,0.04)] animate-period-select"
           >
             {/* هاله تزئینی — فقط دسکتاپ */}
             <div
@@ -6138,10 +6156,10 @@ export default function Home() {
             />
 
             {/* موبایل: یک ردیف فشرده شبیه نوار قبلی | دسکتاپ: چیدمان کامل */}
-            <div className="relative flex flex-col gap-2.5 sm:gap-5 md:flex-row md:items-center md:gap-6 lg:gap-8">
+            <div className="relative flex flex-col gap-2.5 sm:gap-4 md:flex-row md:items-center md:gap-5 lg:gap-6">
               {/* عنوان */}
-              <div className="order-1 flex min-w-0 shrink-0 items-center justify-between gap-2 md:max-w-[220px] md:flex-col md:items-start md:gap-3 lg:max-w-[260px]">
-                <div className="min-w-0 space-y-0.5 sm:space-y-1.5 text-right">
+              <div className="order-1 flex min-w-0 shrink-0 items-center justify-between gap-2 md:max-w-[200px] md:flex-col md:items-start md:gap-2 lg:max-w-[230px]">
+                <div className="min-w-0 space-y-0.5 sm:space-y-1 text-right">
                   <h2
                     className="text-xs sm:text-base lg:text-lg font-black tracking-tight text-[#1F2937] truncate"
                     style={{ fontFamily: 'var(--font-titr), var(--font-vazirmatn), sans-serif' }}
@@ -6159,7 +6177,7 @@ export default function Home() {
                     handleCalendarNavigate(today.year, today.month);
                     setIsMonthDrawerOpen(false);
                   }}
-                  className="period-today-btn inline-flex w-fit shrink-0 items-center gap-1 sm:gap-1.5 rounded-full border border-[#E8F1EE] bg-white px-2.5 py-1 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[11px] font-bold text-slate-600 cursor-pointer"
+                  className="period-today-btn inline-flex w-fit shrink-0 items-center gap-1 sm:gap-1.5 rounded-full border border-[#E8F1EE] bg-white px-2.5 py-1 sm:px-3 sm:py-1 text-[10px] sm:text-[11px] font-bold text-slate-600 cursor-pointer"
                   title="بازگشت به ماه جاری"
                   aria-label="پریدن به ماه جاری"
                 >
@@ -6176,12 +6194,12 @@ export default function Home() {
                     <span className="sr-only">سال</span>
                     <div className="relative">
                       <span className="pointer-events-none absolute inset-y-0 right-2.5 sm:right-3.5 z-[1] flex items-center text-[#0F9D7A]">
-                        <CalendarIcon className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" strokeWidth={1.75} />
+                        <CalendarIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" strokeWidth={1.75} />
                       </span>
                       <select
                         value={currentYear}
                         onChange={event => handleCalendarNavigate(Number(event.target.value), currentMonth)}
-                        className="period-select h-9 sm:h-14 w-full cursor-pointer appearance-none rounded-xl sm:rounded-2xl border border-[#E8F1EE] bg-white py-1 pr-8 pl-7 sm:py-2 sm:pr-11 sm:pl-9 text-xs sm:text-sm font-black text-[#1F2937] shadow-[0_1px_4px_rgba(15,23,42,0.04)] sm:shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        className="period-select h-9 sm:h-11 w-full cursor-pointer appearance-none rounded-xl sm:rounded-2xl border border-[#E8F1EE] bg-white py-1 pr-8 pl-7 sm:py-1.5 sm:pr-10 sm:pl-8 text-xs sm:text-[13px] font-black text-[#1F2937] shadow-[0_1px_4px_rgba(15,23,42,0.04)] sm:shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
                         aria-label="انتخاب سال"
                       >
                         {navYearOptions.map(option => (
@@ -6201,7 +6219,7 @@ export default function Home() {
                     <span className="sr-only">ماه</span>
                     <div className="relative">
                       <span className="pointer-events-none absolute inset-y-0 right-2.5 sm:right-3.5 z-[1] flex items-center text-[#0F9D7A]">
-                        <CalendarIcon className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" strokeWidth={1.75} />
+                        <CalendarIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" strokeWidth={1.75} />
                       </span>
                       <select
                         value={currentMonth}
@@ -6209,7 +6227,7 @@ export default function Home() {
                           handleSelectMonth(Number(event.target.value));
                           setIsMonthDrawerOpen(false);
                         }}
-                        className="period-select h-9 sm:h-14 w-full cursor-pointer appearance-none rounded-xl sm:rounded-2xl border border-[#E8F1EE] bg-white py-1 pr-8 pl-7 sm:py-2 sm:pr-11 sm:pl-9 text-xs sm:text-sm font-black text-[#1F2937] shadow-[0_1px_4px_rgba(15,23,42,0.04)] sm:shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        className="period-select h-9 sm:h-11 w-full cursor-pointer appearance-none rounded-xl sm:rounded-2xl border border-[#E8F1EE] bg-white py-1 pr-8 pl-7 sm:py-1.5 sm:pr-10 sm:pl-8 text-xs sm:text-[13px] font-black text-[#1F2937] shadow-[0_1px_4px_rgba(15,23,42,0.04)] sm:shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
                         aria-label="انتخاب ماه"
                       >
                         {JALALI_MONTH_NAMES.map((name, idx) => (
@@ -6227,7 +6245,7 @@ export default function Home() {
 
                 {/* بج وضعیت */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E8F1EE] bg-[#F0FDF8] px-2.5 py-1 sm:px-3.5 sm:py-1.5 text-[10px] sm:text-[12px] font-medium text-[#0F9D7A]">
+                  <span className="inline-flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E8F1EE] bg-[#F0FDF8] px-2.5 py-1 sm:px-3 sm:py-1 text-[10px] sm:text-[11px] font-medium text-[#0F9D7A]">
                     <CalendarIcon className="h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0" strokeWidth={2} />
                     <span>
                       در حال مشاهده برنامه{' '}
@@ -6241,9 +6259,9 @@ export default function Home() {
 
               {/* آیکون — مخفی روی موبایل باریک، کوچک روی sm، کامل روی md+ */}
               <div className="order-3 hidden sm:flex shrink-0 items-center justify-center self-center md:self-center">
-                <AnimatedCalendarIcon className="md:hidden" size={64} />
-                <AnimatedCalendarIcon className="hidden md:block lg:hidden" size={92} />
-                <AnimatedCalendarIcon className="hidden lg:block" size={108} />
+                <AnimatedCalendarIcon className="md:hidden" size={52} />
+                <AnimatedCalendarIcon className="hidden md:block lg:hidden" size={72} />
+                <AnimatedCalendarIcon className="hidden lg:block" size={84} />
               </div>
             </div>
           </section>
@@ -6506,23 +6524,6 @@ export default function Home() {
                         <span className="text-[10px] font-extrabold text-emerald-700/70">ساعت</span>
                       </div>
                     </div>
-                  </div>
-
-                  <div>
-                    <JalaliCalendar
-                      idPrefix="dashboard"
-                      year={currentYear}
-                      month={currentMonth}
-                      days={calendarDays}
-                      occasions={calendarOccasions}
-                      holidays={customHolidays}
-                      status={officialCalendarState.status}
-                      onMonthChange={handleCalendarNavigate}
-                      selectedDay={selectedCalendarDay}
-                      onDayClick={day => setSelectedCalendarDay(prev => (prev === day ? null : day))}
-                      size="lg"
-                      subtitle={`تقویم رسمی کشور — ${toPersianDigits(calendarDays.length)} روز، ${toPersianDigits(calendarDays.filter(day => day.isHoliday).length)} روز تعطیل`}
-                    />
                   </div>
 
                 </div>
@@ -8665,6 +8666,40 @@ export default function Home() {
                 );
               })()}
 
+            </div>
+          )}
+
+          {activeTab === 'occasions' && role === 'personnel' && (
+            <div className="space-y-6 animate-fade-in print:hidden">
+              <div className="bg-white border border-slate-200 p-4 sm:p-6 rounded-3xl shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-150 pb-4 mb-4">
+                  <div>
+                    <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
+                      <span className="text-xl">📆</span> تقویم و مناسبت‌ها
+                    </h3>
+                    <p className="text-slate-400 text-[11px] font-bold mt-1">تقویم رسمی شمسی ایران؛ روزهای تعطیل و مناسبت‌های هر ماه را اینجا ببینید.</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-[11px] font-extrabold px-3 py-1.5 rounded-full flex items-center gap-2 shrink-0">
+                    <span>ماه فعال کنونی:</span>
+                    <span className="bg-emerald-600 text-white px-2 py-0.5 rounded font-black font-mono">{JALALI_MONTH_NAMES[currentMonth - 1]} {currentYear}</span>
+                  </div>
+                </div>
+
+                <JalaliCalendar
+                  idPrefix="occasions"
+                  year={currentYear}
+                  month={currentMonth}
+                  days={calendarDays}
+                  occasions={calendarOccasions}
+                  holidays={customHolidays}
+                  status={officialCalendarState.status}
+                  onMonthChange={handleCalendarNavigate}
+                  selectedDay={selectedCalendarDay}
+                  onDayClick={day => setSelectedCalendarDay(prev => (prev === day ? null : day))}
+                  size="lg"
+                  subtitle={`تقویم رسمی کشور — ${toPersianDigits(calendarDays.length)} روز، ${toPersianDigits(calendarDays.filter(day => day.isHoliday).length)} روز تعطیل`}
+                />
+              </div>
             </div>
           )}
 
