@@ -1724,6 +1724,10 @@ export default function Home() {
   ) => {
     const list = Array.isArray(inputs) ? inputs : [inputs as SystemEventInput];
     if (list.length === 0) return;
+    // «لاگ‌ها و اتفاقات» در سند برنامهٔ ماه نگهداری می‌شود. پرسنل مجوز
+    // تغییر آن سند را ندارد و نباید پس از ثبت درستِ درخواست، یک نوشتن ممنوع
+    // و بی‌فایدهٔ schedule در صف ذخیره‌سازی ایجاد کند.
+    if (authenticatedUser?.role === 'PERSONNEL') return;
     try {
       const now = new Date();
       const built = list.map(input => createSystemEventLog({
@@ -2886,6 +2890,22 @@ export default function Home() {
 
       const deptId = selectedDepartmentId || 'sepehr';
       const oldDept = nextDb.deptData[deptId] || createEmptyDepartmentData();
+
+      // پرسنل فقط مجاز است سند مشترک «درخواست‌ها» را (آن هم فقط برای رکوردهای
+      // خودش؛ کنترل نهایی در API انجام می‌شود) بنویسد. پیش‌تر همین مسیر بعد از
+      // ذخیرهٔ موفق درخواست، برنامهٔ ماه را هم برای اعمال مجدد درخواست‌ها
+      // بازتولید و ذخیره می‌کرد. API به‌درستی نوشتن schedule را برای پرسنل رد
+      // می‌کرد؛ در نتیجه درخواست ثبت می‌شد اما UI خطای گمراه‌کننده نشان می‌داد.
+      // بازتولید برنامه وظیفهٔ سرپرستار است، بنابراین برای پرسنل فقط همان سند
+      // درخواست‌ها را تغییر می‌دهیم.
+      if (authenticatedUser?.role === 'PERSONNEL') {
+        nextDb.deptData[deptId] = {
+          ...oldDept,
+          requests: updatedR,
+        };
+        await saveDbState(nextDb);
+        return;
+      }
 
       const monthKey = `${currentYear}_${currentMonth}`;
       const currentMonthSchedule =
