@@ -143,6 +143,29 @@ export {
 } from './scheduling/alert-lifecycle';
 
 // ============================================================================
+// Structured Warning Model — مدل ساخت‌یافتهٔ هشدار (کد/شدت/روز/شیفت/پرسنل)
+// ============================================================================
+
+export {
+  CRITICAL_WARNING_CODES,
+  countCriticalScheduleWarnings,
+  createScheduleWarning,
+  dedupeScheduleWarningsByMessage,
+  defaultSeverityForCode,
+  getCriticalScheduleWarnings,
+  hasCriticalScheduleWarning,
+  isCriticalScheduleWarning,
+  isCriticalWarningCode,
+  warningMessages,
+} from './warnings/schedule-warning';
+
+export type {
+  ScheduleWarning,
+  ScheduleWarningCode,
+  ScheduleWarningSeverity,
+} from './warnings/schedule-warning';
+
+// ============================================================================
 // System Event Log — لاگ‌ها و اتفاقات (نگهداری ۳۰ رویداد آخر)
 // ============================================================================
 

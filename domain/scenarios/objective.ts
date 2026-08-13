@@ -21,6 +21,10 @@ import {
   isHardConstraintWarning,
   HARD_WARNING_PREFIXES,
 } from '../../lib/scoring';
+import {
+  countCriticalScheduleWarnings,
+  type ScheduleWarning,
+} from '../warnings/schedule-warning';
 
 // ---------------------------------------------------------------------------
 // سطح A (Critical) — تعریف یکپارچهٔ هشدارهای بحرانی
@@ -190,6 +194,12 @@ export interface BaselineObjectiveInput {
   baseline: MonthlySchedule;
   candidate: MonthlySchedule;
   warnings: ReadonlyArray<string>;
+  /**
+   * هشدارهای ساخت‌یافتهٔ همان warnings (اختیاری). اگر ارائه شود، شمارش هشدارهای
+   * بحرانی بر اساسِ کد ماشینی انجام می‌شود (نه پیشوندِ متن فارسی/نمایشی) — سیاست
+   * یکسان است و نتیجه با شمارش رشته‌ای برابر است؛ این فقط بازنماایی است.
+   */
+  structuredWarnings?: ReadonlyArray<ScheduleWarning>;
   /** شناسهٔ پرسنل هدف (آزاد + گروه کاری). شباهت فقط روی این‌ها سنجیده می‌شود. */
   targetPersonnelIds: ReadonlyArray<string>;
   totalDays: number;
@@ -205,7 +215,11 @@ export interface BaselineObjectiveInput {
  * @pure
  */
 export function evaluateBaselineObjective(input: BaselineObjectiveInput): BaselineObjective {
-  const criticalWarningCount = countCriticalWarnings(input.warnings);
+  // طبقه‌بندی بحرانی: در مسیر canonical از کد ساخت‌یافته استفاده می‌شود؛
+  // مسیر legacy (رشته‌محور) برای سازگاری حفظ شده و نتیجهٔ یکسانی می‌دهد.
+  const criticalWarningCount = input.structuredWarnings
+    ? countCriticalScheduleWarnings(input.structuredWarnings)
+    : countCriticalWarnings(input.warnings);
   const similarityPercent = calculateBaselineSimilarityPercent(
     input.baseline,
     input.candidate,

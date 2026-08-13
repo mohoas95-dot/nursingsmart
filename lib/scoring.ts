@@ -9,6 +9,10 @@ import {
 } from './types';
 import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
 import { generatePersonnelReports } from './solver';
+import {
+  isCriticalWarningCode,
+  type ScheduleWarning,
+} from '../domain/warnings/schedule-warning';
 
 export type ScenarioType = 'FAIRNESS' | 'REQUESTS' | 'MIXED';
 export type ScenarioKey = 'A' | 'B' | 'C';
@@ -195,7 +199,43 @@ export function filterWarningsForScenarioGroup(
   });
 }
 
-export function isHardConstraintWarning(warning: string): boolean {
+/**
+ * نسخهٔ ساخت‌یافتهٔ filterWarningsForScenarioGroup: همان گزارهٔ تاریخی روی
+ * `warning.message` اعمال می‌شود تا نتیجهٔ فیلتر دقیقاً با نسخهٔ رشته‌ای یکی بماند،
+ * اما هشدارهایی که جان می‌سپارند «فرادادهٔ ساخت‌یافتهٔ خود» را حفظ می‌کنند تا
+ * مصرف‌کننده‌های پایین‌دستی (تعمیر هشدار بحرانی، طبقه‌بندی) دیگر متن را تجزیه
+ * نکنند.
+ *
+ * NOTE / بازماندهٔ legacy: نسبت‌دادن هشدار به گروه کاری/پرسنلِ قفل‌شده در این
+ * نسخهٔ میانی همچنان از روی متن نمایشی انجام می‌شود (پل سازگاری) — انتقال کامل
+ * آن به فیلدهای ساخت‌یافته به جلسهٔ بعدی موکول شده است.
+ */
+export function filterStructuredWarningsForScenarioGroup(
+  warnings: readonly ScheduleWarning[],
+  personnelList: readonly Personnel[],
+  targetJobGroup?: JobGroup,
+  lockedRows?: ReadonlyArray<string> | ReadonlySet<string>
+): ScheduleWarning[] {
+  return warnings.filter(warning => {
+    if (warningTargetsLockedPersonnel(warning.message, personnelList, lockedRows)) return false;
+    if (!targetJobGroup) return true;
+    return warningTargetsGroup(warning.message, personnelList, targetJobGroup);
+  });
+}
+
+/**
+ * طبقه‌بندی «هشدار سخت (سطح A)».
+ *
+ * - ورودی ساخت‌یافته (ScheduleWarning): بر اساس کد ماشینی — مسیر canonical.
+ * - ورودی رشته‌ای (LEGACY): بر اساس پیشوندهای تاریخی — فقط برای سازگاری با
+ *   مصرف‌کننده‌هایی که هنوز رشته در دست دارند (UI، ذخیره‌سازی، موارد قدیمی).
+ *
+ * سیاست تغییر نکرده است: هر دو مسیر دقیقاً همان پنج نوع هشدار را بحرانی می‌دانند.
+ */
+export function isHardConstraintWarning(warning: string | ScheduleWarning): boolean {
+  if (typeof warning !== 'string') {
+    return isCriticalWarningCode(warning.code);
+  }
   return HARD_WARNING_PREFIXES.some(prefix => warning.startsWith(prefix));
 }
 

@@ -39,7 +39,7 @@ import {
 import {
   calculateRequestSatisfactionPercent,
   evaluateScenarioSchedule,
-  filterWarningsForScenarioGroup,
+  filterStructuredWarningsForScenarioGroup,
   SCENARIO_KEYS,
   SCENARIO_TITLES,
   type ScoredSchedule,
@@ -53,6 +53,11 @@ import {
   evaluateBaselineObjective,
   type ObjectiveRankable,
 } from '../domain/scenarios/objective';
+import {
+  countCriticalScheduleWarnings,
+  warningMessages,
+  type ScheduleWarning,
+} from '../domain/warnings/schedule-warning';
 
 // ---------------------------------------------------------------------------
 // قراردادهای عمومی (امضاهای عمومی بدون تغییر برای سازگاری با app/page.tsx)
@@ -167,10 +172,18 @@ function mergePreservedAssignments(
   return merged;
 }
 
+/**
+ * MonthlySchedule + فرادادهٔ ساخت‌یافتهٔ هشدارها (درون‌خط‌لوله‌ای؛ هرگز ذخیره
+ * نمی‌شود). `warnings` دقیقاً برابر `structuredWarnings.map(w => w.message)` است.
+ */
+export interface VerifiedSchedule extends MonthlySchedule {
+  readonly structuredWarnings: ScheduleWarning[];
+}
+
 function verifyScenarioSchedule(
   assignments: Record<string, Record<number, ShiftType>>,
   context: ScenarioContext
-): MonthlySchedule {
+): VerifiedSchedule {
   const reconciled = reconcileStaffingCoverage(
     assignments,
     context.personnelList,
@@ -186,8 +199,10 @@ function verifyScenarioSchedule(
     context.customHolidays, context.firstDayOfWeekIndex, context.requests
   );
 
-  const relevantWarnings = filterWarningsForScenarioGroup(
-    verification.warnings,
+  // همان معیار فیلترِ تاریخی، اما روی نمای ساخت‌یافته تا فراداده حفظ شود و
+  // مصرف‌کننده‌های پایین‌دستی (تعمیر بحرانی/طبقه‌بندی) متن را تجزیه نکنند.
+  const relevantStructuredWarnings = filterStructuredWarningsForScenarioGroup(
+    verification.structuredWarnings,
     context.personnelList,
     context.targetJobGroup,
     context.lockedIdSet
@@ -195,7 +210,20 @@ function verifyScenarioSchedule(
 
   return {
     year: context.year, month: context.month, assignments: reconciled,
-    shiftLeaders: verification.shiftLeaders, warnings: relevantWarnings,
+    shiftLeaders: verification.shiftLeaders,
+    warnings: warningMessages(relevantStructuredWarnings),
+    structuredWarnings: relevantStructuredWarnings,
+  };
+}
+
+/** نمایِ صرفِ MonthlySchedule — برای مسیرهایی که به ذخیره‌سازی/ارزیابی می‌رسند. */
+function toMonthlySchedule(schedule: VerifiedSchedule): MonthlySchedule {
+  return {
+    year: schedule.year,
+    month: schedule.month,
+    assignments: schedule.assignments,
+    shiftLeaders: schedule.shiftLeaders,
+    warnings: schedule.warnings,
   };
 }
 
@@ -245,7 +273,7 @@ function buildScenarioContext(options: ScenarioGenerationOptions): ScenarioConte
 // برنامهٔ مبنا
 // ---------------------------------------------------------------------------
 
-function buildBaselineSchedule(context: ScenarioContext): MonthlySchedule {
+function buildBaselineSchedule(context: ScenarioContext): VerifiedSchedule {
   const seed = context.currentAssignments ? cloneAssignments(context.currentAssignments) : {};
   const merged = mergePreservedAssignments(seed, context);
   return verifyScenarioSchedule(merged, context);
@@ -300,7 +328,7 @@ function applyRowSwap(
  */
 function buildDiversityCandidate(
   baseline: MonthlySchedule, seed: number, context: ScenarioContext
-): MonthlySchedule | null {
+): VerifiedSchedule | null {
   if (context.freeTargetIds.length < 2) return null;
   const random = createSeededRandom(seed * 2654435761 + 1);
   const ids = context.freeTargetIds;
@@ -351,7 +379,7 @@ function isRequestSatisfiedForDay(request: ShiftRequest, shift: ShiftType, day: 
  */
 function buildRequestBiasedCandidate(
   baseline: MonthlySchedule, seed: number, context: ScenarioContext
-): MonthlySchedule | null {
+): VerifiedSchedule | null {
   if (context.freeTargetIds.length < 2 || context.requests.length === 0) return null;
   const random = createSeededRandom(seed * 40503 + 7);
   const eligibleRequests = context.requests.filter(r => context.freeTargetIds.includes(r.personnelId));
@@ -386,90 +414,123 @@ function buildRequestBiasedCandidate(
 }
 
 // ---------------------------------------------------------------------------
-// تعمیر هشدارهای سطح A
+// تعمیر هشدارهای سطح A — مصرفِ فرادادهٔ ساخت‌یافته (نه تجزیهٔ متن نمایشی)
 // ---------------------------------------------------------------------------
+//
+// تا پیش از این، این بخش متن فارسیِ هشدار را با regex تجزیه می‌کرد تا روز، شیفت
+// و نام پرسنل را استخراج کند (`/روز (\d+)/`، `/شیفت ([A-Z]+)/`، `/نوبت (صبح|عصر|شب)/`
+// و جست‌وجوی نام کامل در متن). اکنون هشدارهای ساخت‌یافتهٔ verifier مستقیماً
+// day / shift / personnelId / code را در اختیار می‌گذارند و منطق تعمیر فقط از
+// همین فیلدها تغذیه می‌کند. الگوریتم تعمیر (کدام سلول، با چه ترتیبی) هیچ
+// تغییری نکرده است.
 
-const PERIOD_SHIFT_CODE: Record<string, ShiftType> = { صبح: 'M', عصر: 'E', شب: 'N' };
-
-function findPersonnelByFullName(context: ScenarioContext, warning: string): Personnel | null {
-  for (const person of context.freeTargetPersonnel) {
-    if (warning.includes(`${person.firstName} ${person.lastName}`)) return person;
-  }
-  return null;
+export interface CriticalRepairContext {
+  /** پرسنل آزادِ گروه هدف که تعمیر می‌تواند روی آن‌ها اعمال شود. */
+  freeTargetPersonnel: readonly Personnel[];
+  totalDays: number;
 }
 
-function generateCriticalRepairEdits(schedule: MonthlySchedule, context: ScenarioContext) {
-  const edits: Array<{ personnelId: string; day: number; shift: ShiftType }> = [];
+export interface CriticalRepairEdit {
+  personnelId: string;
+  day: number;
+  shift: ShiftType;
+}
+
+function findFreeTargetById(context: CriticalRepairContext, personnelId: string | undefined): Personnel | null {
+  if (!personnelId) return null;
+  return context.freeTargetPersonnel.find(person => person.id === personnelId) ?? null;
+}
+
+/**
+ * از هشدارهای ساخت‌یافتهٔ سطح A، ویرایش‌های پیشنهادیِ تعمیر را می‌سازد.
+ *
+ * اگر هشداری فرادادهٔ لازم (روز/شیفت/پرسنل) را نداشته باشد — مثلاً از مسیر
+ * legacyای آمده باشد که هنوز ساخت‌یافته نیست — همان‌طور که پیش‌تر عدمِ تطابقِ
+ * regex باعث رد شدن می‌شد، همان هشدار بدون حدس‌زدن رد می‌شود.
+ */
+export function generateCriticalRepairEdits(schedule: VerifiedSchedule, context: CriticalRepairContext): CriticalRepairEdit[] {
+  const edits: CriticalRepairEdit[] = [];
   const seen = new Set<string>();
-  const push = (edit: { personnelId: string; day: number; shift: ShiftType }) => {
+  const push = (edit: CriticalRepairEdit) => {
     const key = `${edit.personnelId}:${edit.day}:${edit.shift}`;
     if (!seen.has(key)) { seen.add(key); edits.push(edit); }
   };
-  for (const warning of schedule.warnings) {
-    const dayMatch = warning.match(/روز (\d+)/);
-    const shiftMatch = warning.match(/شیفت ([A-Z]+)/);
-    const periodMatch = warning.match(/نوبت (صبح|عصر|شب)/);
-    const day = dayMatch ? Number(dayMatch[1]) : null;
-    const shiftChar = shiftMatch ? (shiftMatch[1] as ShiftType) : null;
-    const period = periodMatch ? periodMatch[1] : null;
-
-    if (warning.startsWith('Coverage Shortage:') && day && shiftChar) {
-      for (const person of context.freeTargetPersonnel) {
-        if ((getAssignedShift(schedule, person.id, day)) === 'OFF') { push({ personnelId: person.id, day, shift: shiftChar }); break; }
+  for (const warning of schedule.structuredWarnings) {
+    switch (warning.code) {
+      case 'COVERAGE_SHORTAGE': {
+        const day = warning.day;
+        const shiftChar = warning.shift;
+        if (!day || !shiftChar) break;
+        for (const person of context.freeTargetPersonnel) {
+          if ((getAssignedShift(schedule, person.id, day)) === 'OFF') { push({ personnelId: person.id, day, shift: shiftChar }); break; }
+        }
+        break;
       }
-      continue;
-    }
-    if (warning.startsWith('Overstaffing:') && day && shiftChar) {
-      for (const person of context.freeTargetPersonnel) {
-        if (getAssignedShift(schedule, person.id, day) === shiftChar) { push({ personnelId: person.id, day, shift: 'OFF' }); break; }
+      case 'OVERSTAFFING': {
+        const day = warning.day;
+        const shiftChar = warning.shift;
+        if (!day || !shiftChar) break;
+        for (const person of context.freeTargetPersonnel) {
+          if (getAssignedShift(schedule, person.id, day) === shiftChar) { push({ personnelId: person.id, day, shift: 'OFF' }); break; }
+        }
+        break;
       }
-      continue;
-    }
-    if (warning.startsWith('Missing Shift Leader:') && day && period) {
-      const code = PERIOD_SHIFT_CODE[period];
-      if (code) for (const person of context.freeTargetPersonnel) {
-        if (person.canBeShiftLeader && getAssignedShift(schedule, person.id, day) === 'OFF') { push({ personnelId: person.id, day, shift: code }); break; }
+      case 'MISSING_SHIFT_LEADER': {
+        const day = warning.day;
+        const code = warning.shift; // صبح→M، عصر→E، شب→N — از مبدأ، نه از تجزیهٔ متن
+        // برابری با مسیر legacy: regex قدیمی در متن «نوبت صبح روز تعطیل D» هیچ
+        // «روز <عدد>»ی نمی‌یافت، پس هشدار سرشیفتِ صبحِ روز تعطیل هرگز ویرایشی
+        // نمی‌ساخت. این رفتار (حتی اگر احتمالاً ناخواسته بوده) در این جلسه حفظ
+        // می‌شود: تغییر سیاستِ تعمیر غیرمجاز است؛ فقط عصر/شب تعمیر می‌شوند.
+        if (!day || !code || code === 'M') break;
+        for (const person of context.freeTargetPersonnel) {
+          if (person.canBeShiftLeader && getAssignedShift(schedule, person.id, day) === 'OFF') { push({ personnelId: person.id, day, shift: code }); break; }
+        }
+        break;
       }
-      continue;
-    }
-    if (warning.startsWith('Max Consecutive:')) {
-      const person = findPersonnelByFullName(context, warning);
-      const startMatch = warning.match(/از روز (\d+)/);
-      const endMatch = warning.match(/تا روز (\d+)/);
-      if (person && startMatch && endMatch) {
-        const start = Number(startMatch[1]); const end = Math.min(Number(endMatch[1]), context.totalDays);
-        const mid = Math.floor((start + end) / 2);
-        for (let d = mid; d <= end; d += 1) {
+      case 'MAX_CONSECUTIVE': {
+        const person = findFreeTargetById(context, warning.personnelId);
+        const start = warning.day;
+        const end = warning.endDay;
+        if (person && start != null && end != null) {
+          const clampedEnd = Math.min(end, context.totalDays);
+          const mid = Math.floor((start + clampedEnd) / 2);
+          for (let d = mid; d <= clampedEnd; d += 1) {
+            const cur = getAssignedShift(schedule, person.id, d);
+            if (cur !== 'OFF' && !cur.startsWith('L')) { push({ personnelId: person.id, day: d, shift: 'OFF' }); break; }
+          }
+        }
+        break;
+      }
+      case 'MANDATORY_REST': {
+        const person = findFreeTargetById(context, warning.personnelId);
+        if (person) for (let d = context.totalDays; d >= Math.max(1, context.totalDays - 3); d -= 1) {
           const cur = getAssignedShift(schedule, person.id, d);
           if (cur !== 'OFF' && !cur.startsWith('L')) { push({ personnelId: person.id, day: d, shift: 'OFF' }); break; }
         }
+        break;
       }
-      continue;
-    }
-    if (warning.startsWith('Mandatory Rest:')) {
-      const person = findPersonnelByFullName(context, warning);
-      if (person) for (let d = context.totalDays; d >= Math.max(1, context.totalDays - 3); d -= 1) {
-        const cur = getAssignedShift(schedule, person.id, d);
-        if (cur !== 'OFF' && !cur.startsWith('L')) { push({ personnelId: person.id, day: d, shift: 'OFF' }); break; }
-      }
-      continue;
+      default:
+        // هشدارهای غیربحرانی (و کدهای ناشناخته) هرگز ویرایش تعمیر تولید نمی‌کنند.
+        break;
     }
   }
   return edits;
 }
 
-function repairCriticalAlerts(candidate: MonthlySchedule, baseline: MonthlySchedule, context: ScenarioContext): MonthlySchedule {
+function repairCriticalAlerts(candidate: VerifiedSchedule, baseline: MonthlySchedule, context: ScenarioContext): VerifiedSchedule {
   let current = candidate;
-  let criticalCount = countCriticalWarnings(current.warnings);
+  // طبقه‌بندی بحرانی بر اساس کد ساخت‌یافته — نه پیشوندِ متن نمایشی.
+  let criticalCount = countCriticalScheduleWarnings(current.structuredWarnings);
   for (let step = 0; step < MAX_CRITICAL_REPAIR_STEPS && criticalCount > 0; step += 1) {
     const edits = generateCriticalRepairEdits(current, context);
     if (edits.length === 0) break;
-    let best: MonthlySchedule | null = null;
+    let best: VerifiedSchedule | null = null;
     let bestCritical = criticalCount;
     let bestDiff = Number.POSITIVE_INFINITY;
     for (const edit of edits) {
       const tried = verifyScenarioSchedule(applyCellEdit(current.assignments, edit), context);
-      const triedCritical = countCriticalWarnings(tried.warnings);
+      const triedCritical = countCriticalScheduleWarnings(tried.structuredWarnings);
       if (triedCritical > bestCritical) continue;
       const triedDiff = calculateBaselineDifferencePercent(baseline, tried, context.targetPersonnelIds, context.totalDays);
       const better = triedCritical < bestCritical || (triedCritical === bestCritical && triedDiff < bestDiff);
@@ -487,21 +548,25 @@ function repairCriticalAlerts(candidate: MonthlySchedule, baseline: MonthlySched
 // ---------------------------------------------------------------------------
 
 interface ScoredCandidate {
-  schedule: MonthlySchedule;
+  schedule: VerifiedSchedule;
   scored: ScoredSchedule;
   objective: ReturnType<typeof evaluateBaselineObjective>;
   rankable: ObjectiveRankable;
 }
 
 function scoreCandidate(
-  schedule: MonthlySchedule, scenarioType: ScenarioType, id: number, baseline: MonthlySchedule, context: ScenarioContext
+  schedule: VerifiedSchedule, scenarioType: ScenarioType, id: number, baseline: MonthlySchedule, context: ScenarioContext
 ): ScoredCandidate {
-  const scored = evaluateScenario(schedule, scenarioType, id, context);
+  // نمایِ MonthlySchedule خالص برای ارزیابی/ذخیره‌سازی — فرادادهٔ ساخت‌یافته
+  // فقط درون خط‌لولهٔ موتور می‌ماند و در ScoredSchedule (قابل‌ذخیره) نمی‌نشیند.
+  const plainSchedule = toMonthlySchedule(schedule);
+  const scored = evaluateScenario(plainSchedule, scenarioType, id, context);
   const requestSatisfactionPercent = calculateRequestSatisfactionPercent(
-    schedule, context.personnelList, context.requests, context.year, context.month,
+    plainSchedule, context.personnelList, context.requests, context.year, context.month,
     context.customHolidays, context.firstDayOfWeekIndex, context.targetJobGroup);
   const objective = evaluateBaselineObjective({
-    baseline, candidate: schedule, warnings: schedule.warnings,
+    baseline, candidate: plainSchedule, warnings: plainSchedule.warnings,
+    structuredWarnings: schedule.structuredWarnings,
     targetPersonnelIds: context.targetPersonnelIds, totalDays: context.totalDays,
     lockedRows: context.lockedRows, requestSatisfactionPercent,
   });

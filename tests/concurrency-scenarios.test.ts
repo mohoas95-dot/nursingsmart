@@ -125,10 +125,16 @@ test('سناریو: قفل شدن دیتابیس زیر بار، پس از آز�
   let locked = true;
   setTimeout(() => { locked = false; }, 15);
 
+  // قطعی‌سازی jitter: با «full jitter» پیش‌فرض، فاصله‌های تلاش مجدد می‌توانستند
+  // عملاً صفر شوند و هر ۴ تلاش زیر ۱۵ms تمام شود — یعنی پیش از آتش‌کردنِ
+  // تایمرِ بازکردنِ قفل — و تست به‌صورت تصادفی قرمز می‌شد (flake که در Session 2
+  // هنگام اجرای مکرر npm test کشف شد). با random تزریق‌شده، فاصله‌ها ۱۰/۲۰/۴۰ms
+  // هستند و قفل حتماً پیش از پایان تلاش‌ها باز می‌شود. ادعای تست و مسیر کدِ
+  // محصول (withDbRetry با خواب‌های واقعی) بدون تغییر باقی می‌ماند.
   const result = await withDbRetry(async () => {
     if (locked) throw new Error('database is locked');
     return 'نوشته شد';
-  }, { baseDelayMs: 10, label: 'locked-db' });
+  }, { baseDelayMs: 10, label: 'locked-db', random: () => 0.99 });
 
   assert.equal(result, 'نوشته شد');
 });
