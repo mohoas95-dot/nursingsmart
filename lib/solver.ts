@@ -15,8 +15,14 @@ import {
   wouldCreateIsolatedShift,
   routineAllowsPeriodAdd,
   shiftMatchesRoutine,
-  wouldBreachConsecutiveCap,
 } from '../domain/scheduling/smart-rules';
+import {
+  evaluatePostHeavyOffPreference,
+  isHeavyShift,
+  POST_HEAVY_OFF_PREFERENCE_PENALTY,
+  shiftContainsComponent,
+  shiftSatisfiesRequestedShift,
+} from '../domain/scheduling/workload';
 import {
   createScheduleWarning,
   dedupeScheduleWarningsByMessage,
@@ -24,11 +30,15 @@ import {
   type ScheduleWarning,
 } from '../domain/warnings/schedule-warning';
 import {
+  ALL_HARD_RULES,
   COVERAGE_FILL_HARD_RULES,
   EMERGENCY_FILL_HARD_RULES,
   EXPLICIT_REQUEST_HARD_RULES,
   HARD_CONSTRAINT_LABELS,
   OFF_BREAKER_HARD_RULES,
+  VERIFICATION_HARD_RULES,
+  isMorningOnlyPosition,
+  evaluateHardConstraintViolations,
   evaluateHardConstraints,
   resolveLegalShiftForRequest,
 } from '../domain/scheduling/hard-constraints';
@@ -340,21 +350,6 @@ export function solveWithPriority(
           return !request || request.requestType !== 'avoid_shift' || request.preferredShift !== shiftType;
         });
 
-        const priority2 = availablePersonnel.filter(person => {
-          if (d <= 1) return false;
-          const previousShift = assignments[person.id]?.[d - 1];
-          if (!previousShift || !['ME', 'EN', 'MN', 'MEN', 'N'].includes(previousShift)) return false;
-          // حذف نفرات با Soft OFF از اولویت‌های دوم
-          const softOffRequest = requests.find(r =>
-            r.personnelId === person.id &&
-            r.requestType === 'OFF' &&
-            r.offHardness === 'soft' &&
-            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
-          );
-          if (softOffRequest) return false;
-          return true;
-        });
-
         const priority3 = availablePersonnel.filter(person => {
           const request = requestForDay(person.id);
           return request?.requestType === 'avoid_shift' && request.preferredShift === shiftType;
@@ -379,14 +374,23 @@ export function solveWithPriority(
           // سازگاری در سطح دوره موردنیاز (قدم‌های M/E برای لانگ‌کار و E/N برای عصر و شب‌کار جایزه می‌گیرند)
           return routineAllowsPeriodAdd(person.workRoutine, shiftType) ? 0 : 2;
         };
+        const hasExplicitWorkRequestForDay = (person: Personnel): boolean =>
+          requests.some(request => request.personnelId === person.id && (
+            request.requestType === 'pattern'
+            || (request.requestType === 'shift' && isDayInRequestScope(d, calendar[d - 1].dayOfWeek, request))
+          ));
         const bySmartRules = (left: Personnel, right: Personnel): number => {
           const isolatedLeft = wouldCreateIsolatedShift(assignments, left.id, d, totalDays, shiftType) ? 1 : 0;
           const isolatedRight = wouldCreateIsolatedShift(assignments, right.id, d, totalDays, shiftType) ? 1 : 0;
           if (isolatedLeft !== isolatedRight) return isolatedLeft - isolatedRight;
+          const postHeavyLeft = !hasExplicitWorkRequestForDay(left)
+            && evaluatePostHeavyOffPreference(assignments, left.id, d).preferOff ? 1 : 0;
+          const postHeavyRight = !hasExplicitWorkRequestForDay(right)
+            && evaluatePostHeavyOffPreference(assignments, right.id, d).preferOff ? 1 : 0;
+          if (postHeavyLeft !== postHeavyRight) return postHeavyLeft - postHeavyRight;
           return routineScore(left) - routineScore(right);
         };
         priority1.sort(bySmartRules);
-        priority2.sort(bySmartRules);
         priority3.sort(bySmartRules);
         priority3SoftOff.sort(bySmartRules);
 
@@ -401,9 +405,9 @@ export function solveWithPriority(
             alreadyConsidered.add(person.id);
             // A prior priority/shift iteration may have changed this day already.
             if ((assignments[person.id]?.[d] || 'OFF') !== 'OFF') continue;
-            // ====== سطح A: سقف ۵ شیفت متوالی خط قرمز مطلق ======
-            if (wouldBreachConsecutiveCap(assignments, person.id, d, shiftType, totalDays)) continue;
             // ====== سطح A: همان محدودیت‌های سختِ جبران پوشش ======
+            // This shared evaluator includes the workload cap, night rest, leave,
+            // hard OFF, and the absolute Supervisor/Staff E/N restriction.
             // این مسیر هم «کمبود پوشش» را پر می‌کند، پس دقیقاً از همان قرارداد
             // مشترکِ reconcile پیروی می‌کند: صبح‌کاریِ سرپرستار/استاف و استراحت
             // شب. اگر نامزد قانونی نماند، کمبود گزارش می‌شود (پایین‌تر) و هیچ
@@ -446,10 +450,8 @@ export function solveWithPriority(
 
         // ====== اولویت‌های اصلی (سطح B: درخواست‌ها و تگ روتین) ======
         applyPriority(compatiblePool(priority1), 'level1');
-        applyPriority(compatiblePool(priority2), 'level2');
         applyPriority(compatiblePool(priority3), 'level3');
         applyPriority(fallbackPool(priority1), 'level1');
-        applyPriority(fallbackPool(priority2), 'level2');
         applyPriority(fallbackPool(priority3), 'level3');
 
         // ====== بن‌بست (سطح A برتر): نقض Soft OFF (سطح B) ======
@@ -665,24 +667,10 @@ export function solveNursingSchedule(
     }
   });
 
-  // 2. Pre-process Patterns
-  activePersonnel.forEach(p => {
-    const patternReqs = requests.filter(r => r.personnelId === p.id && r.requestType === 'pattern');
-    if (patternReqs.length === 0) return;
-    
-    const req = patternReqs[0];
-    const steps = req.patternSteps || [];
-    if (steps.length === 0) return;
-
-    for (let d = 1; d <= totalDays; d++) {
-      if (assignments[p.id][d].startsWith('L')) continue;
-      
-      const stepIndex = (d - 1) % steps.length;
-      const stepVal = steps[stepIndex];
-      
-      assignments[p.id][d] = stepVal as ShiftType;
-    }
-  });
+  // Pattern steps are applied after the shared explicit-request validator is
+  // available below. This preserves the legacy all-month pattern cadence while
+  // preventing patterns from bypassing hard workload, night-rest, leave/OFF, or
+  // Supervisor/Staff E/N rules.
 
   // ====== قرارداد اولویت برای «درخواست شیفت صریح» ======
   //   ۱) محدودیت‌های سخت  ۲) قفل/محافظت  ۳) درخواست صریح  ۴) سایر ترجیحات
@@ -741,6 +729,30 @@ export function solveNursingSchedule(
     return !!resolution.shift;
   };
 
+  // 2. Apply pattern requests through the same hard evaluator as explicit shifts.
+  // Existing leave cells remain immutable. Pattern scope remains all-month to avoid
+  // changing unrelated legacy request semantics in this session.
+  activePersonnel.forEach(p => {
+    const pattern = requests.find(request => request.personnelId === p.id && request.requestType === 'pattern');
+    const steps = pattern?.patternSteps ?? [];
+    if (steps.length === 0) return;
+
+    for (let d = 1; d <= totalDays; d++) {
+      if (assignments[p.id][d].startsWith('L')) continue;
+      const step = steps[(d - 1) % steps.length] as ShiftType;
+      if (step === 'OFF') {
+        assignments[p.id][d] = 'OFF';
+        continue;
+      }
+      if (step.startsWith('L')) {
+        // Leave markers are non-work and therefore do not bypass workload legality.
+        assignments[p.id][d] = step;
+        continue;
+      }
+      applyExplicitShiftRequest(p, d, step);
+    }
+  });
+
   // 3. Apply Explicit OFF and Shift Requests
   for (let d = 1; d <= totalDays; d++) {
     activePersonnel.forEach(p => {
@@ -771,7 +783,7 @@ export function solveNursingSchedule(
         totalDays,
         requests,
       },
-      { nightRest: true, consecutiveCap: true }
+      ALL_HARD_RULES
     );
     return violation ? 'OFF' : 'M';
   };
@@ -837,30 +849,24 @@ export function solveNursingSchedule(
     const afternoonAssistantDemand = demand.afternoonAssistant;
     const nightAssistantDemand = demand.nightAssistant;
 
-    let mAssignedAsst = assistants.filter(a => assignments[a.id][d] === 'M' || assignments[a.id][d] === 'ME' || assignments[a.id][d] === 'MN' || assignments[a.id][d] === 'MEN').length;
-    let eAssignedAsst = assistants.filter(a => assignments[a.id][d] === 'E' || assignments[a.id][d] === 'ME' || assignments[a.id][d] === 'EN' || assignments[a.id][d] === 'MEN').length;
-    let nAssignedAsst = assistants.filter(a => assignments[a.id][d] === 'N' || assignments[a.id][d] === 'EN' || assignments[a.id][d] === 'MN' || assignments[a.id][d] === 'MEN').length;
+    let mAssignedAsst = assistants.filter(a => shiftCoversPeriod(assignments[a.id][d], 'M')).length;
+    let eAssignedAsst = assistants.filter(a => shiftCoversPeriod(assignments[a.id][d], 'E')).length;
+    let nAssignedAsst = assistants.filter(a => shiftCoversPeriod(assignments[a.id][d], 'N')).length;
 
     const fillGroupGaps = (group: Personnel[], shiftChar: 'M' | 'E' | 'N', targetDemand: number, currentCount: number) => {
       let gap = targetDemand - currentCount;
       if (gap < 0) {
         let excessCount = Math.abs(gap);
-        let assignedToThisShift = group.filter(p => {
-            const currentShift = assignments[p.id][d];
-            if (shiftChar === 'M') return currentShift === 'M' || currentShift === 'ME' || currentShift === 'MN' || currentShift === 'MEN';
-            if (shiftChar === 'E') return currentShift === 'E' || currentShift === 'ME' || currentShift === 'EN' || currentShift === 'MEN';
-            if (shiftChar === 'N') return currentShift === 'N' || currentShift === 'EN' || currentShift === 'MN' || currentShift === 'MEN';
-            return false;
-        });
+          let assignedToThisShift = group.filter(p =>
+            shiftCoversPeriod(assignments[p.id][d], shiftChar)
+          );
 
         assignedToThisShift.sort((x, y) => {
            const isXRequested = (() => {
              const reqX = dailyRequests[x.id]?.[d];
              if (reqX && reqX.requestType === 'shift' && reqX.preferredShift) {
                const pref = reqX.preferredShift;
-               return (shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN')) ||
-                      (shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN')) ||
-                      (shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN'));
+               return shiftContainsComponent(pref, shiftChar);
              }
              return false;
            })();
@@ -868,9 +874,7 @@ export function solveNursingSchedule(
              const reqY = dailyRequests[y.id]?.[d];
              if (reqY && reqY.requestType === 'shift' && reqY.preferredShift) {
                const pref = reqY.preferredShift;
-               return (shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN')) ||
-                      (shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN')) ||
-                      (shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN'));
+               return shiftContainsComponent(pref, shiftChar);
              }
              return false;
            })();
@@ -894,9 +898,8 @@ export function solveNursingSchedule(
              return defX - defY;
            }
            
-           const isHeavy = (s: string) => s === 'MEN' || s === 'MN' || s === 'EN' || s === 'ME' ? 1 : 0;
-           const hX = isHeavy(assignments[x.id][d]);
-           const hY = isHeavy(assignments[y.id][d]);
+           const hX = isHeavyShift(assignments[x.id][d]) ? 1 : 0;
+           const hY = isHeavyShift(assignments[y.id][d]) ? 1 : 0;
            if (hX !== hY) return hY - hX;
 
            return 0;
@@ -956,34 +959,9 @@ export function solveNursingSchedule(
 
         const currentShift = assignments[p.id][d];
         
-        if (shiftChar === 'M' && (currentShift === 'M' || currentShift === 'ME' || currentShift === 'MN' || currentShift === 'MEN')) return false;
-        if (shiftChar === 'E' && (currentShift === 'E' || currentShift === 'ME' || currentShift === 'EN' || currentShift === 'MEN')) return false;
-        if (shiftChar === 'N' && (currentShift === 'N' || currentShift === 'EN' || currentShift === 'MN' || currentShift === 'MEN')) return false;
+        if (shiftCoversPeriod(currentShift, shiftChar)) return false;
 
-        if ((p.position === 'supervisor' || p.position === 'staff')) {
-          if (isHoliday || (!isHoliday && (shiftChar === 'E' || shiftChar === 'N'))) {
-            const hasExplicitRequestForThisShift = (() => {
-              const req = dailyRequests[p.id]?.[d];
-              if (req && req.requestType === 'shift' && req.preferredShift) {
-                const pref = req.preferredShift;
-                if (shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN')) return true;
-                if (shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN')) return true;
-                if (shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN')) return true;
-              }
-              const pReq = requests.find(r => r.personnelId === p.id && r.requestType === 'pattern');
-              if (pReq && pReq.patternSteps && pReq.patternSteps.length > 0) {
-                const stepVal = pReq.patternSteps[(d - 1) % pReq.patternSteps.length];
-                if (shiftChar === 'M' && (stepVal === 'M' || stepVal === 'ME' || stepVal === 'MN' || stepVal === 'MEN')) return true;
-                if (shiftChar === 'E' && (stepVal === 'E' || stepVal === 'ME' || stepVal === 'EN' || stepVal === 'MEN')) return true;
-                if (shiftChar === 'N' && (stepVal === 'N' || stepVal === 'EN' || stepVal === 'MN' || stepVal === 'MEN')) return true;
-              }
-              return false;
-            })();
-            if (!hasExplicitRequestForThisShift) {
-              return false;
-            }
-          }
-        }
+
 
         if (shiftChar === 'N' && currentShift === 'M') {
           const isExplicit = dailyRequests[p.id]?.[d]?.requestType === 'shift' && dailyRequests[p.id]?.[d]?.preferredShift === 'MN';
@@ -996,35 +974,7 @@ export function solveNursingSchedule(
           if (!isExplicit && getOnlyECount(p.id) >= 1) return false;
         }
 
-        if (shiftChar === 'N' && currentShift === 'MEN' && d > 1 && assignments[p.id][d-1] === 'MEN') return false;
 
-        if (shiftChar === 'N') {
-          const workedN1 = d > 1 && (assignments[p.id][d-1] === 'N' || assignments[p.id][d-1] === 'EN' || assignments[p.id][d-1] === 'MN' || assignments[p.id][d-1] === 'MEN');
-          const workedN2 = d > 2 && (assignments[p.id][d-2] === 'N' || assignments[p.id][d-2] === 'EN' || assignments[p.id][d-2] === 'MN' || assignments[p.id][d-2] === 'MEN');
-          if (workedN1 && workedN2) return false;
-        }
-
-        if (shiftChar === 'M' && d > 1) {
-          const prev = assignments[p.id][d-1];
-          if (prev === 'N' || prev === 'EN' || prev === 'MN' || prev === 'MEN') return false;
-        }
-
-        if (d > 1 && ['ME', 'MEN', 'EN', 'N'].includes(assignments[p.id][d-1])) {
-          const isExplicit = (() => {
-            const req = dailyRequests[p.id]?.[d];
-            if (req && req.requestType === 'shift') return true;
-            const pReq = requests.find(r => r.personnelId === p.id && r.requestType === 'pattern');
-            if (pReq && pReq.patternSteps && pReq.patternSteps.length > 0) {
-              const stepVal = pReq.patternSteps[(d - 1) % pReq.patternSteps.length];
-              if (stepVal !== 'OFF' && !stepVal.startsWith('L')) return true;
-            }
-            return false;
-          })();
-          
-          if (!isExplicit) {
-            return false;
-          }
-        }
 
         if (avoidedShifts[p.id]?.[d]?.has(shiftChar)) {
           return false;
@@ -1049,12 +999,7 @@ export function solveNursingSchedule(
           }
           if (req.requestType === 'shift' && req.preferredShift) {
             const pref = req.preferredShift;
-            const matchesM = shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN');
-            const matchesE = shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN');
-            const matchesN = shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN');
-            if (!matchesM && !matchesE && !matchesN) {
-              return false;
-            }
+            if (!shiftContainsComponent(pref, shiftChar)) return false;
           }
         }
 
@@ -1073,9 +1018,7 @@ export function solveNursingSchedule(
           const isRequestedForThisDay = (() => {
             if (req && req.requestType === 'shift' && req.preferredShift) {
               const pref = req.preferredShift;
-              return (shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN')) ||
-                     (shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN')) ||
-                     (shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN'));
+              return shiftContainsComponent(pref, shiftChar);
             }
             const pReq = requests.find(r => r.personnelId === p.id && r.requestType === 'pattern');
             if (pReq && pReq.patternSteps && pReq.patternSteps.length > 0) {
@@ -1104,27 +1047,23 @@ export function solveNursingSchedule(
           if (currentShift === 'ME' && shiftChar === 'N') prospectiveShift = 'MEN';
         }
 
-        // قانون سقف ۵ شیفت متوالی (اسلات‌محور و وزن‌دار: M=۱، E=۱، N=۲) و استراحت اجباری:
-        // هر تخصیصی که زنجیرهٔ جایگاه‌های کاریِ پشت‌سرهم را به ۵ برساند غیرمجاز است
-        // (تا ۵ واحد مجاز، بیشتر ممنوع). جایگاه خالی بین دو شیفت، زنجیره را قطع می‌کند.
-        if (wouldBreachConsecutiveCap(assignments, p.id, d, prospectiveShift, totalDays)) {
-          return false;
-        }
-
-        const isHeavy = (s: ShiftType) => s === 'MEN' || s === 'EN' || s === 'MN' || s === 'ME';
-
-        if (isHeavy(prospectiveShift)) {
-          if (d > 1) {
-            const prev = assignments[p.id][d-1];
-            if (isHeavy(prev)) return false;
-          }
-          if (d < totalDays) {
-            const next = assignments[p.id][d+1];
-            if (isHeavy(next)) return false;
-          }
-        }
-
-        return true;
+        // One shared hard evaluator governs every candidate writer. Workload cap,
+        // night rest, leave/OFF, and Supervisor/Staff E/N are legality checks;
+        // post-heavy OFF remains a ranking preference below.
+        return !evaluateHardConstraints(
+          {
+            person: p,
+            day: d,
+            dayOfWeek: calendar[d - 1].dayOfWeek,
+            isHoliday,
+            period: shiftChar,
+            candidateShift: prospectiveShift,
+            assignments,
+            totalDays,
+            requests,
+          },
+          COVERAGE_FILL_HARD_RULES
+        );
       });
 
       const empPriority: { [key: string]: number } = { conscript: 1, contract: 2, official: 3, overtime: 4 };
@@ -1171,7 +1110,15 @@ export function solveNursingSchedule(
           })();
 
           const explicitShiftToday =
-            dailyRequests[p.id]?.[d]?.requestType === 'shift' && !!dailyRequests[p.id]?.[d]?.preferredShift;
+            (dailyRequests[p.id]?.[d]?.requestType === 'shift' && !!dailyRequests[p.id]?.[d]?.preferredShift)
+            || requests.some(request => request.personnelId === p.id && request.requestType === 'pattern');
+
+          // Post-heavy OFF is intentionally a soft ranking signal. A legal coverage
+          // candidate remains available, while an explicit employee plan bypasses
+          // this preference.
+          if (!explicitShiftToday && evaluatePostHeavyOffPreference(assignments, p.id, d).preferOff) {
+            score += POST_HEAVY_OFF_PREFERENCE_PENALTY;
+          }
 
           // قانون ممنوعیت شیفت تک‌تک (به‌ویژه عصر تنها در میان روزهای کاری):
           // ایجاد شیفت تک‌مؤلفه ایزوله جریمه سنگین دارد، مگر درخواست صریح ثبت شده
@@ -1242,9 +1189,7 @@ export function solveNursingSchedule(
           const reqX = dailyRequests[x.id]?.[d];
           if (reqX && reqX.requestType === 'shift' && reqX.preferredShift) {
             const pref = reqX.preferredShift;
-            return (shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN')) ||
-                   (shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN')) ||
-                   (shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN'));
+            return shiftContainsComponent(pref, shiftChar);
           }
           return false;
         })();
@@ -1252,9 +1197,7 @@ export function solveNursingSchedule(
           const reqY = dailyRequests[y.id]?.[d];
           if (reqY && reqY.requestType === 'shift' && reqY.preferredShift) {
             const pref = reqY.preferredShift;
-            return (shiftChar === 'M' && (pref === 'M' || pref === 'ME' || pref === 'MN' || pref === 'MEN')) ||
-                   (shiftChar === 'E' && (pref === 'E' || pref === 'ME' || pref === 'EN' || pref === 'MEN')) ||
-                   (shiftChar === 'N' && (pref === 'N' || pref === 'EN' || pref === 'MN' || pref === 'MEN'));
+            return shiftContainsComponent(pref, shiftChar);
           }
           return false;
         })();
@@ -1324,9 +1267,7 @@ export function solveNursingSchedule(
         let forceAvailable = group.filter(p => {
           if (assignments[p.id][d].startsWith('L')) return false;
           const currentShift = assignments[p.id][d];
-          if (shiftChar === 'M' && (currentShift === 'M' || currentShift === 'ME' || currentShift === 'MN' || currentShift === 'MEN')) return false;
-          if (shiftChar === 'E' && (currentShift === 'E' || currentShift === 'ME' || currentShift === 'EN' || currentShift === 'MEN')) return false;
-          if (shiftChar === 'N' && (currentShift === 'N' || currentShift === 'EN' || currentShift === 'MN' || currentShift === 'MEN')) return false;
+          if (shiftCoversPeriod(currentShift, shiftChar)) return false;
 
           // ====== قانون اولویت‌بندی بن‌بست ======
           // مسیر اضطراری هم یک «جبران‌کنندهٔ پوشش» است و از همان قرارداد مشترکِ
@@ -1386,6 +1327,15 @@ export function solveNursingSchedule(
            if (!softOffX && softOffY) return -1;
            if (softOffX && !softOffY) return 1;
 
+           // Post-heavy OFF remains a preference even in emergency fill. Explicit
+           // shift/pattern plans are exempt, but a legal candidate is never rejected.
+           const hasExplicitPlanToday = (person: Personnel) =>
+             (dailyRequests[person.id]?.[d]?.requestType === 'shift')
+             || requests.some(request => request.personnelId === person.id && request.requestType === 'pattern');
+           const postHeavyX = !hasExplicitPlanToday(x) && evaluatePostHeavyOffPreference(assignments, x.id, d).preferOff ? 1 : 0;
+           const postHeavyY = !hasExplicitPlanToday(y) && evaluatePostHeavyOffPreference(assignments, y.id, d).preferOff ? 1 : 0;
+           if (postHeavyX !== postHeavyY) return postHeavyX - postHeavyY;
+
            // تگ روتین کاری در مسیر اضطراری هم اولویت اول است: ابتدا نفراتی که شیفت
            // با تگشان سازگار است (یا تگ ندارند/درخواست شیفت دارند) انتخاب می‌شوند.
            const routineCompat = (person: Personnel) =>
@@ -1396,21 +1346,8 @@ export function solveNursingSchedule(
            const compatY = routineCompat(y) ? 0 : 1;
            if (compatX !== compatY) return compatX - compatY;
 
-           // ====== سطح A: سقف ۵ شیفت متوالی (خط قرمز مطلق) ======
-           // نفراتی که تخصیص به آن‌ها زنجیره را از ۵ عبور می‌دهد به انتهای صف می‌روند.
-           const prospectiveBreach = (person: Personnel) => {
-             const cs = assignments[person.id][d];
-             let ps = cs;
-             if (cs === 'OFF') ps = shiftChar;
-             else if (cs === 'M' && shiftChar === 'E') ps = 'ME';
-             else if (cs === 'M' && shiftChar === 'N') ps = 'MN';
-             else if (cs === 'E' && shiftChar === 'N') ps = 'EN';
-             else if (cs === 'ME' && shiftChar === 'N') ps = 'MEN';
-             return wouldBreachConsecutiveCap(assignments, person.id, d, ps, totalDays) ? 1 : 0;
-           };
-           const breachX = prospectiveBreach(x);
-           const breachY = prospectiveBreach(y);
-           if (breachX !== breachY) return breachX - breachY;
+           // The shared hard evaluator above already rejects workload-cap
+           // breaches. Post-heavy OFF remains a legal-candidate preference below.
 
            // ====== سطح C: ساعت موظفی و تعادل ======
            let hoursX = 0; let hoursY = 0;
@@ -1421,9 +1358,8 @@ export function solveNursingSchedule(
            if (Math.abs(hoursX - hoursY) > 0.1) {
              return hoursX - hoursY;
            }
-           const isHeavy = (s: string) => s === 'MEN' || s === 'MN' || s === 'EN' || s === 'ME' ? 1 : 0;
-           const hX = isHeavy(assignments[x.id][d]);
-           const hY = isHeavy(assignments[y.id][d]);
+           const hX = isHeavyShift(assignments[x.id][d]) ? 1 : 0;
+           const hY = isHeavyShift(assignments[y.id][d]) ? 1 : 0;
            if (hX !== hY) return hX - hY;
            return 0;
         });
@@ -1465,9 +1401,9 @@ export function solveNursingSchedule(
     const afternoonNurseDemand = demand.afternoonNurse;
     const nightNurseDemand = demand.nightNurse;
 
-    let mAssignedNurse = nurses.filter(n => assignments[n.id][d] === 'M' || assignments[n.id][d] === 'ME' || assignments[n.id][d] === 'MN' || assignments[n.id][d] === 'MEN').length;
-    let eAssignedNurse = nurses.filter(n => assignments[n.id][d] === 'E' || assignments[n.id][d] === 'ME' || assignments[n.id][d] === 'EN' || assignments[n.id][d] === 'MEN').length;
-    let nAssignedNurse = nurses.filter(n => assignments[n.id][d] === 'N' || assignments[n.id][d] === 'EN' || assignments[n.id][d] === 'MN' || assignments[n.id][d] === 'MEN').length;
+    let mAssignedNurse = nurses.filter(n => shiftCoversPeriod(assignments[n.id][d], 'M')).length;
+    let eAssignedNurse = nurses.filter(n => shiftCoversPeriod(assignments[n.id][d], 'E')).length;
+    let nAssignedNurse = nurses.filter(n => shiftCoversPeriod(assignments[n.id][d], 'N')).length;
 
     fillGroupGaps(nurses, 'M', morningNurseDemand, mAssignedNurse);
     fillGroupGaps(nurses, 'E', afternoonNurseDemand, eAssignedNurse);
@@ -1499,8 +1435,22 @@ export function solveNursingSchedule(
         if (avoidedShifts[q.id]?.[d]?.has(shift)) return false;
         // تگ روتین کاری نفر بدون درخواست شیفت احترام می‌ماند.
         if (q.workRoutine && !explicitShiftPlan.has(q.id) && !routineAllowsPeriodAdd(q.workRoutine, shift as 'M' | 'E' | 'N')) return false;
-        // جایگزین نباید سقف ۵ شیفت متوالی را نقض کند یا خودش شیفت تک‌تک بسازد.
-        if (wouldBreachConsecutiveCap(assignments, q.id, d, shift, totalDays)) return false;
+        // The transfer is another assignment writer, so it uses the same hard
+        // evaluator as coverage/reconcile before considering preference shape.
+        if (evaluateHardConstraints(
+          {
+            person: q,
+            day: d,
+            dayOfWeek: calendar[d - 1].dayOfWeek,
+            isHoliday: calendar[d - 1].isHoliday,
+            period: shift,
+            candidateShift: shift,
+            assignments,
+            totalDays,
+            requests,
+          },
+          COVERAGE_FILL_HARD_RULES
+        )) return false;
         if (isIsolatedSingleShiftAt(assignments, q.id, d, totalDays, shift)) return false;
         return true;
       });
@@ -1528,7 +1478,24 @@ export function solveNursingSchedule(
     }
   });
 
-  // 6. Post-process OFF and consecutive constraints
+  // 6. Post-process OFF and consecutive constraints. Even this low-priority
+  // writer must ask the shared hard evaluator before inserting work.
+  const canBreakOffWith = (p: Personnel, d: number, candidateShift: 'M' | 'E'): boolean =>
+    !evaluateHardConstraints(
+      {
+        person: p,
+        day: d,
+        dayOfWeek: calendar[d - 1].dayOfWeek,
+        isHoliday: calendar[d - 1].isHoliday,
+        period: candidateShift,
+        candidateShift,
+        assignments,
+        totalDays,
+        requests,
+      },
+      OFF_BREAKER_HARD_RULES
+    );
+
   activePersonnel.forEach(p => {
     for (let d = 2; d <= totalDays; d++) {
       const prevS = assignments[p.id][d-1];
@@ -1539,7 +1506,7 @@ export function solveNursingSchedule(
       // متوالی را نقض کند.
       if (prevS.startsWith('L') && prevS !== HOLIDAY_LEAVE_SHIFT && currS === 'OFF') {
         const shouldAvoidM = avoidedShifts[p.id]?.[d]?.has('M');
-        if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
+        if (!shouldAvoidM && canBreakOffWith(p, d, 'M')) {
           assignments[p.id][d] = 'M';
           warnings.push(createScheduleWarning({
             code: 'OFF_REMOVED',
@@ -1551,7 +1518,7 @@ export function solveNursingSchedule(
           }));
         } else {
           const shouldAvoidE = avoidedShifts[p.id]?.[d]?.has('E');
-          if (!shouldAvoidE && !wouldBreachConsecutiveCap(assignments, p.id, d, 'E', totalDays)) {
+          if (!shouldAvoidE && canBreakOffWith(p, d, 'E')) {
             assignments[p.id][d] = 'E';
             warnings.push(createScheduleWarning({
               code: 'OFF_REMOVED',
@@ -1604,7 +1571,7 @@ export function solveNursingSchedule(
           }
 
           const shouldAvoidM = avoidedShifts[p.id]?.[d]?.has('M');
-          if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
+          if (!shouldAvoidM && canBreakOffWith(p, d, 'M')) {
             assignments[p.id][d] = 'M';
             consecutiveOff = 0;
             warnings.push(createScheduleWarning({
@@ -1617,7 +1584,7 @@ export function solveNursingSchedule(
             }));
           } else {
             const shouldAvoidE = avoidedShifts[p.id]?.[d]?.has('E');
-            if (!shouldAvoidE && !wouldBreachConsecutiveCap(assignments, p.id, d, 'E', totalDays)) {
+            if (!shouldAvoidE && canBreakOffWith(p, d, 'E')) {
               assignments[p.id][d] = 'E';
               consecutiveOff = 0;
               warnings.push(createScheduleWarning({
@@ -1645,13 +1612,11 @@ export function solveNursingSchedule(
   const eligibleForLeader = (p: Personnel, shiftGroup: 'M' | 'E' | 'N', day: number) => {
     if (p.jobGroup !== 'nurse') return false;
     const s = assignments[p.id]?.[day];
-    if (!s) return false;
-    const covers =
-      shiftGroup === 'M' ? ['M', 'ME', 'MN', 'MEN'].includes(s) :
-      shiftGroup === 'E' ? ['E', 'ME', 'EN', 'MEN'].includes(s) :
-      ['N', 'EN', 'MN', 'MEN'].includes(s);
-    if (!covers) return false;
-    if (p.position === 'supervisor' || p.position === 'staff') return true;
+    if (!shiftCoversPeriod(s, shiftGroup)) return false;
+    // Leader selection must not legitimize an externally inserted Supervisor/Staff
+    // evening/night assignment.
+    if (isMorningOnlyPosition(p) && shiftGroup !== 'M') return false;
+    if (isMorningOnlyPosition(p)) return true;
     return p.position === 'general' && p.canBeShiftLeader;
   };
 
@@ -1814,9 +1779,9 @@ export function verifyCoverageAndLeaders(
     const isHoliday = calendar[d - 1].isHoliday;
     const demand = isHoliday ? settings.demand.holiday : settings.demand.weekday;
 
-    let mAssignedAsst = assistants.filter(a => assignments[a.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[a.id][d])).length;
-    let eAssignedAsst = assistants.filter(a => assignments[a.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[a.id][d])).length;
-    let nAssignedAsst = assistants.filter(a => assignments[a.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[a.id][d])).length;
+    let mAssignedAsst = assistants.filter(a => shiftCoversPeriod(assignments[a.id]?.[d], 'M')).length;
+    let eAssignedAsst = assistants.filter(a => shiftCoversPeriod(assignments[a.id]?.[d], 'E')).length;
+    let nAssignedAsst = assistants.filter(a => shiftCoversPeriod(assignments[a.id]?.[d], 'N')).length;
 
     if (mAssignedAsst < demand.morningAssistant) pushCoverageWarning('COVERAGE_SHORTAGE', 'assistant', d, 'M', mAssignedAsst, demand.morningAssistant);
     if (eAssignedAsst < demand.afternoonAssistant) pushCoverageWarning('COVERAGE_SHORTAGE', 'assistant', d, 'E', eAssignedAsst, demand.afternoonAssistant);
@@ -1826,9 +1791,9 @@ export function verifyCoverageAndLeaders(
     if (eAssignedAsst > demand.afternoonAssistant) pushCoverageWarning('OVERSTAFFING', 'assistant', d, 'E', eAssignedAsst, demand.afternoonAssistant);
     if (nAssignedAsst > demand.nightAssistant) pushCoverageWarning('OVERSTAFFING', 'assistant', d, 'N', nAssignedAsst, demand.nightAssistant);
 
-    let mAssignedNurse = nurses.filter(n => assignments[n.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[n.id][d])).length;
-    let eAssignedNurse = nurses.filter(n => assignments[n.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[n.id][d])).length;
-    let nAssignedNurse = nurses.filter(n => assignments[n.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[n.id][d])).length;
+    let mAssignedNurse = nurses.filter(n => shiftCoversPeriod(assignments[n.id]?.[d], 'M')).length;
+    let eAssignedNurse = nurses.filter(n => shiftCoversPeriod(assignments[n.id]?.[d], 'E')).length;
+    let nAssignedNurse = nurses.filter(n => shiftCoversPeriod(assignments[n.id]?.[d], 'N')).length;
 
     if (mAssignedNurse < demand.morningNurse) pushCoverageWarning('COVERAGE_SHORTAGE', 'nurse', d, 'M', mAssignedNurse, demand.morningNurse);
     if (eAssignedNurse < demand.afternoonNurse) pushCoverageWarning('COVERAGE_SHORTAGE', 'nurse', d, 'E', eAssignedNurse, demand.afternoonNurse);
@@ -1838,18 +1803,64 @@ export function verifyCoverageAndLeaders(
     if (eAssignedNurse > demand.afternoonNurse) pushCoverageWarning('OVERSTAFFING', 'nurse', d, 'E', eAssignedNurse, demand.afternoonNurse);
     if (nAssignedNurse > demand.nightNurse) pushCoverageWarning('OVERSTAFFING', 'nurse', d, 'N', nAssignedNurse, demand.nightNurse);
 
+    // Verification consumes the same hard evaluator as every assignment path.
+    // It remains read-only and only reports an externally/manual-introduced breach.
+    for (const person of activePersonnel) {
+      const assigned = assignments[person.id]?.[d] || 'OFF';
+      const violations = evaluateHardConstraintViolations(
+        {
+          person,
+          day: d,
+          dayOfWeek: calendar[d - 1].dayOfWeek,
+          isHoliday,
+          candidateShift: assigned,
+          assignments,
+          totalDays,
+          requests,
+        },
+        VERIFICATION_HARD_RULES
+      );
+
+      for (const violation of violations) {
+        if (violation === 'NIGHT_REST_CONSECUTIVE_NIGHTS' || violation === 'NIGHT_REST_MORNING_AFTER_NIGHT') {
+          warnings.push(createScheduleWarning({
+            code: 'NIGHT_REST',
+            message: `Night Rest: نقض استراحت شب برای ${person.firstName} ${person.lastName} در روز ${d} (شیفت ${assigned})`,
+            day: d,
+            personnelId: person.id,
+            shift: assigned,
+            metadata: { violation },
+          }));
+        } else if (violation === 'MORNING_ONLY') {
+          warnings.push(createScheduleWarning({
+            code: 'SUPERVISOR_STAFF_EN_RESTRICTION',
+            message: `Supervisor/Staff E/N Restriction: تخصیص شیفت عصر/شب برای ${person.firstName} ${person.lastName} در روز ${d} مجاز نیست (شیفت ${assigned})`,
+            day: d,
+            personnelId: person.id,
+            shift: assigned,
+            metadata: { violation },
+          }));
+        } else if (violation === 'UNKNOWN_SHIFT') {
+          warnings.push(createScheduleWarning({
+            code: 'UNKNOWN_SHIFT',
+            message: `Unknown Shift: شیفت ناشناخته ${assigned} برای ${person.firstName} ${person.lastName} در روز ${d}`,
+            day: d,
+            personnelId: person.id,
+            shift: assigned,
+            metadata: { violation },
+          }));
+        }
+      }
+    }
+
     // انتخاب سرشیفت — منطق جدید:
     // صبح فقط روزهای تعطیل؛ عصر و شب همیشه؛ هر شیفت M/E/N کاملاً مستقل
     const eligibleForLeaderVerify = (p: Personnel, shiftGroup: 'M' | 'E' | 'N') => {
       if (p.jobGroup !== 'nurse') return false;
       const s = assignments[p.id]?.[d];
-      if (!s) return false;
-      const covers =
-        shiftGroup === 'M' ? ['M', 'ME', 'MN', 'MEN'].includes(s) :
-        shiftGroup === 'E' ? ['E', 'ME', 'EN', 'MEN'].includes(s) :
-        ['N', 'EN', 'MN', 'MEN'].includes(s);
-      if (!covers) return false;
-      if (p.position === 'supervisor' || p.position === 'staff') return true;
+      if (!shiftCoversPeriod(s, shiftGroup)) return false;
+      if (isMorningOnlyPosition(p) && shiftGroup !== 'M') return false;
+      if (isMorningOnlyPosition(p)) return true;
       return p.position === 'general' && p.canBeShiftLeader;
     };
 
@@ -1945,10 +1956,7 @@ export function verifyCoverageAndLeaders(
             if (req.requestType === 'avoid_shift') {
               const pref = req.preferredShift;
               if (pref) {
-                const violates = (pref === 'M' && ['M', 'ME', 'MN', 'MEN'].includes(assigned)) ||
-                                 (pref === 'E' && ['E', 'ME', 'EN', 'MEN'].includes(assigned)) ||
-                                 (pref === 'N' && ['N', 'EN', 'MN', 'MEN'].includes(assigned)) ||
-                                 (assigned === pref);
+                const violates = shiftSatisfiesRequestedShift(assigned, pref);
                 if (violates) {
                   warnings.push(createScheduleWarning({
                     code: 'MISMATCHED_REQUEST',
@@ -1982,10 +1990,7 @@ export function verifyCoverageAndLeaders(
             } else if (req.requestType === 'shift') {
               const pref = req.preferredShift;
               if (pref) {
-                const matches = (pref === 'M' && ['M', 'ME', 'MN', 'MEN'].includes(assigned)) ||
-                                (pref === 'E' && ['E', 'ME', 'EN', 'MEN'].includes(assigned)) ||
-                                (pref === 'N' && ['N', 'EN', 'MN', 'MEN'].includes(assigned)) ||
-                                (assigned === pref);
+                const matches = shiftSatisfiesRequestedShift(assigned, pref);
                 if (!matches) {
                   warnings.push(createScheduleWarning({
                     code: 'MISMATCHED_REQUEST',

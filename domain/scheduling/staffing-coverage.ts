@@ -1,10 +1,17 @@
 import type { JobGroup, Personnel, ShiftRequest, ShiftType, SystemSettings } from '../../lib/types';
+import { isDayInRequestScope } from '../requests/request-scope-matcher';
 import {
   routineAllowsPeriodAdd,
   shiftMatchesRoutine,
-  wouldBreachConsecutiveCap,
   wouldCreateIsolatedShift,
 } from './smart-rules';
+import {
+  evaluatePostHeavyOffPreference,
+  POST_HEAVY_OFF_PREFERENCE_PENALTY,
+  shiftComponents,
+  shiftContainsComponent,
+  shiftFromComponents,
+} from './workload';
 import {
   COVERAGE_FILL_HARD_RULES,
   canAssignShift,
@@ -66,37 +73,13 @@ export interface StaffingCoverageResult {
 
 const COVERAGE_SHIFTS: readonly CoverageShift[] = ['M', 'E', 'N'];
 
-const SHIFT_COMPONENTS: Readonly<Record<string, readonly CoverageShift[]>> = {
-  M: ['M'],
-  E: ['E'],
-  N: ['N'],
-  ME: ['M', 'E'],
-  EN: ['E', 'N'],
-  MN: ['M', 'N'],
-  MEN: ['M', 'E', 'N'],
-  OFF: [],
-};
-
-const COMPONENTS_TO_SHIFT: Readonly<Record<string, ShiftType>> = {
-  '': 'OFF',
-  M: 'M',
-  E: 'E',
-  N: 'N',
-  ME: 'ME',
-  EN: 'EN',
-  MN: 'MN',
-  MEN: 'MEN',
-};
-
 /** Return whether a (possibly combined) shift covers one staffing period. */
 export function shiftCoversPeriod(shift: ShiftType | undefined, period: CoverageShift): boolean {
-  if (!shift) return false;
-  return SHIFT_COMPONENTS[shift]?.includes(period) ?? false;
+  return shiftContainsComponent(shift, period);
 }
 
 function componentCount(shift: ShiftType | undefined): number {
-  if (!shift) return 0;
-  return SHIFT_COMPONENTS[shift]?.length ?? 0;
+  return shiftComponents(shift).length;
 }
 
 function setShiftPeriod(
@@ -104,13 +87,10 @@ function setShiftPeriod(
   period: CoverageShift,
   enabled: boolean
 ): ShiftType {
-  const components = new Set<CoverageShift>(SHIFT_COMPONENTS[shift || 'OFF'] || []);
+  const components = new Set<CoverageShift>(shiftComponents(shift) as readonly CoverageShift[]);
   if (enabled) components.add(period);
   else components.delete(period);
-
-  // Canonical component order is important for the combined-shift keys.
-  const key = COVERAGE_SHIFTS.filter(component => components.has(component)).join('');
-  return COMPONENTS_TO_SHIFT[key] || 'OFF';
+  return shiftFromComponents(components) || 'OFF';
 }
 
 function requiredCoverage(
@@ -181,6 +161,14 @@ export function reconcileStaffingCoverage(
       .map(request => request.personnelId)
   );
 
+  const hasExplicitWorkRequestForDay = (personnelId: string, day: number, dayOfWeek: number | undefined): boolean =>
+    (requests ?? []).some(request => {
+      if (request.personnelId !== personnelId) return false;
+      if (request.requestType === 'pattern') return true;
+      return request.requestType === 'shift'
+        && isDayInRequestScope(day, dayOfWeek ?? -1, request);
+    });
+
   for (const jobGroup of targetJobGroups) {
     const group = personnelList.filter(person => person.active && person.jobGroup === jobGroup);
     for (const person of group) {
@@ -216,31 +204,22 @@ export function reconcileStaffingCoverage(
         } else if (assigned < required) {
           // ====== انتخاب نامزد برای جبران کمبود ======
           //
-          // مرحلهٔ ۱ (فیلترِ سخت): هیچ نامزدی که تخصیص به او یک محدودیت سخت را
-          // می‌شکند وارد صف نمی‌شود. محدودیت‌های سخت از قرارداد مشترک
-          // `COVERAGE_FILL_HARD_RULES` می‌آیند تا reconcile و solver دقیقاً از یک
-          // تعریف استفاده کنند: آف قطعی، مرخصی، ردیف قفل‌شده، سلول محافظت‌شده،
-          // صبح‌کاریِ سرپرستار/استاف و استراحت شب.
+          // Stage 1: every candidate passes the one shared hard evaluator. Coverage
+          // shortage is reported when no legal candidate remains; it is never solved
+          // by intentionally violating workload, night-rest, leave, OFF, lock,
+          // protection, or Supervisor/Staff E/N restrictions.
           //
-          // اگر پس از این فیلتر پوشش کامل نشود، کمبود گزارش می‌شود؛ نقض یک
-          // محدودیت سخت هرگز راهِ جبران پوشش نیست و هیچ مسیر اضطراری‌ای از این
-          // فیلتر عبور نمی‌کند.
-          //
-          // مرحلهٔ ۲ (اولویت‌بندیِ نرم): سقف شیفت متوالی، شیفت تک‌تک، تگ روتین
-          // کاری و Soft OFF فقط ترتیب صف را تعیین می‌کنند.
-          //
-          // تعارض آگاهانه: سقف شیفت متوالی اینجا «سخت» نیست، چون مسیر اضطراریِ
-          // خودِ solver هم در بن‌بست از آن عبور می‌کند و نقضش به‌صورت هشدار
-          // بحرانی MAX_CONSECUTIVE گزارش می‌شود. تبدیل آن به فیلتر سخت، تصمیمی
-          // فراتر از دامنهٔ B1–B5 است و باید جداگانه گرفته شود.
+          // Stage 2: only genuine preferences rank legal candidates: isolated shifts,
+          // routine fit, soft OFF, and post-heavy OFF preference.
           const nextShiftFor = (person: Personnel): ShiftType =>
             setShiftPeriod(reconciled[person.id]?.[day], shift, true);
 
           const candidatePriority = (person: Personnel): number => {
             const nextShift = nextShiftFor(person);
             let priority = componentCount(reconciled[person.id]?.[day]);
-            if (wouldBreachConsecutiveCap(reconciled, person.id, day, nextShift, totalDays)) {
-              priority += 100;
+            if (!hasExplicitWorkRequestForDay(person.id, day, calendarDay.dayOfWeek)
+              && evaluatePostHeavyOffPreference(reconciled, person.id, day).preferOff) {
+              priority += POST_HEAVY_OFF_PREFERENCE_PENALTY;
             }
             if (wouldCreateIsolatedShift(reconciled, person.id, day, totalDays, nextShift)) {
               priority += 40;

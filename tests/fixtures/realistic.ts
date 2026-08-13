@@ -164,10 +164,8 @@ export function scenarioFeasible(): ScenarioPreset {
 
 /**
  * Near-infeasible: 2 nurses, but the supervisor can only cover M while one general
- * nurse must cover every night. The demand is technically satisfiable, but only by
- * making the general nurse run N several days in a row (the final reconcile pass
- * fills the night gap without the "no 3 nights in a row" guard that the greedy fill
- * uses). Records current behavior; does not assert it is "correct".
+ * nurse carries night demand. Shared hard rules now leave coverage unresolved rather
+ * than creating a forbidden third N-bearing day.
  */
 export function scenarioNearInfeasible(): ScenarioPreset {
   const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('g1')];

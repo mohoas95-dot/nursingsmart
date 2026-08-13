@@ -41,6 +41,9 @@ import type { JobGroup, ShiftType } from '../../lib/types';
  *   | MISSING_SHIFT_LEADER  | `Missing Shift Leader:`   |
  *   | MAX_CONSECUTIVE       | `Max Consecutive:`        |
  *   | MANDATORY_REST        | `Mandatory Rest:`         |
+ *   | NIGHT_REST            | `Night Rest:`             |
+ *   | SUPERVISOR_STAFF_EN_RESTRICTION | `Supervisor/Staff E/N Restriction:` |
+ *   | UNKNOWN_SHIFT         | `Unknown Shift:`          |
  *   | MISMATCHED_REQUEST    | `Mismatched Request:`     |
  *   | CONSECUTIVE_OFFS      | `Consecutive OFFs:`       |
  *   | LEAVE_CONTINUITY      | `Leave Continuity:`       |
@@ -59,6 +62,9 @@ export type ScheduleWarningCode =
   | 'MISSING_SHIFT_LEADER'
   | 'MAX_CONSECUTIVE'
   | 'MANDATORY_REST'
+  | 'NIGHT_REST'
+  | 'SUPERVISOR_STAFF_EN_RESTRICTION'
+  | 'UNKNOWN_SHIFT'
   | 'MISMATCHED_REQUEST'
   | 'CONSECUTIVE_OFFS'
   | 'LEAVE_CONTINUITY'
@@ -127,8 +133,8 @@ export interface ScheduleWarning {
 /**
  * کدهای سطح A (بحرانی) — دقیقاً معادل مجموعهٔ HARD_WARNING_PREFIXES در lib/scoring.
  *
- * توجه: این فهرست «سیاست» را تغییر نمی‌دهد؛ همان پنج نوع هشداری که امروز با
- * پیشوند رشته‌ای بحرانی شناخته می‌شوند، این‌جا با کد بحرانی شناخته می‌شوند.
+ * این فهرست با `HARD_WARNING_PREFIXES` هم‌راستا است. نقض‌های جدیدی که همان
+ * shared hard evaluator تشخیص می‌دهد نیز بحرانی‌اند تا سناریوها آن‌ها را نادیده نگیرند.
  */
 export const CRITICAL_WARNING_CODES: readonly ScheduleWarningCode[] = [
   'COVERAGE_SHORTAGE',
@@ -136,6 +142,9 @@ export const CRITICAL_WARNING_CODES: readonly ScheduleWarningCode[] = [
   'MISSING_SHIFT_LEADER',
   'MAX_CONSECUTIVE',
   'MANDATORY_REST',
+  'NIGHT_REST',
+  'SUPERVISOR_STAFF_EN_RESTRICTION',
+  'UNKNOWN_SHIFT',
 ];
 
 /** آیا این کد، هشدار سطح A (بحرانی) است؟ — معیار ماشینی، بدون نگاه به متن. */
@@ -159,7 +168,7 @@ export function defaultSeverityForCode(code: ScheduleWarningCode): ScheduleWarni
 
 /**
  * ساخت یک هشدار ساخت‌یافته. اگر severity داده نشود، از نگاشتِ پیش‌فرضِ کد
- * استفاده می‌شود (پنج کد بحرانی → critical؛ اصلاح‌های خودکار solver → info).
+ * استفاده می‌شود (کدهای hard-rule → critical؛ اصلاح‌های خودکار solver → info).
  */
 export function createScheduleWarning(
   input: Omit<ScheduleWarning, 'severity'> & { severity?: ScheduleWarningSeverity }
