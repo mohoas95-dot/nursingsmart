@@ -33,6 +33,7 @@ import {
   updateScheduleCell,
 } from '../../../domain/scheduling/schedule-operations';
 import { reconcileStaffingCoverage } from '../../../domain/scheduling/staffing-coverage';
+import { repairScheduleBeforeWarnings } from '../../../domain/scheduling/repair-orchestrator';
 import { findResolvedWarnings, pruneDismissedWarnings } from '../../../domain/scheduling/alert-lifecycle';
 import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
 import { generateJalaliMonthCalendar } from '../../../lib/jalali';
@@ -189,16 +190,25 @@ export async function runOptimizerFacade(
       holidays,
       firstDayOfWeek
     );
+    const calendarDays = calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek }));
     const staffingResult = reconcileStaffingCoverage(
       mergedAssignments,
       personnel,
       settings,
-      calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
+      calendarDays,
       [jobGroup],
       lockState.lockedRows,
       requests
     );
-    const compliantAssignments = staffingResult.assignments;
+    const compliantAssignments = repairScheduleBeforeWarnings({
+      assignments: staffingResult.assignments,
+      personnelList: personnel,
+      settings,
+      calendarDays,
+      requests,
+      targetJobGroups: [jobGroup],
+      lockedRows: lockState.lockedRows,
+    }).assignments;
 
     // Step 6: Verify coverage and leaders
     const verification = verifier(

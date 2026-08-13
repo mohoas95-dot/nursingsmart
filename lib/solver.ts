@@ -30,6 +30,9 @@ import {
   type ScheduleWarning,
 } from '../domain/warnings/schedule-warning';
 import {
+  repairScheduleBeforeWarnings,
+} from '../domain/scheduling/repair-orchestrator';
+import {
   ALL_HARD_RULES,
   COVERAGE_FILL_HARD_RULES,
   EMERGENCY_FILL_HARD_RULES,
@@ -538,6 +541,9 @@ export function solveNursingSchedule(
   // هشدارهای میان‌حل به‌صورت ساخت‌یافته انباشته می‌شوند؛ متن نمایشیِ تاریخی
   // همان‌طور ساخته می‌شود و تنها هنگام خروجی به رشته تبدیل می‌گردد.
   const warnings: ScheduleWarning[] = [];
+  // A non-exact explicit request is not warned yet. Final repair/reconciliation
+  // gets one chance to make the full request legal before the warning is emitted.
+  const deferredExplicitConflicts = new Map<string, { person: Personnel; day: number; preferredShift: ShiftType }>();
   const shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } = {};
   for (let d = 1; d <= totalDays; d++) {
     shiftLeaders[d] = {};
@@ -708,24 +714,11 @@ export function solveNursingSchedule(
     }
     if (resolution.exact) return true;
 
-    const blockedLabel = resolution.blockedBy
-      ? HARD_CONSTRAINT_LABELS[resolution.blockedBy]
-      : 'محدودیت سخت';
-    const outcome = resolution.shift
-      ? `به بیشترین حد مجاز (${resolution.shift}) کاهش یافت`
-      : 'اعمال نشد';
-    warnings.push(createScheduleWarning({
-      code: 'HARD_CONSTRAINT_CONFLICT',
-      message: `Hard Constraint Conflict: درخواست شیفت ${preferredShift} پرسنل ${p.firstName} ${p.lastName} در روز ${d} ${outcome}؛ ${blockedLabel} یک محدودیت سخت است و بر درخواست مقدم می‌شود`,
+    deferredExplicitConflicts.set(`${p.id}:${d}:${preferredShift}`, {
+      person: p,
       day: d,
-      shift: preferredShift,
-      personnelId: p.id,
-      metadata: {
-        rule: 'explicit_shift_request',
-        blockedBy: resolution.blockedBy ?? 'UNKNOWN',
-        appliedShift: resolution.shift ?? 'OFF',
-      },
-    }));
+      preferredShift,
+    });
     return !!resolution.shift;
   };
 
@@ -1675,22 +1668,109 @@ export function solveNursingSchedule(
     }
   }
 
-  // Coverage is a hard constraint. Some lower-priority post-processing rules above
-  // (for example, breaking a long OFF sequence) can change headcounts after the
-  // initial demand-filling pass. Reconcile once more before verification so the
-  // saved schedule always reflects the configured staffing numbers.
-  const staffingResult = reconcileStaffingCoverage(
-    assignments,
+  // Coverage is reconciled first, then the repair-before-warning orchestration
+  // removes any automatically introduced hard violation and lets reconcile find
+  // a legal coverage replacement before verification creates warnings.
+  const staffingCalendarDays = calendar.map(day => ({
+    day: day.day,
+    isHoliday: day.isHoliday,
+    dayOfWeek: day.dayOfWeek,
+  }));
+  const reconcileFinalAssignments = (
+    source: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>
+  ) => reconcileStaffingCoverage(
+    source,
     activePersonnel,
     settings,
-    // dayOfWeek نیز پاس داده می‌شود تا محدودیت‌های سختِ وابسته به روزِ هفته
-    // (مثل «آف قطعیِ پنجشنبه‌ها») دقیق ارزیابی شوند، نه محافظه‌کارانه.
-    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
+    staffingCalendarDays,
     ['nurse', 'assistant'],
     [],
     requests
-  );
-  const finalAssignments = staffingResult.assignments;
+  ).assignments;
+
+  let finalAssignments = reconcileFinalAssignments(assignments);
+  let repaired = repairScheduleBeforeWarnings({
+    assignments: finalAssignments,
+    personnelList: activePersonnel,
+    settings,
+    calendarDays: staffingCalendarDays,
+    requests,
+  });
+  finalAssignments = repaired.assignments;
+
+  // Retry deferred requests after repairs: a legal full request wins over the
+  // earlier partial subset, but a hard-invalid request is never forced.
+  let retriedExplicitRequest = false;
+  for (const { person, day, preferredShift } of deferredExplicitConflicts.values()) {
+    const resolution = resolveLegalShiftForRequest(
+      {
+        person,
+        day,
+        dayOfWeek: calendar[day - 1].dayOfWeek,
+        isHoliday: calendar[day - 1].isHoliday,
+        assignments: finalAssignments,
+        totalDays,
+        requests,
+      },
+      preferredShift,
+      EXPLICIT_REQUEST_HARD_RULES
+    );
+    if (resolution.exact && resolution.shift && finalAssignments[person.id]?.[day] !== resolution.shift) {
+      finalAssignments[person.id][day] = resolution.shift;
+      retriedExplicitRequest = true;
+    }
+  }
+
+  if (retriedExplicitRequest) {
+    finalAssignments = reconcileFinalAssignments(finalAssignments);
+    repaired = repairScheduleBeforeWarnings({
+      assignments: finalAssignments,
+      personnelList: activePersonnel,
+      settings,
+      calendarDays: staffingCalendarDays,
+      requests,
+    });
+    finalAssignments = repaired.assignments;
+  }
+
+  // Only now surface an explicit-request conflict. A legal repair/retry that
+  // restored the requested shift leaves no warning behind.
+  for (const { person, day, preferredShift } of deferredExplicitConflicts.values()) {
+    const assigned = finalAssignments[person.id]?.[day] || 'OFF';
+    if (shiftSatisfiesRequestedShift(assigned, preferredShift)) continue;
+
+    const resolution = resolveLegalShiftForRequest(
+      {
+        person,
+        day,
+        dayOfWeek: calendar[day - 1].dayOfWeek,
+        isHoliday: calendar[day - 1].isHoliday,
+        assignments: finalAssignments,
+        totalDays,
+        requests,
+      },
+      preferredShift,
+      EXPLICIT_REQUEST_HARD_RULES
+    );
+    const blockedLabel = resolution.blockedBy
+      ? HARD_CONSTRAINT_LABELS[resolution.blockedBy]
+      : 'محدودیت سخت';
+    const outcome = assigned !== 'OFF' && !assigned.startsWith('L')
+      ? `به بیشترین حد مجاز (${assigned}) کاهش یافت`
+      : 'اعمال نشد';
+    warnings.push(createScheduleWarning({
+      code: 'HARD_CONSTRAINT_CONFLICT',
+      message: `Hard Constraint Conflict: درخواست شیفت ${preferredShift} پرسنل ${person.firstName} ${person.lastName} در روز ${day} ${outcome}؛ ${blockedLabel} یک محدودیت سخت است و بر درخواست مقدم می‌شود`,
+      day,
+      shift: preferredShift,
+      personnelId: person.id,
+      metadata: {
+        rule: 'explicit_shift_request',
+        blockedBy: resolution.blockedBy ?? 'UNKNOWN',
+        appliedShift: assigned,
+      },
+    }));
+  }
 
   const verification = verifyCoverageAndLeaders(
     year,
@@ -1702,11 +1782,13 @@ export function solveNursingSchedule(
     firstDayOfWeekIndex,
     requests
   );
-  // Coverage messages emitted before the final reconciliation are stale. The
-  // verifier is the single source of truth for any genuinely unresolved mismatch.
-  // فیلتر با کد ساخت‌یافتهٔ هشدار انجام می‌شود، نه بر اساس پیشوندِ متن نمایشی.
+  // Coverage and leader messages emitted before final reconciliation/repair may
+  // be stale. The final verifier is the single source of truth for unresolved
+  // coverage and leader warnings.
   const nonCoverageWarnings = warningMessages(warnings.filter(warning =>
-    warning.code !== 'COVERAGE_SHORTAGE' && warning.code !== 'OVERSTAFFING'
+    warning.code !== 'COVERAGE_SHORTAGE'
+    && warning.code !== 'OVERSTAFFING'
+    && warning.code !== 'MISSING_SHIFT_LEADER'
   ));
   const combinedWarnings = Array.from(new Set([...nonCoverageWarnings, ...verification.warnings]));
 

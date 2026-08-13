@@ -198,6 +198,18 @@ export {
   violatesNightRest,
 } from './scheduling/hard-constraints';
 
+export {
+  repairScheduleBeforeWarnings,
+} from './scheduling/repair-orchestrator';
+
+export type {
+  DetectedRepairViolation,
+  RepairBeforeWarningInput,
+  RepairBeforeWarningResult,
+  RepairableViolationCode,
+  ScheduleRepairAction,
+} from './scheduling/repair-orchestrator';
+
 export type {
   ConstraintPeriod,
   HardConstraintEvaluation,

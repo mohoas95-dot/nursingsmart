@@ -27,6 +27,7 @@
 import { generateJalaliMonthCalendar } from './jalali';
 import { verifyCoverageAndLeaders } from './solver';
 import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
+import { repairScheduleBeforeWarnings } from '../domain/scheduling/repair-orchestrator';
 import {
   COVERAGE_FILL_HARD_RULES,
   evaluateHardConstraintLegality,
@@ -189,15 +190,30 @@ function verifyScenarioSchedule(
   assignments: Record<string, Record<number, ShiftType>>,
   context: ScenarioContext
 ): VerifiedSchedule {
-  const reconciled = reconcileStaffingCoverage(
+  const calendarDays = generateJalaliMonthCalendar(
+    context.year,
+    context.month,
+    context.customHolidays,
+    context.firstDayOfWeekIndex
+  ).map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek }));
+  const coverageReconciled = reconcileStaffingCoverage(
     assignments,
     context.personnelList,
     context.settings,
-    generateJalaliMonthCalendar(context.year, context.month, context.customHolidays, context.firstDayOfWeekIndex).map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
+    calendarDays,
     context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
     context.lockedRows,
     context.requests
   ).assignments;
+  const reconciled = repairScheduleBeforeWarnings({
+    assignments: coverageReconciled,
+    personnelList: context.personnelList,
+    settings: context.settings,
+    calendarDays,
+    requests: context.requests,
+    targetJobGroups: context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
+    lockedRows: context.lockedRows,
+  }).assignments;
 
   const verification = verifyCoverageAndLeaders(
     context.year, context.month, context.personnelList, reconciled, context.settings,
