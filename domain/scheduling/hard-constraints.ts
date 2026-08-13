@@ -58,7 +58,6 @@ export type HardConstraintViolation =
   | 'PROTECTED_CELL'
   | 'MORNING_ONLY'
   | 'NIGHT_REST_CONSECUTIVE_NIGHTS'
-  | 'NIGHT_REST_MORNING_AFTER_NIGHT'
   | 'MAX_CONSECUTIVE'
   | 'UNKNOWN_SHIFT';
 
@@ -72,7 +71,6 @@ export const HARD_CONSTRAINT_LABELS: Readonly<Record<HardConstraintViolation, st
   PROTECTED_CELL: 'ویرایش دستی سرپرستار',
   MORNING_ONLY: 'محدودیت صبح‌کاری سرپرستار/استاف',
   NIGHT_REST_CONSECUTIVE_NIGHTS: 'سقف شب متوالی',
-  NIGHT_REST_MORNING_AFTER_NIGHT: 'استراحت پس از شب',
   MAX_CONSECUTIVE: 'سقف شیفت متوالی',
   UNKNOWN_SHIFT: 'شیفت ناشناخته',
 };
@@ -244,9 +242,7 @@ export function violatesNightRest(
   candidateShift: ShiftType
 ): HardConstraintViolation | null {
   const violation = wouldViolateNightRest(assignments, personnelId, day, candidateShift);
-  if (violation === 'CONSECUTIVE_NIGHTS') return 'NIGHT_REST_CONSECUTIVE_NIGHTS';
-  if (violation === 'MORNING_AFTER_NIGHT') return 'NIGHT_REST_MORNING_AFTER_NIGHT';
-  return null;
+  return violation === 'CONSECUTIVE_NIGHTS' ? 'NIGHT_REST_CONSECUTIVE_NIGHTS' : null;
 }
 
 // ---------------------------------------------------------------------------

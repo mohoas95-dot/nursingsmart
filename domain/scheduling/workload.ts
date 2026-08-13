@@ -25,7 +25,7 @@ export const HEAVY_SHIFT_WORKLOAD_THRESHOLD = 2;
 /** Maximum consecutive N-bearing calendar days permitted by the current model. */
 export const MAX_CONSECUTIVE_NIGHTS = 2;
 
-export type NightRestViolation = 'CONSECUTIVE_NIGHTS' | 'MORNING_AFTER_NIGHT';
+export type NightRestViolation = 'CONSECUTIVE_NIGHTS';
 
 /** Small ranking cost for legal work on a post-heavy day with no explicit plan. */
 export const POST_HEAVY_OFF_PREFERENCE_PENALTY = 25;
@@ -109,9 +109,9 @@ export function shiftContainsNight(shift: ShiftType | undefined): boolean {
 }
 
 /**
- * Authoritative current night-rest check. It is intentionally calendar-day based,
- * unlike weighted workload runs: no third consecutive N-bearing day and no M on
- * the day immediately following any N-bearing shift.
+ * Authoritative night-rest check. It is intentionally separate from weighted
+ * workload runs and only limits a third consecutive N-bearing calendar day.
+ * In particular, it does not prohibit M after N.
  */
 export function wouldViolateNightRest(
   assignments: AssignmentMap,
@@ -126,11 +126,6 @@ export function wouldViolateNightRest(
       consecutive += 1;
       if (consecutive >= MAX_CONSECUTIVE_NIGHTS) return 'CONSECUTIVE_NIGHTS';
     }
-  }
-
-  if (shiftContainsComponent(candidateShift, 'M') && day > 1
-    && shiftContainsNight(assignments[personnelId]?.[day - 1])) {
-    return 'MORNING_AFTER_NIGHT';
   }
 
   return null;

@@ -64,6 +64,28 @@ test('workload engine: MEN→M is legal and MEN→ME is illegal', () => {
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p', 2, 'ME', TOTAL_DAYS), true);
 });
 
+test('workload engine: requested N combinations obey only the cap arithmetic', () => {
+  const legal: Array<[string, Record<number, string>, string]> = [
+    ['N→M', { 1: 'N' }, 'M'],
+    ['N→E', { 1: 'N' }, 'E'],
+    ['EN→M', { 1: 'EN' }, 'M'],
+    ['N→EN', { 1: 'N' }, 'EN'],
+    ['EN→E', { 1: 'EN' }, 'E'],
+    ['MEN→M', { 1: 'MEN' }, 'M'],
+  ];
+  for (const [label, assignments, candidate] of legal) {
+    assert.equal(wouldBreachConsecutiveCap({ p: assignments }, 'p', 2, candidate, TOTAL_DAYS), false, `${label} must stay legal at or below the cap`);
+  }
+
+  const illegal: Array<[string, Record<number, string>, string]> = [
+    ['MEN→ME', { 1: 'MEN' }, 'ME'],
+    ['N→MEN', { 1: 'N' }, 'MEN'],
+  ];
+  for (const [label, assignments, candidate] of illegal) {
+    assert.equal(wouldBreachConsecutiveCap({ p: assignments }, 'p', 2, candidate, TOTAL_DAYS), true, `${label} must exceed the cap`);
+  }
+});
+
 test('workload engine: N weighs two and MN has separated runs', () => {
   assert.equal(getShiftWorkload('N'), 2);
   assert.equal(getShiftWorkload('MEN'), 4);
@@ -117,7 +139,7 @@ test('reconcile leaves coverage unresolved rather than breaching the workload ca
   assert.ok(result.unresolvedGaps.some(gap => gap.day === 2 && gap.shift === 'E'), 'MEN→ME would be six units and must remain unresolved');
 });
 
-test('hard evaluator: third N-bearing day and M after an N-bearing day are illegal', () => {
+test('hard evaluator: third N-bearing day is illegal, but M after N is legal', () => {
   const person = makePerson('p');
   const nightAssignments = { p: { 1: 'N', 2: 'EN', 3: 'OFF' } };
   assert.equal(wouldViolateNightRest(nightAssignments, 'p', 3, 'MN'), 'CONSECUTIVE_NIGHTS');
@@ -132,17 +154,24 @@ test('hard evaluator: third N-bearing day and M after an N-bearing day are illeg
     decision(person, { p: { 1: 'EN', 2: 'OFF' } }, 2, 'M'),
     ALL_HARD_RULES
   );
-  assert.equal(afterEN.legal, false);
-  assert.ok(afterEN.violations.includes('NIGHT_REST_MORNING_AFTER_NIGHT'));
+  assert.equal(afterEN.legal, true, 'EN→M is legal when the workload cap is not exceeded');
+  assert.ok(!afterEN.violations.includes('MAX_CONSECUTIVE'));
+  assert.ok(!afterEN.violations.some(violation => violation.startsWith('NIGHT_REST')));
+
+  const explicitM = resolveLegalShiftForRequest(
+    { person, day: 2, dayOfWeek: 0, isHoliday: false, assignments: { p: { 1: 'N', 2: 'OFF' } }, totalDays: TOTAL_DAYS, requests: [] },
+    'M'
+  );
+  assert.equal(explicitM.shift, 'M', 'explicit M after N is legal under the shared evaluator');
 });
 
-test('hard evaluator: MEN→M is workload-legal but night-rest-illegal', () => {
+test('hard evaluator: MEN→M is legal in both workload and shared hard evaluation', () => {
   const person = makePerson('p');
   const assignments = { p: { 1: 'MEN', 2: 'OFF' } };
   assert.equal(wouldBreachConsecutiveCap(assignments, 'p', 2, 'M', TOTAL_DAYS), false);
   const result = evaluateHardConstraintLegality(decision(person, assignments, 2, 'M'), ALL_HARD_RULES);
-  assert.equal(result.legal, false);
-  assert.deepEqual(result.violations, ['NIGHT_REST_MORNING_AFTER_NIGHT']);
+  assert.equal(result.legal, true);
+  assert.deepEqual(result.violations, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -231,7 +260,7 @@ test('final verification detects externally inserted Supervisor/Staff E/N assign
   assert.deepEqual(violations.map(w => w.personnelId).sort(), ['staff', 'sup']);
 });
 
-test('final verification detects third N-bearing day and M after N-bearing day', () => {
+test('final verification detects a third N-bearing day but not M after N', () => {
   const person = makePerson('p');
   const verified = verifyCoverageAndLeaders(
     CAL_YEAR,
@@ -245,7 +274,7 @@ test('final verification detects third N-bearing day and M after N-bearing day',
   );
   const nightWarnings = verified.structuredWarnings.filter(w => w.code === 'NIGHT_REST');
   assert.ok(nightWarnings.some(w => w.day === 3), 'third N-bearing day is reported');
-  assert.ok(nightWarnings.some(w => w.day === 6), 'M immediately after N-bearing day is reported');
+  assert.ok(!nightWarnings.some(w => w.day === 6), 'M after N must not produce a night-rest warning');
 });
 
 // ---------------------------------------------------------------------------
@@ -261,7 +290,9 @@ test('post-heavy OFF preference is workload-derived and does not make work illeg
   assert.equal(evaluatePostHeavyOffPreference({ p: { 1: 'MN' } }, 'p', 2).preferOff, true, 'MN is heavy from authoritative component workload');
 
   const legalE = evaluateHardConstraintLegality(decision(person, assignments, 2, 'E'), ALL_HARD_RULES);
-  assert.equal(legalE.legal, true, 'E after N is legal; only M-after-N is hard-illegal');
+  const legalM = evaluateHardConstraintLegality(decision(person, assignments, 2, 'M'), ALL_HARD_RULES);
+  assert.equal(legalE.legal, true, 'E after N is legal');
+  assert.equal(legalM.legal, true, 'post-heavy preference must not make N→M illegal');
 });
 
 test('coverage and explicit request may legally override post-heavy OFF preference', () => {

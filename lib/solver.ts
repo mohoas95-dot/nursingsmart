@@ -1822,7 +1822,7 @@ export function verifyCoverageAndLeaders(
       );
 
       for (const violation of violations) {
-        if (violation === 'NIGHT_REST_CONSECUTIVE_NIGHTS' || violation === 'NIGHT_REST_MORNING_AFTER_NIGHT') {
+        if (violation === 'NIGHT_REST_CONSECUTIVE_NIGHTS') {
           warnings.push(createScheduleWarning({
             code: 'NIGHT_REST',
             message: `Night Rest: نقض استراحت شب برای ${person.firstName} ${person.lastName} در روز ${d} (شیفت ${assigned})`,
