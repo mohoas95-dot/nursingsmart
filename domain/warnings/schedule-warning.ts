@@ -47,6 +47,11 @@ import type { JobGroup, ShiftType } from '../../lib/types';
  *   | ISOLATED_SHIFT        | `Isolated Shift:`         |
  *   | ISOLATED_SHIFT_FIXED  | `Isolated Shift Fixed:`   |
  *   | OFF_REMOVED           | `OFF Removed:`            |
+ *
+ * کدِ `HARD_CONSTRAINT_CONFLICT` تازه است و پیشوند تاریخی ندارد: زمانی تولید
+ * می‌شود که یک قاعدهٔ کم‌اولویت‌تر (شکستن آفِ متوالی، یا یک درخواست شیفت صریح)
+ * به‌دلیل برخورد با یک محدودیت سخت اعمال نشده باشد. این هشدار «تعارض قوانین» را
+ * صریح می‌کند تا هیچ محدودیت سختی در سکوت نقض یا نادیده گرفته نشود.
  */
 export type ScheduleWarningCode =
   | 'COVERAGE_SHORTAGE'
@@ -59,7 +64,8 @@ export type ScheduleWarningCode =
   | 'LEAVE_CONTINUITY'
   | 'ISOLATED_SHIFT'
   | 'ISOLATED_SHIFT_FIXED'
-  | 'OFF_REMOVED';
+  | 'OFF_REMOVED'
+  | 'HARD_CONSTRAINT_CONFLICT';
 
 // ---------------------------------------------------------------------------
 // شدت هشدار
@@ -141,6 +147,9 @@ export function isCriticalWarningCode(code: ScheduleWarningCode): boolean {
 export function defaultSeverityForCode(code: ScheduleWarningCode): ScheduleWarningSeverity {
   if (isCriticalWarningCode(code)) return 'critical';
   if (code === 'ISOLATED_SHIFT_FIXED' || code === 'OFF_REMOVED') return 'info';
+  // HARD_CONSTRAINT_CONFLICT عمداً بحرانی نیست: محدودیت سخت رعایت شده و چیزی
+  // نقض نشده؛ فقط یک قاعدهٔ کم‌اولویت‌تر اعمال‌نشدنی بوده است. بحرانی‌کردن آن
+  // سیاست طبقه‌بندی سطح A و رتبه‌بندی سناریوها را تغییر می‌داد.
   return 'warning';
 }
 

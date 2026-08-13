@@ -193,7 +193,7 @@ export async function runOptimizerFacade(
       mergedAssignments,
       personnel,
       settings,
-      calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+      calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
       [jobGroup],
       lockState.lockedRows,
       requests
@@ -337,7 +337,7 @@ export async function applyManualShiftChangeFacade(
       : ['nurse', 'assistant'];
 
     const calendar = generateJalaliMonthCalendar(year, month, holidays, firstDayOfWeek);
-    const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+    const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday, dayOfWeek: d.dayOfWeek }));
 
     let reconciledAssignments = updatedAssignments;
     const MAX_RECONCILE_PASSES = 3;

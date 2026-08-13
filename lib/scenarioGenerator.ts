@@ -188,7 +188,7 @@ function verifyScenarioSchedule(
     assignments,
     context.personnelList,
     context.settings,
-    generateJalaliMonthCalendar(context.year, context.month, context.customHolidays, context.firstDayOfWeekIndex).map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+    generateJalaliMonthCalendar(context.year, context.month, context.customHolidays, context.firstDayOfWeekIndex).map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
     context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
     context.lockedRows,
     context.requests

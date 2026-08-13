@@ -23,6 +23,15 @@ import {
   warningMessages,
   type ScheduleWarning,
 } from '../domain/warnings/schedule-warning';
+import {
+  COVERAGE_FILL_HARD_RULES,
+  EMERGENCY_FILL_HARD_RULES,
+  EXPLICIT_REQUEST_HARD_RULES,
+  HARD_CONSTRAINT_LABELS,
+  OFF_BREAKER_HARD_RULES,
+  evaluateHardConstraints,
+  resolveLegalShiftForRequest,
+} from '../domain/scheduling/hard-constraints';
 
 // Shift durations in hours
 export const SHIFT_HOURS: { [key in ShiftType]: number } = {
@@ -394,6 +403,26 @@ export function solveWithPriority(
             if ((assignments[person.id]?.[d] || 'OFF') !== 'OFF') continue;
             // ====== سطح A: سقف ۵ شیفت متوالی خط قرمز مطلق ======
             if (wouldBreachConsecutiveCap(assignments, person.id, d, shiftType, totalDays)) continue;
+            // ====== سطح A: همان محدودیت‌های سختِ جبران پوشش ======
+            // این مسیر هم «کمبود پوشش» را پر می‌کند، پس دقیقاً از همان قرارداد
+            // مشترکِ reconcile پیروی می‌کند: صبح‌کاریِ سرپرستار/استاف و استراحت
+            // شب. اگر نامزد قانونی نماند، کمبود گزارش می‌شود (پایین‌تر) و هیچ
+            // محدودیت سختی برای پر کردن پوشش شکسته نمی‌شود.
+            const coverageViolation = evaluateHardConstraints(
+              {
+                person,
+                day: d,
+                dayOfWeek: calendar[d - 1].dayOfWeek,
+                isHoliday: calendar[d - 1].isHoliday,
+                period: shiftType,
+                candidateShift: shiftType,
+                assignments,
+                totalDays,
+                requests,
+              },
+              COVERAGE_FILL_HARD_RULES
+            );
+            if (coverageViolation) continue;
 
             if (!assignments[person.id]) assignments[person.id] = {};
             assignments[person.id][d] = shiftType;
@@ -655,6 +684,63 @@ export function solveNursingSchedule(
     }
   });
 
+  // ====== قرارداد اولویت برای «درخواست شیفت صریح» ======
+  //   ۱) محدودیت‌های سخت  ۲) قفل/محافظت  ۳) درخواست صریح  ۴) سایر ترجیحات
+  //
+  // درخواست صریح همچنان یک ورودیِ با اولویت بسیار بالاست و پیش از چینش حریصانه
+  // نوشته می‌شود، اما دیگر بدون بررسی نوشته نمی‌شود: اگر با یک محدودیت سخت
+  // (آف قطعی، مرخصی، استراحت شب، سقف شیفت متوالی) برخورد کند، اعمال نمی‌شود و
+  // تعارض به‌صورت هشدار ساخت‌یافته گزارش می‌گردد. روزها به‌ترتیب پردازش می‌شوند،
+  // پس ارزیابی هر روز روی وضعیت واقعیِ روزهای پیشین انجام می‌شود.
+  // اگر شیفت کاملِ درخواستی مجاز نباشد، بزرگ‌ترین زیرمجموعهٔ قانونی آن اعمال
+  // می‌شود (مثلاً وقتی شبِ سوم متوالی ممنوع است، از EN فقط E می‌ماند) تا درخواست
+  // به‌خاطر یک تعارض جزئی کاملاً دور ریخته نشود. اگر هیچ زیرمجموعه‌ای قانونی
+  // نباشد، هیچ چیزی نوشته نمی‌شود.
+  const applyExplicitShiftRequest = (
+    p: Personnel,
+    d: number,
+    preferredShift: ShiftType
+  ): boolean => {
+    const resolution = resolveLegalShiftForRequest(
+      {
+        person: p,
+        day: d,
+        dayOfWeek: calendar[d - 1].dayOfWeek,
+        isHoliday: calendar[d - 1].isHoliday,
+        assignments,
+        totalDays,
+        requests,
+      },
+      preferredShift,
+      EXPLICIT_REQUEST_HARD_RULES
+    );
+
+    if (resolution.shift) {
+      assignments[p.id][d] = resolution.shift;
+    }
+    if (resolution.exact) return true;
+
+    const blockedLabel = resolution.blockedBy
+      ? HARD_CONSTRAINT_LABELS[resolution.blockedBy]
+      : 'محدودیت سخت';
+    const outcome = resolution.shift
+      ? `به بیشترین حد مجاز (${resolution.shift}) کاهش یافت`
+      : 'اعمال نشد';
+    warnings.push(createScheduleWarning({
+      code: 'HARD_CONSTRAINT_CONFLICT',
+      message: `Hard Constraint Conflict: درخواست شیفت ${preferredShift} پرسنل ${p.firstName} ${p.lastName} در روز ${d} ${outcome}؛ ${blockedLabel} یک محدودیت سخت است و بر درخواست مقدم می‌شود`,
+      day: d,
+      shift: preferredShift,
+      personnelId: p.id,
+      metadata: {
+        rule: 'explicit_shift_request',
+        blockedBy: resolution.blockedBy ?? 'UNKNOWN',
+        appliedShift: resolution.shift ?? 'OFF',
+      },
+    }));
+    return !!resolution.shift;
+  };
+
   // 3. Apply Explicit OFF and Shift Requests
   for (let d = 1; d <= totalDays; d++) {
     activePersonnel.forEach(p => {
@@ -666,10 +752,29 @@ export function solveNursingSchedule(
       if (req.requestType === 'OFF') {
         assignments[p.id][d] = 'OFF';
       } else if (req.requestType === 'shift' && req.preferredShift && req.preferredShift !== 'L') {
-        assignments[p.id][d] = req.preferredShift as ShiftType;
+        applyExplicitShiftRequest(p, d, req.preferredShift as ShiftType);
       }
     });
   }
+
+  // چینش پیش‌فرضِ سرپرستار/استاف در روز کاری، صبح است؛ اما همین پیش‌فرض هم اگر
+  // یک محدودیت سخت (استراحت شب یا سقف شیفت متوالی) را بشکند، به آف تبدیل می‌شود.
+  const assignMorningOrRest = (p: Personnel, d: number): ShiftType => {
+    const violation = evaluateHardConstraints(
+      {
+        person: p,
+        day: d,
+        dayOfWeek: calendar[d - 1].dayOfWeek,
+        isHoliday: calendar[d - 1].isHoliday,
+        candidateShift: 'M',
+        assignments,
+        totalDays,
+        requests,
+      },
+      { nightRest: true, consecutiveCap: true }
+    );
+    return violation ? 'OFF' : 'M';
+  };
 
   // 4. Force default supervisor and staff constraints
   const supervisorAndStaff = activePersonnel.filter(p => p.position === 'supervisor' || p.position === 'staff');
@@ -685,9 +790,14 @@ export function solveNursingSchedule(
       const isHoliday = calendar[d - 1].isHoliday;
       const req = dailyRequests[p.id][d];
       
+      // درخواست صریحِ سرپرستار/استاف هم از همان قرارداد اولویت پیروی می‌کند:
+      // محدودیت سخت > درخواست صریح. اگر اعمال نشد، روز طبق قاعدهٔ پیش‌فرض
+      // (آف در تعطیل، صبح در روز کاری) چیده می‌شود.
       if (isHoliday) {
         if (req && req.requestType === 'shift' && req.preferredShift && req.preferredShift !== 'OFF' && req.preferredShift !== 'L') {
-          assignments[p.id][d] = req.preferredShift as ShiftType;
+          if (!applyExplicitShiftRequest(p, d, req.preferredShift as ShiftType)) {
+            assignments[p.id][d] = 'OFF';
+          }
         } else {
           assignments[p.id][d] = 'OFF';
         }
@@ -699,12 +809,14 @@ export function solveNursingSchedule(
           if (req.requestType === 'OFF') {
             assignments[p.id][d] = 'OFF';
           } else if (req.requestType === 'shift' && req.preferredShift && req.preferredShift !== 'L') {
-            assignments[p.id][d] = req.preferredShift as ShiftType;
+            if (!applyExplicitShiftRequest(p, d, req.preferredShift as ShiftType)) {
+              assignments[p.id][d] = assignMorningOrRest(p, d);
+            }
           } else {
-            assignments[p.id][d] = 'M';
+            assignments[p.id][d] = assignMorningOrRest(p, d);
           }
         } else {
-          assignments[p.id][d] = 'M';
+          assignments[p.id][d] = assignMorningOrRest(p, d);
         }
       }
     }
@@ -1217,23 +1329,35 @@ export function solveNursingSchedule(
           if (shiftChar === 'N' && (currentShift === 'N' || currentShift === 'EN' || currentShift === 'MN' || currentShift === 'MEN')) return false;
 
           // ====== قانون اولویت‌بندی بن‌بست ======
-          // Hard OFF (سطح B بالا): solver حق ندارد نقض کند حتی در مسیر اضطراری.
-          const hardOffRequest = requests.find(r =>
-            r.personnelId === p.id &&
-            r.requestType === 'OFF' &&
-            (r.offHardness === 'hard' || !r.offHardness) &&
-            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
-          );
-          if (hardOffRequest) return false;
+          // مسیر اضطراری هم یک «جبران‌کنندهٔ پوشش» است و از همان قرارداد مشترکِ
+          // reconcile پیروی می‌کند: آف قطعی، مرخصیِ ضروری، صبح‌کاریِ سرپرستار/
+          // استاف و استراحت شب حتی در بن‌بست شکسته نمی‌شوند. Soft OFF همچنان
+          // قابل نقض است (پایین‌تر، فقط با اولویت آخر) و سقف شیفت متوالی هم مثل
+          // قبل صرفاً به ته صف رانده می‌شود، نه فیلترِ سخت.
+          const prospectiveShift = ((): ShiftType => {
+            if (currentShift === 'OFF') return shiftChar;
+            if (currentShift === 'M' && shiftChar === 'E') return 'ME';
+            if (currentShift === 'M' && shiftChar === 'N') return 'MN';
+            if (currentShift === 'E' && shiftChar === 'N') return 'EN';
+            if (currentShift === 'ME' && shiftChar === 'N') return 'MEN';
+            return currentShift;
+          })();
 
-          // Leave با isEssential: نقض نمی‌شود.
-          const essentialLeaveRequest = requests.find(r =>
-            r.personnelId === p.id &&
-            r.requestType === 'leave' &&
-            r.isEssential &&
-            isDayInRequestScope(d, calendar[d - 1].dayOfWeek, r)
+          const emergencyViolation = evaluateHardConstraints(
+            {
+              person: p,
+              day: d,
+              dayOfWeek: calendar[d - 1].dayOfWeek,
+              isHoliday,
+              period: shiftChar,
+              candidateShift: prospectiveShift,
+              assignments,
+              totalDays,
+              requests,
+            },
+            EMERGENCY_FILL_HARD_RULES
           );
-          if (essentialLeaveRequest) return false;
+          if (emergencyViolation) return false;
 
           return true;
         });
@@ -1447,6 +1571,38 @@ export function solveNursingSchedule(
       if (assignments[p.id][d] === 'OFF') {
         consecutiveOff++;
         if (consecutiveOff > 3) {
+          // ====== سقف ۳ روز آف متوالی، یک قاعدهٔ کم‌اولویت است ======
+          // این قاعده حق ندارد یک محدودیت سخت را بشکند. آفِ قطعی (Hard OFF) و
+          // مرخصیِ ضروری غیرقابل‌تغییرند؛ اگر زنجیرهٔ آف به‌دلیل آن‌ها بلند شده
+          // باشد، هیچ شیفتی به‌زور داخل زنجیره گذاشته نمی‌شود و تعارض به‌صورت
+          // هشدار ساخت‌یافته گزارش می‌شود. آفِ ترجیحی (Soft OFF) طبق سیاست فعلی
+          // همچنان قابل شکستن است — تفاوت Hard/Soft اینجا واقعی و صریح است.
+          const dayOfWeek = calendar[d - 1].dayOfWeek;
+          const blockingViolation = evaluateHardConstraints(
+            {
+              person: p,
+              day: d,
+              dayOfWeek,
+              isHoliday: calendar[d - 1].isHoliday,
+              candidateShift: 'M',
+              assignments,
+              totalDays,
+              requests,
+            },
+            OFF_BREAKER_HARD_RULES
+          );
+
+          if (blockingViolation) {
+            warnings.push(createScheduleWarning({
+              code: 'HARD_CONSTRAINT_CONFLICT',
+              message: `Hard Constraint Conflict: زنجیرهٔ آف پرسنل ${p.firstName} ${p.lastName} در روز ${d} از سقف ۳ روز متوالی گذشته است، اما به دلیل ${HARD_CONSTRAINT_LABELS[blockingViolation]} این روز تغییر نمی‌کند (محدودیت سخت مقدم است)`,
+              day: d,
+              personnelId: p.id,
+              metadata: { rule: 'consecutive_off_cap', blockedBy: blockingViolation },
+            }));
+            continue;
+          }
+
           const shouldAvoidM = avoidedShifts[p.id]?.[d]?.has('M');
           if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
             assignments[p.id][d] = 'M';
@@ -1562,7 +1718,9 @@ export function solveNursingSchedule(
     assignments,
     activePersonnel,
     settings,
-    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday })),
+    // dayOfWeek نیز پاس داده می‌شود تا محدودیت‌های سختِ وابسته به روزِ هفته
+    // (مثل «آف قطعیِ پنجشنبه‌ها») دقیق ارزیابی شوند، نه محافظه‌کارانه.
+    calendar.map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
     ['nurse', 'assistant'],
     [],
     requests
