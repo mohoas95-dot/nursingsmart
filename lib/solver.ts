@@ -17,6 +17,12 @@ import {
   shiftMatchesRoutine,
   wouldBreachConsecutiveCap,
 } from '../domain/scheduling/smart-rules';
+import {
+  createScheduleWarning,
+  dedupeScheduleWarningsByMessage,
+  warningMessages,
+  type ScheduleWarning,
+} from '../domain/warnings/schedule-warning';
 
 // Shift durations in hours
 export const SHIFT_HOURS: { [key in ShiftType]: number } = {
@@ -498,7 +504,9 @@ export function solveNursingSchedule(
     return count;
   };
 
-  const warnings: string[] = [];
+  // هشدارهای میان‌حل به‌صورت ساخت‌یافته انباشته می‌شوند؛ متن نمایشیِ تاریخی
+  // همان‌طور ساخته می‌شود و تنها هنگام خروجی به رشته تبدیل می‌گردد.
+  const warnings: ScheduleWarning[] = [];
   const shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } = {};
   for (let d = 1; d <= totalDays; d++) {
     shiftLeaders[d] = {};
@@ -1312,7 +1320,14 @@ export function solveNursingSchedule(
 
         if (gap > 0) {
           const grpName = group[0]?.jobGroup === 'assistant' ? 'کمک بهیار' : 'پرستار';
-          warnings.push(`Coverage Shortage: کمبود نیرو (${grpName}) در روز ${d} شیفت ${shiftChar}`);
+          warnings.push(createScheduleWarning({
+            code: 'COVERAGE_SHORTAGE',
+            message: `Coverage Shortage: کمبود نیرو (${grpName}) در روز ${d} شیفت ${shiftChar}`,
+            day: d,
+            shift: shiftChar,
+            jobGroup: group[0]?.jobGroup === 'assistant' ? 'assistant' : 'nurse',
+            metadata: { remainingShortage: gap },
+          }));
         }
       }
     };
@@ -1377,7 +1392,14 @@ export function solveNursingSchedule(
       if (replacement) {
         assignments[p.id][d] = 'OFF';
         assignments[replacement.id][d] = shift;
-        warnings.push(`Isolated Shift Fixed: شیفت تک (${shift}) پرسنل ${p.firstName} ${p.lastName} در روز ${d} برای حفظ الگوی پیوسته به ${replacement.firstName} ${replacement.lastName} منتقل شد`);
+        warnings.push(createScheduleWarning({
+          code: 'ISOLATED_SHIFT_FIXED',
+          message: `Isolated Shift Fixed: شیفت تک (${shift}) پرسنل ${p.firstName} ${p.lastName} در روز ${d} برای حفظ الگوی پیوسته به ${replacement.firstName} ${replacement.lastName} منتقل شد`,
+          day: d,
+          shift,
+          personnelId: p.id,
+          metadata: { movedToPersonnelId: replacement.id },
+        }));
       }
     }
   });
@@ -1395,12 +1417,26 @@ export function solveNursingSchedule(
         const shouldAvoidM = avoidedShifts[p.id]?.[d]?.has('M');
         if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
           assignments[p.id][d] = 'M';
-          warnings.push(`OFF Removed: حذف OFF ناخواسته پرسنل ${p.firstName} ${p.lastName} در روز ${d} به دلیل قانون ممنوعیت آف بعد از مرخصی`);
+          warnings.push(createScheduleWarning({
+            code: 'OFF_REMOVED',
+            message: `OFF Removed: حذف OFF ناخواسته پرسنل ${p.firstName} ${p.lastName} در روز ${d} به دلیل قانون ممنوعیت آف بعد از مرخصی`,
+            day: d,
+            shift: 'M',
+            personnelId: p.id,
+            metadata: { reason: 'off_after_leave' },
+          }));
         } else {
           const shouldAvoidE = avoidedShifts[p.id]?.[d]?.has('E');
           if (!shouldAvoidE && !wouldBreachConsecutiveCap(assignments, p.id, d, 'E', totalDays)) {
             assignments[p.id][d] = 'E';
-            warnings.push(`OFF Removed: حذف OFF ناخواسته پرسنل ${p.firstName} ${p.lastName} در روز ${d} به دلیل قانون ممنوعیت آف بعد از مرخصی (تبدیل به عصر به دلیل محدودیت شیفت صبح)`);
+            warnings.push(createScheduleWarning({
+              code: 'OFF_REMOVED',
+              message: `OFF Removed: حذف OFF ناخواسته پرسنل ${p.firstName} ${p.lastName} در روز ${d} به دلیل قانون ممنوعیت آف بعد از مرخصی (تبدیل به عصر به دلیل محدودیت شیفت صبح)`,
+              day: d,
+              shift: 'E',
+              personnelId: p.id,
+              metadata: { reason: 'off_after_leave' },
+            }));
           }
         }
       }
@@ -1415,13 +1451,27 @@ export function solveNursingSchedule(
           if (!shouldAvoidM && !wouldBreachConsecutiveCap(assignments, p.id, d, 'M', totalDays)) {
             assignments[p.id][d] = 'M';
             consecutiveOff = 0;
-            warnings.push(`OFF Removed: لغو مرخصی آف یا آف متوالی ۴ روزه پرسنل ${p.firstName} ${p.lastName} در روز ${d} جهت رعایت سقف ۳ روز متوالی`);
+            warnings.push(createScheduleWarning({
+              code: 'OFF_REMOVED',
+              message: `OFF Removed: لغو مرخصی آف یا آف متوالی ۴ روزه پرسنل ${p.firstName} ${p.lastName} در روز ${d} جهت رعایت سقف ۳ روز متوالی`,
+              day: d,
+              shift: 'M',
+              personnelId: p.id,
+              metadata: { reason: 'consecutive_off_cap' },
+            }));
           } else {
             const shouldAvoidE = avoidedShifts[p.id]?.[d]?.has('E');
             if (!shouldAvoidE && !wouldBreachConsecutiveCap(assignments, p.id, d, 'E', totalDays)) {
               assignments[p.id][d] = 'E';
               consecutiveOff = 0;
-              warnings.push(`OFF Removed: لغو مرخصی آف یا آف متوالی ۴ روزه پرسنل ${p.firstName} ${p.lastName} در روز ${d} جهت رعایت سقف ۳ روز متوالی (تبدیل به عصر به دلیل محدودیت صبح)`);
+              warnings.push(createScheduleWarning({
+                code: 'OFF_REMOVED',
+                message: `OFF Removed: لغو مرخصی آف یا آف متوالی ۴ روزه پرسنل ${p.firstName} ${p.lastName} در روز ${d} جهت رعایت سقف ۳ روز متوالی (تبدیل به عصر به دلیل محدودیت صبح)`,
+                day: d,
+                shift: 'E',
+                personnelId: p.id,
+                metadata: { reason: 'consecutive_off_cap' },
+              }));
             }
           }
         }
@@ -1458,7 +1508,14 @@ export function solveNursingSchedule(
       if (candidates.length > 0) {
         shiftLeaders[d].morning = candidates[0].id;
       } else {
-        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
+        warnings.push(createScheduleWarning({
+          code: 'MISSING_SHIFT_LEADER',
+          message: `Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`,
+          day: d,
+          shift: 'M',
+          jobGroup: 'nurse',
+          metadata: { period: 'صبح', isHoliday: true },
+        }));
       }
     }
 
@@ -1468,7 +1525,14 @@ export function solveNursingSchedule(
       if (candidates.length > 0) {
         shiftLeaders[d].afternoon = candidates[0].id;
       } else {
-        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
+        warnings.push(createScheduleWarning({
+          code: 'MISSING_SHIFT_LEADER',
+          message: `Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`,
+          day: d,
+          shift: 'E',
+          jobGroup: 'nurse',
+          metadata: { period: 'عصر', isHoliday: isHolidayDay },
+        }));
       }
     }
 
@@ -1478,7 +1542,14 @@ export function solveNursingSchedule(
       if (candidates.length > 0) {
         shiftLeaders[d].night = candidates[0].id;
       } else {
-        warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
+        warnings.push(createScheduleWarning({
+          code: 'MISSING_SHIFT_LEADER',
+          message: `Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`,
+          day: d,
+          shift: 'N',
+          jobGroup: 'nurse',
+          metadata: { period: 'شب', isHoliday: isHolidayDay },
+        }));
       }
     }
   }
@@ -1510,9 +1581,10 @@ export function solveNursingSchedule(
   );
   // Coverage messages emitted before the final reconciliation are stale. The
   // verifier is the single source of truth for any genuinely unresolved mismatch.
-  const nonCoverageWarnings = warnings.filter(warning =>
-    !warning.startsWith('Coverage Shortage:') && !warning.startsWith('Overstaffing:')
-  );
+  // فیلتر با کد ساخت‌یافتهٔ هشدار انجام می‌شود، نه بر اساس پیشوندِ متن نمایشی.
+  const nonCoverageWarnings = warningMessages(warnings.filter(warning =>
+    warning.code !== 'COVERAGE_SHORTAGE' && warning.code !== 'OVERSTAFFING'
+  ));
   const combinedWarnings = Array.from(new Set([...nonCoverageWarnings, ...verification.warnings]));
 
   return {
@@ -1525,6 +1597,14 @@ export function solveNursingSchedule(
 }
 
 // ====== تابع verifyCoverageAndLeaders ======
+/**
+ * منبع حقیقتِ بازرسی نهایی: هم «هشدارهای رشته‌ای» (قالب ذخیره‌سازی/نمایش فعلی)
+ * و هم «هشدارهای ساخت‌یافته» (ScheduleWarning) را برمی‌گرداند. این دو خروجی
+ * ۱:۱ و هم‌ترازند: `warnings[i] === structuredWarnings[i].message`.
+ *
+ * مصرف‌کنندهٔ ماشینی باید از structuredWarnings (کد/روز/شیفت/پرسنل) استفاده کند
+ * و نباید متن فارسیِ نمایشی را با regex تجزیه کند.
+ */
 export function verifyCoverageAndLeaders(
   year: number,
   month: number,
@@ -1534,12 +1614,37 @@ export function verifyCoverageAndLeaders(
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
   requests: readonly ShiftRequest[] = []
-): { warnings: string[], shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } } {
+): { warnings: string[], structuredWarnings: ScheduleWarning[], shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } } {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
-  const warnings: string[] = [];
+  const warnings: ScheduleWarning[] = [];
   const shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } = {};
   for (let i = 1; i <= totalDays; i++) shiftLeaders[i] = {};
+
+  /**
+   * سازندهٔ داخلیِ هشدار پوشش (کمبود/مازاد) — متن نمایشی دقیقاً همان قالب تاریخی
+   * است؛ تغییر فقط در این است که روز/شیفت/گروه به‌صورت ساخت‌یافته همراه هشدار
+   * نگهداری می‌شود و دیگر نیازی به استخراج آن‌ها از متن فارسی نیست.
+   */
+  const pushCoverageWarning = (
+    code: 'COVERAGE_SHORTAGE' | 'OVERSTAFFING',
+    jobGroup: JobGroup,
+    day: number,
+    shift: 'M' | 'E' | 'N',
+    assigned: number,
+    demanded: number
+  ) => {
+    const groupLabel = jobGroup === 'assistant' ? 'کمک بهیار' : 'پرستار';
+    const prefix = code === 'COVERAGE_SHORTAGE' ? 'Coverage Shortage: کمبود نیرو' : 'Overstaffing: نیروی مازاد';
+    warnings.push(createScheduleWarning({
+      code,
+      message: `${prefix} (${groupLabel}) در روز ${day} شیفت ${shift}`,
+      day,
+      shift,
+      jobGroup,
+      metadata: { assigned, demanded, delta: assigned - demanded },
+    }));
+  };
 
   const activePersonnel = personnelList.filter(p => p.active);
   const byOrderVerify = (a: Personnel, b: Personnel) => (a.orderIndex ?? 99999) - (b.orderIndex ?? 99999);
@@ -1555,25 +1660,25 @@ export function verifyCoverageAndLeaders(
     let eAssignedAsst = assistants.filter(a => assignments[a.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[a.id][d])).length;
     let nAssignedAsst = assistants.filter(a => assignments[a.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[a.id][d])).length;
 
-    if (mAssignedAsst < demand.morningAssistant) warnings.push(`Coverage Shortage: کمبود نیرو (کمک بهیار) در روز ${d} شیفت M`);
-    if (eAssignedAsst < demand.afternoonAssistant) warnings.push(`Coverage Shortage: کمبود نیرو (کمک بهیار) در روز ${d} شیفت E`);
-    if (nAssignedAsst < demand.nightAssistant) warnings.push(`Coverage Shortage: کمبود نیرو (کمک بهیار) در روز ${d} شیفت N`);
-    
-    if (mAssignedAsst > demand.morningAssistant) warnings.push(`Overstaffing: نیروی مازاد (کمک بهیار) در روز ${d} شیفت M`);
-    if (eAssignedAsst > demand.afternoonAssistant) warnings.push(`Overstaffing: نیروی مازاد (کمک بهیار) در روز ${d} شیفت E`);
-    if (nAssignedAsst > demand.nightAssistant) warnings.push(`Overstaffing: نیروی مازاد (کمک بهیار) در روز ${d} شیفت N`);
+    if (mAssignedAsst < demand.morningAssistant) pushCoverageWarning('COVERAGE_SHORTAGE', 'assistant', d, 'M', mAssignedAsst, demand.morningAssistant);
+    if (eAssignedAsst < demand.afternoonAssistant) pushCoverageWarning('COVERAGE_SHORTAGE', 'assistant', d, 'E', eAssignedAsst, demand.afternoonAssistant);
+    if (nAssignedAsst < demand.nightAssistant) pushCoverageWarning('COVERAGE_SHORTAGE', 'assistant', d, 'N', nAssignedAsst, demand.nightAssistant);
+
+    if (mAssignedAsst > demand.morningAssistant) pushCoverageWarning('OVERSTAFFING', 'assistant', d, 'M', mAssignedAsst, demand.morningAssistant);
+    if (eAssignedAsst > demand.afternoonAssistant) pushCoverageWarning('OVERSTAFFING', 'assistant', d, 'E', eAssignedAsst, demand.afternoonAssistant);
+    if (nAssignedAsst > demand.nightAssistant) pushCoverageWarning('OVERSTAFFING', 'assistant', d, 'N', nAssignedAsst, demand.nightAssistant);
 
     let mAssignedNurse = nurses.filter(n => assignments[n.id]?.[d] && ['M','ME','MN','MEN'].includes(assignments[n.id][d])).length;
     let eAssignedNurse = nurses.filter(n => assignments[n.id]?.[d] && ['E','ME','EN','MEN'].includes(assignments[n.id][d])).length;
     let nAssignedNurse = nurses.filter(n => assignments[n.id]?.[d] && ['N','EN','MN','MEN'].includes(assignments[n.id][d])).length;
 
-    if (mAssignedNurse < demand.morningNurse) warnings.push(`Coverage Shortage: کمبود نیرو (پرستار) در روز ${d} شیفت M`);
-    if (eAssignedNurse < demand.afternoonNurse) warnings.push(`Coverage Shortage: کمبود نیرو (پرستار) در روز ${d} شیفت E`);
-    if (nAssignedNurse < demand.nightNurse) warnings.push(`Coverage Shortage: کمبود نیرو (پرستار) در روز ${d} شیفت N`);
+    if (mAssignedNurse < demand.morningNurse) pushCoverageWarning('COVERAGE_SHORTAGE', 'nurse', d, 'M', mAssignedNurse, demand.morningNurse);
+    if (eAssignedNurse < demand.afternoonNurse) pushCoverageWarning('COVERAGE_SHORTAGE', 'nurse', d, 'E', eAssignedNurse, demand.afternoonNurse);
+    if (nAssignedNurse < demand.nightNurse) pushCoverageWarning('COVERAGE_SHORTAGE', 'nurse', d, 'N', nAssignedNurse, demand.nightNurse);
 
-    if (mAssignedNurse > demand.morningNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت M`);
-    if (eAssignedNurse > demand.afternoonNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت E`);
-    if (nAssignedNurse > demand.nightNurse) warnings.push(`Overstaffing: نیروی مازاد (پرستار) در روز ${d} شیفت N`);
+    if (mAssignedNurse > demand.morningNurse) pushCoverageWarning('OVERSTAFFING', 'nurse', d, 'M', mAssignedNurse, demand.morningNurse);
+    if (eAssignedNurse > demand.afternoonNurse) pushCoverageWarning('OVERSTAFFING', 'nurse', d, 'E', eAssignedNurse, demand.afternoonNurse);
+    if (nAssignedNurse > demand.nightNurse) pushCoverageWarning('OVERSTAFFING', 'nurse', d, 'N', nAssignedNurse, demand.nightNurse);
 
     // انتخاب سرشیفت — منطق جدید:
     // صبح فقط روزهای تعطیل؛ عصر و شب همیشه؛ هر شیفت M/E/N کاملاً مستقل
@@ -1594,19 +1699,40 @@ export function verifyCoverageAndLeaders(
     if (isHoliday) {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'M'));
       if (candidates.length > 0) shiftLeaders[d].morning = candidates[0].id;
-      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`);
+      else warnings.push(createScheduleWarning({
+        code: 'MISSING_SHIFT_LEADER',
+        message: `Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${d}`,
+        day: d,
+        shift: 'M',
+        jobGroup: 'nurse',
+        metadata: { period: 'صبح', isHoliday: true },
+      }));
     }
     // عصر — همیشه سرشیفت مستقل
     {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'E'));
       if (candidates.length > 0) shiftLeaders[d].afternoon = candidates[0].id;
-      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`);
+      else warnings.push(createScheduleWarning({
+        code: 'MISSING_SHIFT_LEADER',
+        message: `Missing Shift Leader: نبود سرشیفت در نوبت عصر روز ${d}`,
+        day: d,
+        shift: 'E',
+        jobGroup: 'nurse',
+        metadata: { period: 'عصر', isHoliday },
+      }));
     }
     // شب — همیشه سرشیفت مستقل (بدون shortcut از عصر)
     {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'N'));
       if (candidates.length > 0) shiftLeaders[d].night = candidates[0].id;
-      else warnings.push(`Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`);
+      else warnings.push(createScheduleWarning({
+        code: 'MISSING_SHIFT_LEADER',
+        message: `Missing Shift Leader: نبود سرشیفت در نوبت شب روز ${d}`,
+        day: d,
+        shift: 'N',
+        jobGroup: 'nurse',
+        metadata: { period: 'شب', isHoliday },
+      }));
     }
   }
 
@@ -1666,16 +1792,34 @@ export function verifyCoverageAndLeaders(
                                  (pref === 'N' && ['N', 'EN', 'MN', 'MEN'].includes(assigned)) ||
                                  (assigned === pref);
                 if (violates) {
-                  warnings.push(`Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} تداخل با درخواست عدم تخصیص شیفت ${pref} وجود دارد (شیفت ${assigned} تخصیص داده شده)`);
+                  warnings.push(createScheduleWarning({
+                    code: 'MISMATCHED_REQUEST',
+                    message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} تداخل با درخواست عدم تخصیص شیفت ${pref} وجود دارد (شیفت ${assigned} تخصیص داده شده)`,
+                    day: d,
+                    personnelId: p.id,
+                    metadata: { requestType: 'avoid_shift', requestedShift: pref, assignedShift: assigned },
+                  }));
                 }
               }
             } else if (req.requestType === 'OFF') {
               if (assigned !== 'OFF' && !assigned.startsWith('L')) {
-                warnings.push(`Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست OFF ثبت شده اما شیفت ${assigned} تخصیص یافته است`);
+                warnings.push(createScheduleWarning({
+                  code: 'MISMATCHED_REQUEST',
+                  message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست OFF ثبت شده اما شیفت ${assigned} تخصیص یافته است`,
+                  day: d,
+                  personnelId: p.id,
+                  metadata: { requestType: 'OFF', assignedShift: assigned },
+                }));
               }
             } else if (req.requestType === 'leave') {
               if (!assigned.startsWith('L')) {
-                warnings.push(`Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست مرخصی ثبت شده اما شیفت ${assigned} تخصیص یافته است`);
+                warnings.push(createScheduleWarning({
+                  code: 'MISMATCHED_REQUEST',
+                  message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست مرخصی ثبت شده اما شیفت ${assigned} تخصیص یافته است`,
+                  day: d,
+                  personnelId: p.id,
+                  metadata: { requestType: 'leave', assignedShift: assigned },
+                }));
               }
             } else if (req.requestType === 'shift') {
               const pref = req.preferredShift;
@@ -1685,7 +1829,13 @@ export function verifyCoverageAndLeaders(
                                 (pref === 'N' && ['N', 'EN', 'MN', 'MEN'].includes(assigned)) ||
                                 (assigned === pref);
                 if (!matches) {
-                  warnings.push(`Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست شیفت ${pref} ثبت شده اما شیفت ${assigned} تخصیص یافته است`);
+                  warnings.push(createScheduleWarning({
+                    code: 'MISMATCHED_REQUEST',
+                    message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست شیفت ${pref} ثبت شده اما شیفت ${assigned} تخصیص یافته است`,
+                    day: d,
+                    personnelId: p.id,
+                    metadata: { requestType: 'shift', requestedShift: pref, assignedShift: assigned },
+                  }));
                 }
               }
             }
@@ -1697,6 +1847,16 @@ export function verifyCoverageAndLeaders(
 
   activePersonnel.forEach(p => {
     let consecutiveOffDays: number[] = [];
+    const pushConsecutiveOffsWarning = () => {
+      warnings.push(createScheduleWarning({
+        code: 'CONSECUTIVE_OFFS',
+        message: `Consecutive OFFs: عدم رعایت سقف آف متوالی (بیش از ۳ روز متوالی) برای ${p.firstName} ${p.lastName} از روز ${consecutiveOffDays[0]} تا روز ${consecutiveOffDays[consecutiveOffDays.length - 1]} به مدت ${consecutiveOffDays.length} روز متوالی`,
+        day: consecutiveOffDays[0],
+        endDay: consecutiveOffDays[consecutiveOffDays.length - 1],
+        personnelId: p.id,
+        metadata: { length: consecutiveOffDays.length },
+      }));
+    };
     for (let d = 1; d <= totalDays; d++) {
       const assigned = assignments[p.id]?.[d] || 'OFF';
       // هر روزی که شیفت کاری عادی ندارد (OFF، مرخصی، یا خالی) جزء زنجیرهٔ عدم حضور حساب می‌شود
@@ -1705,17 +1865,13 @@ export function verifyCoverageAndLeaders(
         consecutiveOffDays.push(d);
       } else {
         if (consecutiveOffDays.length >= 4) {
-          warnings.push(
-            `Consecutive OFFs: عدم رعایت سقف آف متوالی (بیش از ۳ روز متوالی) برای ${p.firstName} ${p.lastName} از روز ${consecutiveOffDays[0]} تا روز ${consecutiveOffDays[consecutiveOffDays.length - 1]} به مدت ${consecutiveOffDays.length} روز متوالی`
-          );
+          pushConsecutiveOffsWarning();
         }
         consecutiveOffDays = [];
       }
     }
     if (consecutiveOffDays.length >= 4) {
-      warnings.push(
-        `Consecutive OFFs: عدم رعایت سقف آف متوالی (بیش از ۳ روز متوالی) برای ${p.firstName} ${p.lastName} از روز ${consecutiveOffDays[0]} تا روز ${consecutiveOffDays[consecutiveOffDays.length - 1]} به مدت ${consecutiveOffDays.length} روز متوالی`
-      );
+      pushConsecutiveOffsWarning();
     }
   });
 
@@ -1733,9 +1889,13 @@ export function verifyCoverageAndLeaders(
       const isCurrLeave = curr && /^L\d+$/.test(curr);
       const isNextLeave = next && /^L\d+$/.test(next);
       if (isPrevLeave && !isCurrLeave && isNextLeave && curr !== HOLIDAY_LEAVE_SHIFT) {
-        warnings.push(
-          `Leave Continuity: نقض پیوستگی مرخصی ${fullName} — روز ${d} (${curr}) بین روزهای مرخصی قرار گرفته (روز ${d-1}: ${prev}، روز ${d+1}: ${next})`
-        );
+        warnings.push(createScheduleWarning({
+          code: 'LEAVE_CONTINUITY',
+          message: `Leave Continuity: نقض پیوستگی مرخصی ${fullName} — روز ${d} (${curr}) بین روزهای مرخصی قرار گرفته (روز ${d-1}: ${prev}، روز ${d+1}: ${next})`,
+          day: d,
+          personnelId: p.id,
+          metadata: { currentShift: curr, previousShift: prev, nextShift: next },
+        }));
       }
     }
   });
@@ -1748,30 +1908,45 @@ export function verifyCoverageAndLeaders(
     //    (تا ۵ واحد مجاز است). هر جایگاه خالی زنجیره را قطع می‌کند.
     const capViolations = findConsecutiveCapViolations(assignments, p.id, totalDays);
     capViolations.forEach(violation => {
-      warnings.push(
-        `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} (${violation.startPeriod}) تا روز ${violation.endDay} (${violation.endPeriod}) — ${violation.length} شیفت متوالی پشت‌سرهم بدون استراحت (شب ۲ شیفت حساب می‌شود)؛ حداکثر مجاز ۵ شیفت متوالی است`
-      );
+      warnings.push(createScheduleWarning({
+        code: 'MAX_CONSECUTIVE',
+        message: `Max Consecutive: عدم رعایت سقف ۵ شیفت متوالی برای ${fullName} از روز ${violation.startDay} (${violation.startPeriod}) تا روز ${violation.endDay} (${violation.endPeriod}) — ${violation.length} شیفت متوالی پشت‌سرهم بدون استراحت (شب ۲ شیفت حساب می‌شود)؛ حداکثر مجاز ۵ شیفت متوالی است`,
+        day: violation.startDay,
+        endDay: violation.endDay,
+        personnelId: p.id,
+        metadata: { length: violation.length, startPeriod: violation.startPeriod, endPeriod: violation.endPeriod },
+      }));
     });
 
     // ۲) استراحت اجباری: اگر زنجیرهٔ متوالی در پایان ماه به سقف ۵ واحد رسیده و تا شبِ آخرین روز
     //    ادامه داشته باشد، ابتدای ماه بعد آف اجباری است (هر شیفت دیگر آن را از ۵ فراتر می‌برد).
     if (endsMonthAtCapWithoutRest(assignments, p.id, totalDays)) {
-      warnings.push(
-        `Mandatory Rest: پرسنل ${fullName} در پایان این ماه به سقف ۵ شیفت متوالی رسیده است؛ حداقل یک روز استراحت/آف اجباری در ابتدای ماه آینده برای ایشان لحاظ شود`
-      );
+      warnings.push(createScheduleWarning({
+        code: 'MANDATORY_REST',
+        message: `Mandatory Rest: پرسنل ${fullName} در پایان این ماه به سقف ۵ شیفت متوالی رسیده است؛ حداقل یک روز استراحت/آف اجباری در ابتدای ماه آینده برای ایشان لحاظ شود`,
+        personnelId: p.id,
+      }));
     }
 
     // ۳) ممنوعیت شیفت تک‌تک: چیدمان باید الگوی پیوسته داشته و به تگ روتین کاری احترام بگذارد.
     const isolatedDays = findIsolatedSingleShiftDays(assignments, p.id, totalDays, p.workRoutine);
     isolatedDays.forEach(d => {
       const shift = assignments[p.id]?.[d];
-      warnings.push(
-        `Isolated Shift: شیفت تک (${shift}) برای ${fullName} در روز ${d} در میان روزهای کاری با الگوی متفاوت قرار گرفته است؛ چیدمان باید پیوسته و هم‌راستا با تگ روتین کاری نفر باشد`
-      );
+      warnings.push(createScheduleWarning({
+        code: 'ISOLATED_SHIFT',
+        message: `Isolated Shift: شیفت تک (${shift}) برای ${fullName} در روز ${d} در میان روزهای کاری با الگوی متفاوت قرار گرفته است؛ چیدمان باید پیوسته و هم‌راستا با تگ روتین کاری نفر باشد`,
+        day: d,
+        personnelId: p.id,
+        shift,
+      }));
     });
   });
 
-  return { warnings: Array.from(new Set(warnings)), shiftLeaders };
+  // هر دو نمای خروجی از یک منبع مشتق می‌شوند و دقیقاً هم‌تراز می‌مانند:
+  //   warnings[i] === structuredWarnings[i].message
+  // (dedup بر اساس متن، اولین وقوع — معادل رفتار تاریخیِ Array.from(new Set(...)))
+  const structuredWarnings = dedupeScheduleWarningsByMessage(warnings);
+  return { warnings: warningMessages(structuredWarnings), structuredWarnings, shiftLeaders };
 }
 
 // ====== تابع generatePersonnelReports ======
