@@ -2387,7 +2387,7 @@ export default function Home() {
       const calendar = generateJalaliMonthCalendar(
         currentYear, currentMonth, currentHolidays, currentFirstDay === -1 ? undefined : currentFirstDay
       );
-      const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday }));
+      const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday, dayOfWeek: d.dayOfWeek }));
       const protectedSet = protectedCellsRef.current;
 
       const MAX_PASSES = 3;

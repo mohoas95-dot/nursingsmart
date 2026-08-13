@@ -5,6 +5,10 @@ import {
   wouldBreachConsecutiveCap,
   wouldCreateIsolatedShift,
 } from './smart-rules';
+import {
+  COVERAGE_FILL_HARD_RULES,
+  canAssignShift,
+} from './hard-constraints';
 
 /**
  * Simplified scope matcher for reconcile context where dayOfWeek is not available.
@@ -36,6 +40,15 @@ export type CoverageShift = 'M' | 'E' | 'N';
 export interface StaffingCalendarDay {
   day: number;
   isHoliday: boolean;
+  /**
+   * روزِ هفته (۰=شنبه … ۶=جمعه) — اختیاری.
+   *
+   * وقتی داده شود، محدودیت‌های سختِ وابسته به دامنهٔ درخواست (مثل «آف قطعیِ
+   * پنجشنبه‌ها») دقیقاً ارزیابی می‌شوند. اگر داده نشود، ارزیابیِ محدودیت سخت
+   * محافظه‌کارانه عمل می‌کند و آن دامنه‌ها را «مطابق» می‌گیرد؛ یعنی به‌جای نقض
+   * احتمالیِ یک محدودیت سخت، کمبود پوشش گزارش می‌شود.
+   */
+  dayOfWeek?: number;
 }
 
 export interface StaffingCoverageGap {
@@ -201,12 +214,30 @@ export function reconcileStaffingCoverage(
             assigned -= 1;
           }
         } else if (assigned < required) {
-          // Staffing stays a hard constraint, but candidate ordering respects the
-          // smart regeneration rules first: breaching the 5-consecutive-shift cap
-          // or creating an isolated single shift pushes a candidate to the back of
-          // the queue; candidates whose work-routine tag matches the shift come first.
+          // ====== انتخاب نامزد برای جبران کمبود ======
+          //
+          // مرحلهٔ ۱ (فیلترِ سخت): هیچ نامزدی که تخصیص به او یک محدودیت سخت را
+          // می‌شکند وارد صف نمی‌شود. محدودیت‌های سخت از قرارداد مشترک
+          // `COVERAGE_FILL_HARD_RULES` می‌آیند تا reconcile و solver دقیقاً از یک
+          // تعریف استفاده کنند: آف قطعی، مرخصی، ردیف قفل‌شده، سلول محافظت‌شده،
+          // صبح‌کاریِ سرپرستار/استاف و استراحت شب.
+          //
+          // اگر پس از این فیلتر پوشش کامل نشود، کمبود گزارش می‌شود؛ نقض یک
+          // محدودیت سخت هرگز راهِ جبران پوشش نیست و هیچ مسیر اضطراری‌ای از این
+          // فیلتر عبور نمی‌کند.
+          //
+          // مرحلهٔ ۲ (اولویت‌بندیِ نرم): سقف شیفت متوالی، شیفت تک‌تک، تگ روتین
+          // کاری و Soft OFF فقط ترتیب صف را تعیین می‌کنند.
+          //
+          // تعارض آگاهانه: سقف شیفت متوالی اینجا «سخت» نیست، چون مسیر اضطراریِ
+          // خودِ solver هم در بن‌بست از آن عبور می‌کند و نقضش به‌صورت هشدار
+          // بحرانی MAX_CONSECUTIVE گزارش می‌شود. تبدیل آن به فیلتر سخت، تصمیمی
+          // فراتر از دامنهٔ B1–B5 است و باید جداگانه گرفته شود.
+          const nextShiftFor = (person: Personnel): ShiftType =>
+            setShiftPeriod(reconciled[person.id]?.[day], shift, true);
+
           const candidatePriority = (person: Personnel): number => {
-            const nextShift = setShiftPeriod(reconciled[person.id]?.[day], shift, true);
+            const nextShift = nextShiftFor(person);
             let priority = componentCount(reconciled[person.id]?.[day]);
             if (wouldBreachConsecutiveCap(reconciled, person.id, day, nextShift, totalDays)) {
               priority += 100;
@@ -222,54 +253,40 @@ export function reconcileStaffingCoverage(
                 priority += 60;
               }
             }
+            // Soft OFF قابل نقض است، اما همیشه آخرین انتخاب.
+            const softOffReq = (requests ?? []).find(r =>
+              r.personnelId === person.id &&
+              r.requestType === 'OFF' &&
+              r.offHardness === 'soft' &&
+              // Scope matching for reconcile: simplified check for all/custom_days/even/odd/range
+              matchRequestScopeSimple(day, r)
+            );
+            if (softOffReq) priority += 80;
             return priority;
           };
 
           const available = group
             .filter(person => {
-              if (lockedIds.has(person.id) || person.locked) return false;
-              // سلول‌های محافظت‌شده (ویرایش دستی سرپرستار) هرگز به‌عنوان گزینه پر کردن
-              // کمبود انتخاب نمی‌شوند — سیستم حق ندارد ویرایش سرپرستار را خنثی کند
-              if (isCellProtected(person.id, day)) return false;
               const currentShift = reconciled[person.id]?.[day] || 'OFF';
-              if (currentShift.startsWith('L')) return false;
-              return !shiftCoversPeriod(currentShift, shift);
+              if (shiftCoversPeriod(currentShift, shift)) return false;
+              return canAssignShift(
+                {
+                  person,
+                  day,
+                  dayOfWeek: calendarDay.dayOfWeek,
+                  isHoliday: calendarDay.isHoliday,
+                  period: shift,
+                  candidateShift: nextShiftFor(person),
+                  assignments: reconciled,
+                  totalDays,
+                  requests,
+                  lockedRowIds: lockedIds,
+                  protectedCells: protectedSet,
+                },
+                COVERAGE_FILL_HARD_RULES
+              );
             })
-            // ====== قانون اولویت‌بندی بن‌بست ======
-            // Hard OFF (سطح B بالا): solver حق ندارد نقض کند.
-            // Soft OFF (سطح B): در بن‌بست قابل نقض، اما در اولویت آخر.
-            .sort((left, right) => {
-              const candidatePriority = (person: Personnel): number => {
-                const nextShift = setShiftPeriod(reconciled[person.id]?.[day], shift, true);
-                let priority = componentCount(reconciled[person.id]?.[day]);
-                // ====== سطح A: سقف ۵ شیفت متوالی (خط قرمز مطلق) ======
-                if (wouldBreachConsecutiveCap(reconciled, person.id, day, nextShift, totalDays)) {
-                  priority += 100;
-                }
-                // ====== سطح ۳: شیفت تک‌تک ======
-                if (wouldCreateIsolatedShift(reconciled, person.id, day, totalDays, nextShift)) {
-                  priority += 40;
-                }
-                // ====== سطح B: تگ روتین کاری ======
-                if (person.workRoutine) {
-                  priority += shiftMatchesRoutine(nextShift, person.workRoutine) ? -10 : 10;
-                  if (requests && !explicitShiftPlan.has(person.id) && !routineAllowsPeriodAdd(person.workRoutine, shift)) {
-                    priority += 60;
-                  }
-                }
-                // ====== سطح B: Soft OFF در مسیر اضطراری اولویت آخر ======
-                const softOffReq = (requests ?? []).find(r =>
-                  r.personnelId === person.id &&
-                  r.requestType === 'OFF' &&
-                  r.offHardness === 'soft' &&
-                  // Scope matching for reconcile: simplified check for all/custom_days/even/odd/range
-                  matchRequestScopeSimple(day, r)
-                );
-                if (softOffReq) priority += 80;
-                return priority;
-              };
-              return candidatePriority(left) - candidatePriority(right);
-            });
+            .sort((left, right) => candidatePriority(left) - candidatePriority(right));
 
           for (const person of available) {
             if (assigned >= required) break;

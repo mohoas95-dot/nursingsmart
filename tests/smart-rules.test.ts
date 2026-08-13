@@ -470,18 +470,39 @@ test('two nurses can rotate three daily posts without ever exceeding 5 consecuti
   assert.equal(result.warnings.some(w => w.startsWith('Max Consecutive:')), false);
 });
 
-test('regeneration surfaces a Max Consecutive warning when staffing makes the cap impossible', () => {
-  // تنها ۱ پرستار برای ۳ پست کاری روزانه: ساختاراً ناگزیر از MEN هر روز و عبور از سقف ۴
+/**
+ * SESSION 3 (B4/B5): previously the single nurse was pushed into an endless MEN
+ * run, breaching the consecutive cap; the breach was only *reported* afterwards.
+ * Now the night-rest rule is enforced by every coverage filler, so an impossible
+ * roster produces a coverage shortage instead of a rule violation — the schedule
+ * reports what it cannot do rather than doing something forbidden.
+ */
+test('regeneration reports a coverage shortage instead of breaching rest rules when staffing is impossible', () => {
+  // تنها ۱ پرستار برای ۳ پست کاری روزانه: ساختاراً ناممکن است
   const personnel = [person('n1', 'nurse')];
   const result = solveWithPriority(
     1404, 2, personnel, [],
     settingsWithDemand({ morningNurse: 1, afternoonNurse: 1, nightNurse: 1 }),
     {}, undefined, null
   );
+
   assert.ok(
-    result.warnings.some(w => w.startsWith('Max Consecutive:')),
-    'an unavoidable cap breach must be reported as a warning instead of failing silently'
+    result.warnings.some(w => w.includes('کمبود نیرو')),
+    'the impossible demand must be reported as a coverage shortage'
   );
+  assert.deepEqual(
+    findConsecutiveCapViolations(result.assignments, 'n1', TOTAL_DAYS),
+    [],
+    'the consecutive cap must be respected rather than breached and reported'
+  );
+  // و هیچ دنبالهٔ سه‌شبِ متوالی ساخته نمی‌شود.
+  const covers = (shift: string | undefined) => !!shift && !shift.startsWith('L') && shift.includes('N');
+  for (let d = 3; d <= TOTAL_DAYS; d++) {
+    assert.ok(
+      !(covers(result.assignments.n1?.[d - 2]) && covers(result.assignments.n1?.[d - 1]) && covers(result.assignments.n1?.[d])),
+      `three consecutive nights on days ${d - 2}..${d}`
+    );
+  }
 });
 
 test('regeneration prefers the candidate whose work-routine tag matches the gap', () => {

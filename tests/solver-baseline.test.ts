@@ -115,21 +115,53 @@ test('[CURRENT-BEHAVIOR] leave: a 4-day leave is reported as a "Consecutive OFFs
 // ---------------------------------------------------------------------------
 // 3. Maximum consecutive shifts / mandatory rest
 // ---------------------------------------------------------------------------
-test('[CURRENT-BEHAVIOR] max-consecutive: an explicit MEN-all-month request yields a Max Consecutive + Mandatory Rest warning (assignment NOT repaired)', () => {
+/**
+ * SESSION 3 (B5): this test previously pinned the buggy behavior — the explicit
+ * `MEN` was written verbatim on every day, producing a Max Consecutive +
+ * Mandatory Rest violation that was only *reported*, never prevented.
+ * The explicit-request stage now evaluates the shared hard-constraint contract
+ * first, so the request is honored only as far as it is legal.
+ */
+test('max-consecutive: an explicit MEN-all-month request is degraded to the legal maximum instead of breaching the cap', () => {
   const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1')];
   const requests = [makeRequest('g1', { id: 'r', requestType: 'shift', preferredShift: 'MEN', isEssential: false, scope: 'all' })];
   const s = solved(personnel, requests, makeSettings());
-  assert.equal(s.assignments.g1?.[1], 'MEN');
-  assert.ok(s.warnings.some(w => w.startsWith('Max Consecutive:')));
-  assert.ok(s.warnings.some(w => w.startsWith('Mandatory Rest:')));
+
+  // Day 1 has no history, so the full request is legal and still honored.
+  assert.equal(s.assignments.g1?.[1], 'MEN', 'a legal explicit request stays honored');
+  // The cap is now genuinely respected instead of merely reported.
+  assert.ok(!s.warnings.some(w => w.startsWith('Max Consecutive:')), 'the consecutive cap must no longer be breached');
+  assert.ok(!s.warnings.some(w => w.startsWith('Mandatory Rest:')), 'no mandatory-rest breach should remain');
+  // The unavoidable conflict is surfaced explicitly, never silently.
+  assert.ok(
+    s.warnings.some(w => w.startsWith('Hard Constraint Conflict:') && w.includes('MEN')),
+    'the request/constraint conflict must be reported'
+  );
 });
 
-test('[CURRENT-BEHAVIOR] max-consecutive: an explicit N-all-month request produces NO Max Consecutive warning (slot model treats lone Ns as separate runs)', () => {
+/**
+ * SESSION 3 (B5): previously `N` was written on all 31 days with no warning at
+ * all (the weighted slot model treats lone Ns as separate runs, so the cap rule
+ * never fired). The night-rest rule extracted from the greedy fill —
+ * MAX_CONSECUTIVE_NIGHTS = 2 — now applies to explicit requests too.
+ */
+test('night-rest: an explicit N-all-month request never produces a third consecutive night', () => {
   const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1')];
   const requests = [makeRequest('g1', { id: 'r', requestType: 'shift', preferredShift: 'N', isEssential: false, scope: 'all' })];
   const s = solved(personnel, requests, makeSettings());
-  for (let d = 1; d <= daysInMonth(); d++) assert.equal(s.assignments.g1?.[d], 'N', `day ${d}`);
-  assert.ok(!s.warnings.some(w => w.startsWith('Max Consecutive:')), 'unexpected Max Consecutive warning for N-all-month');
+  const row = s.assignments.g1 || {};
+
+  assert.equal(row[1], 'N', 'the first legal night is still honored');
+  for (let d = 3; d <= daysInMonth(); d++) {
+    assert.ok(
+      !(coversN(row[d - 2]) && coversN(row[d - 1]) && coversN(row[d])),
+      `three consecutive nights on days ${d - 2}..${d}`
+    );
+  }
+  assert.ok(
+    s.warnings.some(w => w.startsWith('Hard Constraint Conflict:')),
+    'the blocked night requests must be reported as conflicts'
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -146,15 +178,24 @@ test('night rule: in a comfortably-staffed roster no nurse works N on two consec
   }
 });
 
-test('[CURRENT-BEHAVIOR] night rule: reconcile can force 3+ consecutive nights when a night gap exists', () => {
+/**
+ * SESSION 3 (B4): this test previously pinned the bug — the greedy fill's
+ * "no 3 nights in a row" guard did not exist in reconcile (nor in the emergency
+ * fill), so a night gap was closed by overworking one nurse. The night-rest rule
+ * is now part of the shared contract used by every coverage filler.
+ */
+test('night rule: no coverage filler may create a third consecutive night, even on a near-infeasible roster', () => {
   const p = scenarioNearInfeasible();
   const s = solved(p.personnel, p.requests, p.settings);
-  const row = s.assignments.g1 || {};
-  let found = false;
-  for (let d = 2; d < daysInMonth(); d++) {
-    if (coversN(row[d - 1]) && coversN(row[d]) && coversN(row[d + 1])) found = true;
+  for (const person of p.personnel) {
+    const row = s.assignments[person.id] || {};
+    for (let d = 3; d <= daysInMonth(); d++) {
+      assert.ok(
+        !(coversN(row[d - 2]) && coversN(row[d - 1]) && coversN(row[d])),
+        `${person.id} works three consecutive nights on days ${d - 2}..${d}`
+      );
+    }
   }
-  assert.ok(found, 'expected reconcile to fill nights with a 3+ night run for g1');
 });
 
 // ---------------------------------------------------------------------------
@@ -175,33 +216,70 @@ test('routine tags restrict placement: morning→M only, evening_night→E/N onl
 // ---------------------------------------------------------------------------
 // 6. Explicit shift requests
 // ---------------------------------------------------------------------------
-test('explicit shift request: a full-month EN request is honored on every day', () => {
+/**
+ * SESSION 3 (B5): a month-long `EN` request implies 31 consecutive nights, which
+ * the night-rest rule forbids. The request is still a very high-priority input —
+ * it is honored in full wherever it is legal and degraded to its largest legal
+ * subset (`E`) only where the third consecutive night would occur.
+ */
+test('explicit shift request: a full-month EN request is honored wherever it is legal', () => {
   const s = solved(realisticPersonnel(), realisticRequests(), realisticSettings());
+  const row = s.assignments.even || {};
+
+  let fullyHonored = 0;
   for (let d = 1; d <= daysInMonth(); d++) {
-    assert.equal(s.assignments.even?.[d], 'EN', `even day ${d}`);
+    // The evening part of the request is always satisfied.
+    assert.ok(coversE(row[d]), `even day ${d} lost its requested evening (${row[d]})`);
+    if (row[d] === 'EN') fullyHonored++;
+  }
+  assert.ok(fullyHonored >= 20, `the EN request should hold on most days (got ${fullyHonored})`);
+
+  // …and never at the cost of a forbidden third consecutive night.
+  for (let d = 3; d <= daysInMonth(); d++) {
+    assert.ok(
+      !(coversN(row[d - 2]) && coversN(row[d - 1]) && coversN(row[d])),
+      `three consecutive nights on days ${d - 2}..${d}`
+    );
   }
 });
 
 // ---------------------------------------------------------------------------
 // 7. Hard OFF / Soft OFF
 // ---------------------------------------------------------------------------
-test('[CURRENT-BEHAVIOR] hard OFF: a 5-day hard OFF is violated on day 4 by the consecutive-OFF breaker', () => {
+/**
+ * SESSION 3 (B1): this test previously pinned the bug — the low-priority
+ * "no more than 3 consecutive OFF" post-process silently overwrote day 4 of a
+ * hard OFF with an `M`. A hard OFF is now immutable; when the OFF run is long
+ * *because of* a hard OFF, the rule conflict is reported instead of resolved by
+ * breaking the hard constraint.
+ */
+test('hard OFF: a 5-day hard OFF survives the consecutive-OFF breaker untouched', () => {
   const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1'), makePerson('g2'), makePerson('g3')];
   const requests = [makeRequest('g1', { id: 'r', requestType: 'OFF', isEssential: false, offHardness: 'hard', scope: 'custom_days', selectedDays: [1, 2, 3, 4, 5] })];
   const s = solved(personnel, requests, makeSettings());
-  assert.equal(s.assignments.g1?.[1], 'OFF');
-  assert.equal(s.assignments.g1?.[2], 'OFF');
-  assert.equal(s.assignments.g1?.[3], 'OFF');
-  assert.equal(s.assignments.g1?.[4], 'M', 'hard OFF day 4 was overwritten to M by the OFF-breaker');
-  assert.equal(s.assignments.g1?.[5], 'OFF');
-  assert.ok(s.warnings.some(w => w.startsWith('Mismatched Request:') && w.includes('در روز 4')));
+  for (const d of [1, 2, 3, 4, 5]) {
+    assert.equal(s.assignments.g1?.[d], 'OFF', `hard OFF day ${d} must stay OFF`);
+  }
+  assert.ok(
+    !s.warnings.some(w => w.startsWith('Mismatched Request:') && w.includes('g1 T')),
+    'no request mismatch may remain — the hard OFF was fully honored'
+  );
+  assert.ok(
+    s.warnings.some(w => w.startsWith('Hard Constraint Conflict:') && w.includes('روز 4')),
+    'the consecutive-OFF rule conflict must be reported explicitly'
+  );
 });
 
-test('[CURRENT-BEHAVIOR] soft OFF: a soft OFF is broken by the consecutive-OFF breaker exactly like a hard OFF', () => {
+/**
+ * SESSION 3 (B1/B7): Hard and Soft OFF must now differ for real. Soft OFF keeps
+ * the current policy — it may be broken by the OFF-breaker — which is exactly
+ * what makes the hard/soft distinction observable rather than cosmetic.
+ */
+test('soft OFF: unlike a hard OFF, a soft OFF may still be broken by the consecutive-OFF breaker', () => {
   const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1'), makePerson('g2'), makePerson('g3')];
   const requests = [makeRequest('g1', { id: 'r', requestType: 'OFF', isEssential: false, offHardness: 'soft', scope: 'custom_days', selectedDays: [1, 2, 3, 4, 5] })];
   const s = solved(personnel, requests, makeSettings());
-  assert.equal(s.assignments.g1?.[4], 'M', 'soft OFF day 4 was also overwritten to M');
+  assert.equal(s.assignments.g1?.[4], 'M', 'soft OFF day 4 is still breakable (policy unchanged)');
 });
 
 // ---------------------------------------------------------------------------
@@ -238,14 +316,27 @@ test('locked rows: mergeOptimizerAssignments keeps the locked row from the curre
   assert.equal(merged.g1?.[1], 'M', 'free row takes optimized assignment');
 });
 
-test('[CURRENT-BEHAVIOR] reconcile can violate a hard OFF when filling a coverage gap', () => {
+/**
+ * SESSION 3 (B2): this test previously pinned the bug — reconcile inspected only
+ * lock/protection/leave and happily placed an `M` onto a hard-OFF cell to close a
+ * coverage gap. Coverage is still a hard constraint, but a hard OFF outranks it:
+ * the shortage is now reported instead of resolved by a violation.
+ */
+test('reconcile: a hard OFF is never overwritten to fill a coverage gap — the shortage is reported', () => {
   const g1 = makePerson('g1');
   const g2 = makePerson('g2');
   const assignments: Record<string, Record<number, string>> = { g1: { 1: 'OFF' }, g2: { 1: 'OFF' } };
   const requests = [makeRequest('g1', { id: 'r', requestType: 'OFF', isEssential: true, offHardness: 'hard', scope: 'custom_days', selectedDays: [1] })];
   const settings = makeSettings({ morningNurse: 2, afternoonNurse: 0, nightNurse: 0 });
   const r = reconcileStaffingCoverage(assignments, [g1, g2], settings, [{ day: 1, isHoliday: false }], ['nurse'], [], requests);
-  assert.equal(r.assignments.g1?.[1], 'M', 'reconcile assigned M onto a hard OFF day');
+
+  assert.equal(r.assignments.g1?.[1], 'OFF', 'the hard OFF cell must stay OFF');
+  assert.equal(r.assignments.g2?.[1], 'M', 'the legal candidate is still used');
+  assert.deepEqual(
+    r.unresolvedGaps,
+    [{ day: 1, jobGroup: 'nurse', shift: 'M', required: 2, assigned: 1 }],
+    'the remaining shortage must be reported, not hidden'
+  );
 });
 
 test('protected cells: reconcileStaffingCoverage never modifies a protected cell', () => {
@@ -292,13 +383,22 @@ test('[CURRENT-BEHAVIOR] supervisor fixed morning: staff is M on every working d
   }
 });
 
-test('[CURRENT-BEHAVIOR] reconcile can assign a night to a supervisor (morning-only is not enforced in reconcile)', () => {
+/**
+ * SESSION 3 (B3): this test previously pinned the bug — reconcile had no
+ * supervisor/staff guard and produced an `MN` for the supervisor. The greedy
+ * fill's morning-only rule is now part of the shared contract and applies to
+ * reconcile as well.
+ */
+test('reconcile: a supervisor is never given an evening/night shift (morning-only is enforced)', () => {
   const sup = makePerson('sup', { position: 'supervisor' });
   const g1 = makePerson('g1');
   const assignments: Record<string, Record<number, string>> = { sup: { 1: 'OFF' }, g1: { 1: 'OFF' } };
   const settings = makeSettings({ morningNurse: 1, afternoonNurse: 1, nightNurse: 1 });
   const r = reconcileStaffingCoverage(assignments, [sup, g1], settings, [{ day: 1, isHoliday: false }], ['nurse'], [], []);
-  assert.ok(coversM(r.assignments.sup?.[1]) && coversN(r.assignments.sup?.[1]), `supervisor got ${r.assignments.sup?.[1]} (expected an M+N combo)`);
+
+  assert.equal(r.assignments.sup?.[1], 'M', 'the supervisor may only take the morning');
+  assert.ok(!coversE(r.assignments.sup?.[1]), 'supervisor must not cover E');
+  assert.ok(!coversN(r.assignments.sup?.[1]), 'supervisor must not cover N');
 });
 
 // ---------------------------------------------------------------------------

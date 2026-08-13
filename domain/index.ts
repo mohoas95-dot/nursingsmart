@@ -132,6 +132,45 @@ export {
 export type { AssignmentMap, ConsecutiveRunSummary } from './scheduling/smart-rules';
 
 // ============================================================================
+// Hard Constraints — قرارداد واحدِ محدودیت‌های سخت (Solver + reconcile)
+// ============================================================================
+
+export {
+  ALL_HARD_RULES,
+  COVERAGE_FILL_HARD_RULES,
+  EMERGENCY_FILL_HARD_RULES,
+  EXPLICIT_REQUEST_HARD_RULES,
+  HARD_CONSTRAINT_LABELS,
+  MAX_CONSECUTIVE_NIGHTS,
+  OFF_BREAKER_HARD_RULES,
+  UNKNOWN_DAY_OF_WEEK,
+  canAssignShift,
+  evaluateHardConstraints,
+  findHardOffRequest,
+  findLeaveRequest,
+  hasExplicitPlanForPeriod,
+  isHardOffRequest,
+  isLeaveCell,
+  isMorningOnlyPosition,
+  isSoftOffRequest,
+  resolveLegalShiftForRequest,
+  shiftPeriods,
+  shiftSubsetsByCoverage,
+  violatesConsecutiveLimit,
+  violatesHardOff,
+  violatesMorningOnly,
+  violatesNightRest,
+} from './scheduling/hard-constraints';
+
+export type {
+  ConstraintPeriod,
+  HardConstraintRules,
+  HardConstraintViolation,
+  LegalShiftResolution,
+  ShiftAssignmentDecision,
+} from './scheduling/hard-constraints';
+
+// ============================================================================
 // Alert Lifecycle — چرخهٔ عمر هشدارها (پاک‌سازی خودکار هشدارهای رفع‌شده)
 // ============================================================================
 
