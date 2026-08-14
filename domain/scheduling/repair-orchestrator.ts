@@ -23,15 +23,18 @@ import {
   WORKLOAD_PERIODS,
   findConsecutiveCapViolations,
   isLeaveShift,
+  isUnknownShift,
   shiftComponents,
   shiftContainsComponent,
   shiftFromComponents,
+  shiftSatisfiesRequestedShift,
   type AssignmentMap,
   type WorkloadPeriod,
 } from './workload';
 import {
   reconcileStaffingCoverage,
   type StaffingCalendarDay,
+  type StaffingCoverageGap,
 } from './staffing-coverage';
 
 export type RepairableViolationCode =
@@ -81,6 +84,7 @@ export interface RepairBeforeWarningResult {
 }
 
 const DEFAULT_MAX_REPAIR_PASSES = 24;
+const DEFAULT_TARGET_JOB_GROUPS: readonly JobGroup[] = ['nurse', 'assistant'];
 
 function cloneAssignments(
   assignments: Readonly<Record<string, Readonly<Record<number, ShiftType>>>>
@@ -94,6 +98,59 @@ function cloneAssignments(
 
 function violationKey(violation: DetectedRepairViolation): string {
   return `${violation.code}:${violation.personnelId}:${violation.day}:${violation.endDay ?? ''}`;
+}
+
+function cellKey(personnelId: string, day: number): string {
+  return `${personnelId}:${day}`;
+}
+
+function targetGroupSet(targetJobGroups: readonly JobGroup[] | undefined): ReadonlySet<JobGroup> {
+  return new Set(targetJobGroups ?? DEFAULT_TARGET_JOB_GROUPS);
+}
+
+function isInTargetGroup(person: Personnel, targetJobGroups: ReadonlySet<JobGroup>): boolean {
+  return targetJobGroups.has(person.jobGroup);
+}
+
+function explicitRequestedShiftsForDay(
+  requests: readonly ShiftRequest[] | undefined,
+  personnelId: string,
+  day: number,
+  dayOfWeek: number
+): ShiftType[] {
+  const requested: ShiftType[] = [];
+  for (const request of requests ?? []) {
+    if (request.personnelId !== personnelId) continue;
+
+    if (request.requestType === 'shift' && request.preferredShift
+      && isDayInRequestScope(day, dayOfWeek, request)) {
+      requested.push(request.preferredShift);
+    }
+
+    // Pattern application currently follows its step cadence for the month.
+    if (request.requestType === 'pattern' && request.patternSteps?.length) {
+      const step = request.patternSteps[(day - 1) % request.patternSteps.length];
+      if (step) requested.push(step);
+    }
+  }
+  return requested;
+}
+
+/**
+ * A repair may add a component only when it still satisfies every explicit work
+ * request that applies to the destination cell. This deliberately treats a
+ * pattern as an explicit plan too: an automatic coverage repair must not turn a
+ * requested pattern step into a different shift.
+ */
+function isExplicitRequestCompatible(
+  requests: readonly ShiftRequest[] | undefined,
+  personnelId: string,
+  day: number,
+  dayOfWeek: number,
+  candidateShift: ShiftType
+): boolean {
+  return explicitRequestedShiftsForDay(requests, personnelId, day, dayOfWeek)
+    .every(requestedShift => shiftSatisfiesRequestedShift(candidateShift, requestedShift));
 }
 
 function isExplicitComponentRequested(
@@ -126,13 +183,14 @@ function collectRepairableViolations(
   assignments: AssignmentMap,
   personnelList: readonly Personnel[],
   calendarDays: readonly StaffingCalendarDay[],
-  requests: readonly ShiftRequest[] | undefined
+  requests: readonly ShiftRequest[] | undefined,
+  targetJobGroups: ReadonlySet<JobGroup>
 ): DetectedRepairViolation[] {
   const totalDays = calendarDays.reduce((max, calendarDay) => Math.max(max, calendarDay.day), 0);
   const violations: DetectedRepairViolation[] = [];
 
   for (const person of personnelList) {
-    if (!person.active) continue;
+    if (!person.active || !isInTargetGroup(person, targetJobGroups)) continue;
     for (const calendarDay of calendarDays) {
       const shift = assignments[person.id]?.[calendarDay.day] || 'OFF';
       const hardViolations = evaluateHardConstraintViolations(
@@ -197,9 +255,9 @@ function isSourceMutable(
   protectedCells: ReadonlySet<string>
 ): boolean {
   if (!personnel || personnel.locked || lockedRows.has(personnelId)) return false;
-  if (protectedCells.has(`${personnelId}:${day}`)) return false;
+  if (protectedCells.has(cellKey(personnelId, day))) return false;
   const shift = assignments[personnelId]?.[day];
-  return !!shift && !isLeaveShift(shift) && shift !== 'OFF';
+  return !!shift && !isLeaveShift(shift) && !isUnknownShift(shift) && shift !== 'OFF';
 }
 
 function removePeriods(
@@ -209,7 +267,7 @@ function removePeriods(
   periods: readonly WorkloadPeriod[]
 ): ScheduleRepairAction | null {
   const fromShift = assignments[personnelId]?.[day];
-  if (!fromShift) return null;
+  if (!fromShift || isUnknownShift(fromShift)) return null;
   const remaining = shiftComponents(fromShift).filter(period => !periods.includes(period));
   const toShift = shiftFromComponents(remaining);
   if (!toShift || toShift === fromShift) return null;
@@ -311,9 +369,11 @@ function isRecipientAvailable(
   protectedCells: ReadonlySet<string>
 ): boolean {
   if (!person.active || person.locked || lockedRows.has(person.id)) return false;
-  if (protectedCells.has(`${person.id}:${day}`)) return false;
+  if (protectedCells.has(cellKey(person.id, day))) return false;
   const shift = assignments[person.id]?.[day] || 'OFF';
-  return !isLeaveShift(shift);
+  // An unknown string is itself a verifier-visible hard problem. It must never
+  // be normalized away as a side effect of trying to repair another person.
+  return !isLeaveShift(shift) && !isUnknownShift(shift);
 }
 
 function relocateRemovedPeriods(
@@ -322,23 +382,37 @@ function relocateRemovedPeriods(
   personnelList: readonly Personnel[],
   calendarByDay: ReadonlyMap<number, StaffingCalendarDay>,
   requests: readonly ShiftRequest[] | undefined,
+  targetJobGroups: ReadonlySet<JobGroup>,
   lockedRows: ReadonlySet<string>,
   protectedCells: ReadonlySet<string>,
   totalDays: number
 ): void {
   const source = personnelList.find(person => person.id === action.personnelId);
   const calendarDay = calendarByDay.get(action.day);
-  if (!source || !calendarDay) return;
+  if (!source || !calendarDay || !isInTargetGroup(source, targetJobGroups)) return;
 
   const movedTo: string[] = [];
   for (const period of action.removedPeriods) {
     const recipient = personnelList.find(person => {
-      if (person.id === source.id || person.jobGroup !== source.jobGroup) return false;
+      if (person.id === source.id
+        || !isInTargetGroup(person, targetJobGroups)
+        || person.jobGroup !== source.jobGroup) {
+        return false;
+      }
       if (!isRecipientAvailable(assignments, person, action.day, lockedRows, protectedCells)) return false;
       const currentShift = assignments[person.id]?.[action.day] || 'OFF';
       if (shiftContainsComponent(currentShift, period)) return false;
       const candidateShift = shiftFromComponents([...shiftComponents(currentShift), period]);
       if (!candidateShift) return false;
+      if (!isExplicitRequestCompatible(
+        requests,
+        person.id,
+        action.day,
+        calendarDay.dayOfWeek ?? -1,
+        candidateShift
+      )) {
+        return false;
+      }
       return evaluateHardConstraintLegality(
         {
           person,
@@ -361,6 +435,7 @@ function relocateRemovedPeriods(
     const currentShift = assignments[recipient.id]?.[action.day] || 'OFF';
     const candidateShift = shiftFromComponents([...shiftComponents(currentShift), period]);
     if (!candidateShift) continue;
+    if (!assignments[recipient.id]) assignments[recipient.id] = {};
     assignments[recipient.id][action.day] = candidateShift;
     movedTo.push(recipient.id);
   }
@@ -373,12 +448,13 @@ function repairOneViolation(
   personnelById: ReadonlyMap<string, Personnel>,
   calendarByDay: ReadonlyMap<number, StaffingCalendarDay>,
   requests: readonly ShiftRequest[] | undefined,
+  targetJobGroups: ReadonlySet<JobGroup>,
   lockedRows: ReadonlySet<string>,
   protectedCells: ReadonlySet<string>
 ): ScheduleRepairAction | null {
   if (violation.code === 'UNKNOWN_SHIFT') return null;
   const person = personnelById.get(violation.personnelId);
-  if (!person) return null;
+  if (!person || !isInTargetGroup(person, targetJobGroups)) return null;
 
   let removal: { day: number; periods: WorkloadPeriod[] } | null = null;
   if (violation.code === 'MAX_CONSECUTIVE') {
@@ -398,10 +474,220 @@ function repairOneViolation(
   return action;
 }
 
+function collectUnknownShiftCellKeys(
+  assignments: AssignmentMap,
+  personnelList: readonly Personnel[],
+  calendarDays: readonly StaffingCalendarDay[],
+  targetJobGroups: ReadonlySet<JobGroup>
+): Set<string> {
+  const unknownCells = new Set<string>();
+  for (const person of personnelList) {
+    if (!isInTargetGroup(person, targetJobGroups)) continue;
+    for (const calendarDay of calendarDays) {
+      if (isUnknownShift(assignments[person.id]?.[calendarDay.day])) {
+        unknownCells.add(cellKey(person.id, calendarDay.day));
+      }
+    }
+  }
+  return unknownCells;
+}
+
+/**
+ * Reconciliation does not understand request satisfaction as a hard rule. Keep
+ * explicitly planned cells stable while it fills the residual gaps; compatible
+ * direct relocation above is still allowed to add the removed component.
+ */
+function collectExplicitPlanCellKeys(
+  personnelList: readonly Personnel[],
+  calendarDays: readonly StaffingCalendarDay[],
+  requests: readonly ShiftRequest[] | undefined,
+  targetJobGroups: ReadonlySet<JobGroup>
+): Set<string> {
+  const explicitPlanCells = new Set<string>();
+  for (const person of personnelList) {
+    if (!person.active || !isInTargetGroup(person, targetJobGroups)) continue;
+    for (const calendarDay of calendarDays) {
+      if (explicitRequestedShiftsForDay(
+        requests,
+        person.id,
+        calendarDay.day,
+        calendarDay.dayOfWeek ?? -1
+      ).length > 0) {
+        explicitPlanCells.add(cellKey(person.id, calendarDay.day));
+      }
+    }
+  }
+  return explicitPlanCells;
+}
+
+function reconciliationProtectedCells(
+  assignments: AssignmentMap,
+  input: Readonly<RepairBeforeWarningInput>,
+  targetJobGroups: ReadonlySet<JobGroup>,
+  protectedCells: ReadonlySet<string>
+): ReadonlySet<string> {
+  const reconcilerProtected = new Set(protectedCells);
+  for (const key of collectUnknownShiftCellKeys(
+    assignments,
+    input.personnelList,
+    input.calendarDays,
+    targetJobGroups
+  )) {
+    reconcilerProtected.add(key);
+  }
+  for (const key of collectExplicitPlanCellKeys(
+    input.personnelList,
+    input.calendarDays,
+    input.requests,
+    targetJobGroups
+  )) {
+    reconcilerProtected.add(key);
+  }
+  return reconcilerProtected;
+}
+
+function coverageGapKey(gap: StaffingCoverageGap): string {
+  return `${gap.jobGroup}:${gap.day}:${gap.shift}`;
+}
+
+function coverageMismatchMagnitude(gap: StaffingCoverageGap): number {
+  return Math.abs(gap.required - gap.assigned);
+}
+
+/** A repair may not make any exact-coverage mismatch worse than the prior state. */
+function worsensCoverage(
+  before: readonly StaffingCoverageGap[],
+  after: readonly StaffingCoverageGap[]
+): boolean {
+  const beforeMagnitude = new Map<string, number>();
+  for (const gap of before) {
+    const key = coverageGapKey(gap);
+    beforeMagnitude.set(key, Math.max(beforeMagnitude.get(key) ?? 0, coverageMismatchMagnitude(gap)));
+  }
+  for (const gap of after) {
+    const key = coverageGapKey(gap);
+    if (coverageMismatchMagnitude(gap) > (beforeMagnitude.get(key) ?? 0)) return true;
+  }
+  return false;
+}
+
+function rangesOverlap(
+  leftStart: number,
+  leftEnd: number,
+  rightStart: number,
+  rightEnd: number
+): boolean {
+  return leftStart <= rightEnd && rightStart <= leftEnd;
+}
+
+function originalViolationPersists(
+  original: DetectedRepairViolation,
+  currentViolations: readonly DetectedRepairViolation[]
+): boolean {
+  return currentViolations.some(current => {
+    if (current.code !== original.code || current.personnelId !== original.personnelId) return false;
+    if (original.code === 'MAX_CONSECUTIVE') {
+      return rangesOverlap(
+        original.day,
+        original.endDay ?? original.day,
+        current.day,
+        current.endDay ?? current.day
+      );
+    }
+    return current.day === original.day;
+  });
+}
+
+function introducesRepairableViolation(
+  before: readonly DetectedRepairViolation[],
+  after: readonly DetectedRepairViolation[]
+): boolean {
+  const beforeKeys = new Set(before.map(violationKey));
+  return after.some(violation => !beforeKeys.has(violationKey(violation)));
+}
+
+/**
+ * The direct relocation filter protects destination requests. This guard also
+ * rejects an attempt if reconciliation would subsequently alter another explicit
+ * request cell into a mismatching shift.
+ */
+function changesExplicitRequestToConflict(
+  before: AssignmentMap,
+  after: AssignmentMap,
+  action: ScheduleRepairAction,
+  personnelList: readonly Personnel[],
+  calendarDays: readonly StaffingCalendarDay[],
+  requests: readonly ShiftRequest[] | undefined,
+  targetJobGroups: ReadonlySet<JobGroup>
+): boolean {
+  for (const person of personnelList) {
+    if (!isInTargetGroup(person, targetJobGroups)) continue;
+    for (const calendarDay of calendarDays) {
+      const beforeShift = before[person.id]?.[calendarDay.day] || 'OFF';
+      const afterShift = after[person.id]?.[calendarDay.day] || 'OFF';
+      if (beforeShift === afterShift) continue;
+      // A hard repair may deliberately remove a source component when no other
+      // source is mutable (for example, an all-explicit third-night sequence).
+      if (person.id === action.personnelId && calendarDay.day === action.day) continue;
+      if (!isExplicitRequestCompatible(
+        requests,
+        person.id,
+        calendarDay.day,
+        calendarDay.dayOfWeek ?? -1,
+        afterShift
+      )) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function rowsAreEqual(
+  left: Readonly<Record<number, ShiftType>> | undefined,
+  right: Readonly<Record<number, ShiftType>> | undefined
+): boolean {
+  const days = new Set<number>([
+    ...Object.keys(left ?? {}).map(Number),
+    ...Object.keys(right ?? {}).map(Number),
+  ]);
+  return [...days].every(day => left?.[day] === right?.[day]);
+}
+
+/** Guard target-group isolation even if a future reconcile implementation changes. */
+function changesOutsideTargetScope(
+  before: AssignmentMap,
+  after: AssignmentMap,
+  personnelList: readonly Personnel[],
+  targetJobGroups: ReadonlySet<JobGroup>
+): boolean {
+  const knownPersonnelIds = new Set(personnelList.map(person => person.id));
+  for (const person of personnelList) {
+    if (!isInTargetGroup(person, targetJobGroups)
+      && !rowsAreEqual(before[person.id], after[person.id])) {
+      return true;
+    }
+  }
+
+  const assignmentIds = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const personnelId of assignmentIds) {
+    if (!knownPersonnelIds.has(personnelId)
+      && !rowsAreEqual(before[personnelId], after[personnelId])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Attempts bounded automatic repairs before final warning generation. A repair
  * removes only violating source components, attempts a shared-evaluator-validated
  * coverage relocation, then reconciles remaining gaps through the same evaluator.
+ *
+ * An attempt is committed only when it resolves its original violation without
+ * worsening coverage, reintroducing that violation, creating another repairable
+ * hard violation, or changing an explicit request into a mismatch. Failed
+ * attempts are rolled back and blocked, so reconciliation cannot cause churn.
  */
 export function repairScheduleBeforeWarnings(
   input: Readonly<RepairBeforeWarningInput>
@@ -412,13 +698,42 @@ export function repairScheduleBeforeWarnings(
   const calendarByDay = new Map(input.calendarDays.map(day => [day.day, day]));
   const lockedRows = new Set(input.lockedRows ?? []);
   const protectedCells = input.protectedCells ?? new Set<string>();
+  const targetJobGroups = targetGroupSet(input.targetJobGroups);
+  const targetJobGroupList = [...targetJobGroups];
+  const totalDays = input.calendarDays.reduce((max, day) => Math.max(max, day.day), 0);
   const maxPasses = Math.max(0, input.maxPasses ?? DEFAULT_MAX_REPAIR_PASSES);
   const blocked = new Set<string>();
 
   for (let pass = 0; pass < maxPasses; pass++) {
-    const violations = collectRepairableViolations(assignments, input.personnelList, input.calendarDays, input.requests);
+    const violations = collectRepairableViolations(
+      assignments,
+      input.personnelList,
+      input.calendarDays,
+      input.requests,
+      targetJobGroups
+    );
     const target = violations.find(violation => !blocked.has(violationKey(violation)));
     if (!target) break;
+
+    const beforeAssignments = cloneAssignments(assignments);
+    const reconcileProtected = reconciliationProtectedCells(
+      beforeAssignments,
+      input,
+      targetJobGroups,
+      protectedCells
+    );
+    // Compare the legal coverage state before and after the repair rather than
+    // treating an unrelated, pre-existing shortage as a reason to mutate/undo it.
+    const beforeCoverage = reconcileStaffingCoverage(
+      beforeAssignments,
+      input.personnelList,
+      input.settings,
+      input.calendarDays,
+      targetJobGroupList,
+      input.lockedRows ?? [],
+      input.requests,
+      reconcileProtected
+    ).unresolvedGaps;
 
     const action = repairOneViolation(
       assignments,
@@ -426,6 +741,7 @@ export function repairScheduleBeforeWarnings(
       personnelById,
       calendarByDay,
       input.requests,
+      targetJobGroups,
       lockedRows,
       protectedCells
     );
@@ -440,9 +756,10 @@ export function repairScheduleBeforeWarnings(
       input.personnelList,
       calendarByDay,
       input.requests,
+      targetJobGroups,
       lockedRows,
       protectedCells,
-      input.calendarDays.reduce((max, day) => Math.max(max, day.day), 0)
+      totalDays
     );
 
     const reconciled = reconcileStaffingCoverage(
@@ -450,18 +767,60 @@ export function repairScheduleBeforeWarnings(
       input.personnelList,
       input.settings,
       input.calendarDays,
-      input.targetJobGroups ?? ['nurse', 'assistant'],
+      targetJobGroupList,
       input.lockedRows ?? [],
       input.requests,
-      protectedCells
+      reconcileProtected
     );
-    assignments = reconciled.assignments;
+    const afterAssignments = reconciled.assignments;
+    const afterViolations = collectRepairableViolations(
+      afterAssignments,
+      input.personnelList,
+      input.calendarDays,
+      input.requests,
+      targetJobGroups
+    );
+
+    const successful = !worsensCoverage(beforeCoverage, reconciled.unresolvedGaps)
+      && !originalViolationPersists(target, afterViolations)
+      && !introducesRepairableViolation(violations, afterViolations)
+      && !changesExplicitRequestToConflict(
+        beforeAssignments,
+        afterAssignments,
+        action,
+        input.personnelList,
+        input.calendarDays,
+        input.requests,
+        targetJobGroups
+      )
+      && !changesOutsideTargetScope(
+        beforeAssignments,
+        afterAssignments,
+        input.personnelList,
+        targetJobGroups
+      );
+
+    if (!successful) {
+      // Do not erase a real warning merely because an intermediate assignment
+      // looked repaired. The previous state is the last known non-worse state.
+      assignments = beforeAssignments;
+      blocked.add(violationKey(target));
+      continue;
+    }
+
+    assignments = afterAssignments;
     repairs.push(action);
   }
 
   return {
     assignments,
     repairs,
-    unresolved: collectRepairableViolations(assignments, input.personnelList, input.calendarDays, input.requests),
+    unresolved: collectRepairableViolations(
+      assignments,
+      input.personnelList,
+      input.calendarDays,
+      input.requests,
+      targetJobGroups
+    ),
   };
 }

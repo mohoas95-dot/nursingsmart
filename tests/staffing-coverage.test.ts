@@ -187,3 +187,63 @@ test('optimizer facade re-applies persisted staffing counts after target-group m
     }
   }
 });
+
+test('optimizer facade preserves a non-target cap violation while hardening its target group', async () => {
+  const nurse = person('n1', 'nurse');
+  const assistant = person('a1', 'assistant');
+  const preservedAssistantRow = { 1: 'MEN', 2: 'ME' };
+  let persisted: MonthlySchedule | null = null;
+
+  const result = await runOptimizerFacade(
+    {
+      jobGroup: 'nurse',
+      year: 1404,
+      month: 2,
+      personnel: [nurse, assistant],
+      requests: [],
+      settings: settingsWithDemand({}),
+      holidays: {},
+      firstDayOfWeek: undefined,
+      monthlyDutyHours: null,
+      currentSchedule: {
+        year: 1404,
+        month: 2,
+        assignments: {
+          n1: { 1: 'OFF', 2: 'OFF' },
+          a1: preservedAssistantRow,
+        },
+        shiftLeaders: {},
+        warnings: [],
+      },
+      lockState: {
+        finalizedNursesMonths: [],
+        finalizedAssistantsMonths: [],
+        lockedRows: [],
+      },
+      dismissedWarnings: [],
+    },
+    () => ({
+      assignments: {
+        n1: Object.fromEntries(Array.from({ length: 31 }, (_, index) => [index + 1, 'OFF'])),
+      },
+      warnings: [],
+    }),
+    () => ({ shiftLeaders: {}, warnings: [] }),
+    {
+      saveSchedule: async schedule => {
+        persisted = schedule as MonthlySchedule;
+      },
+    },
+    {
+      setSolvingTarget: () => undefined,
+      showConfirmation: () => true,
+      showError: message => assert.fail(message),
+    },
+    'test-department',
+    { delayMs: 0 }
+  );
+
+  assert.equal(result.success, true);
+  assert.ok(persisted);
+  assert.deepEqual((persisted as MonthlySchedule).assignments.a1, preservedAssistantRow);
+});

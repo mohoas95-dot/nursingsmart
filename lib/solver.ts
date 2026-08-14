@@ -1784,13 +1784,41 @@ export function solveNursingSchedule(
   );
   // Coverage and leader messages emitted before final reconciliation/repair may
   // be stale. The final verifier is the single source of truth for unresolved
-  // coverage and leader warnings.
+  // coverage and leader warnings. The same applies to a blocked consecutive-OFF
+  // breaker: retain its conflict only when the final schedule still contains the
+  // corresponding OFF run, rather than leaking an intermediate failure.
+  const finalOffBreakerConflicts = warnings.filter(warning => {
+    if (warning.code !== 'HARD_CONSTRAINT_CONFLICT'
+      || warning.metadata?.rule !== 'consecutive_off_cap'
+      || warning.day === undefined) {
+      return false;
+    }
+    return verification.structuredWarnings.some(finalWarning =>
+      finalWarning.code === 'CONSECUTIVE_OFFS'
+      && finalWarning.personnelId === warning.personnelId
+      && finalWarning.day !== undefined
+      && finalWarning.day <= warning.day!
+      && (finalWarning.endDay ?? finalWarning.day) >= warning.day!
+    );
+  });
   const nonCoverageWarnings = warningMessages(warnings.filter(warning =>
     warning.code !== 'COVERAGE_SHORTAGE'
     && warning.code !== 'OVERSTAFFING'
     && warning.code !== 'MISSING_SHIFT_LEADER'
+    && warning.code !== 'HARD_CONSTRAINT_CONFLICT'
   ));
-  const combinedWarnings = Array.from(new Set([...nonCoverageWarnings, ...verification.warnings]));
+  const unresolvedConflictWarnings = warningMessages([
+    ...warnings.filter(warning =>
+      warning.code === 'HARD_CONSTRAINT_CONFLICT'
+      && warning.metadata?.rule !== 'consecutive_off_cap'
+    ),
+    ...finalOffBreakerConflicts,
+  ]);
+  const combinedWarnings = Array.from(new Set([
+    ...nonCoverageWarnings,
+    ...verification.warnings,
+    ...unresolvedConflictWarnings,
+  ]));
 
   return {
     year,
