@@ -19,6 +19,7 @@ import {
 import {
   evaluatePostHeavyOffPreference,
   isHeavyShift,
+  isUnknownShift,
   POST_HEAVY_OFF_PREFERENCE_PENALTY,
   shiftContainsComponent,
   shiftSatisfiesRequestedShift,
@@ -632,6 +633,69 @@ export function solveNursingSchedule(
     }
   });
 
+  /**
+   * Coverage writers may extend or trim a composite only when the resulting
+   * full-day shift still satisfies the applicable explicit plan. This shares the
+   * established component-vs-composite semantics with verification: M/E/N plans
+   * accept a containing composite; composite plans require their exact shift.
+   */
+  const preservesExplicitPlan = (personnelId: string, day: number, candidateShift: ShiftType): boolean => {
+    for (const request of requests) {
+      if (request.personnelId !== personnelId) continue;
+
+      if (request.requestType === 'shift' && request.preferredShift) {
+        if (!isDayInRequestScope(day, calendar[day - 1].dayOfWeek, request)) continue;
+        if (!shiftSatisfiesRequestedShift(candidateShift, request.preferredShift)) return false;
+      }
+
+      // Pattern application is intentionally all-month elsewhere in this solver.
+      if (request.requestType === 'pattern' && request.patternSteps?.length) {
+        const step = request.patternSteps[(day - 1) % request.patternSteps.length];
+        if (!step) continue;
+        const matchesPatternStep = step.startsWith('L')
+          ? candidateShift.startsWith('L')
+          : shiftSatisfiesRequestedShift(candidateShift, step);
+        if (!matchesPatternStep) return false;
+      }
+    }
+    return true;
+  };
+
+  const setCoveragePeriod = (
+    currentShift: ShiftType,
+    period: CoverageShift,
+    enabled: boolean
+  ): ShiftType | null => {
+    if (isUnknownShift(currentShift)) return null;
+
+    if (enabled) {
+      if (currentShift === 'OFF') return period;
+      if (currentShift === 'M' && period === 'E') return 'ME';
+      if (currentShift === 'M' && period === 'N') return 'MN';
+      if (currentShift === 'E' && period === 'N') return 'EN';
+      if (currentShift === 'ME' && period === 'N') return 'MEN';
+      return currentShift;
+    }
+
+    if (period === 'M') {
+      if (currentShift === 'M') return 'OFF';
+      if (currentShift === 'ME') return 'E';
+      if (currentShift === 'MN') return 'N';
+      if (currentShift === 'MEN') return 'EN';
+    } else if (period === 'E') {
+      if (currentShift === 'E') return 'OFF';
+      if (currentShift === 'ME') return 'M';
+      if (currentShift === 'EN') return 'N';
+      if (currentShift === 'MEN') return 'MN';
+    } else if (period === 'N') {
+      if (currentShift === 'N') return 'OFF';
+      if (currentShift === 'MN') return 'M';
+      if (currentShift === 'EN') return 'E';
+      if (currentShift === 'MEN') return 'ME';
+    }
+    return currentShift;
+  };
+
   // Pre-process Leaves
   activePersonnel.forEach(p => {
     let leaveDayCount = 0;
@@ -850,9 +914,12 @@ export function solveNursingSchedule(
       let gap = targetDemand - currentCount;
       if (gap < 0) {
         let excessCount = Math.abs(gap);
-          let assignedToThisShift = group.filter(p =>
-            shiftCoversPeriod(assignments[p.id][d], shiftChar)
-          );
+          let assignedToThisShift = group.filter(p => {
+            const currentShift = assignments[p.id][d];
+            if (!shiftCoversPeriod(currentShift, shiftChar)) return false;
+            const candidateShift = setCoveragePeriod(currentShift, shiftChar, false);
+            return !!candidateShift && preservesExplicitPlan(p.id, d, candidateShift);
+          });
 
         assignedToThisShift.sort((x, y) => {
            const isXRequested = (() => {
@@ -900,25 +967,8 @@ export function solveNursingSchedule(
 
         for (let i = 0; i < excessCount && i < assignedToThisShift.length; i++) {
            const p = assignedToThisShift[i];
-           const currentShift = assignments[p.id][d];
-           
-           let newShift: ShiftType = 'OFF';
-           if (shiftChar === 'M') {
-             if (currentShift === 'M') newShift = 'OFF';
-             if (currentShift === 'ME') newShift = 'E';
-             if (currentShift === 'MN') newShift = 'N';
-             if (currentShift === 'MEN') newShift = 'EN';
-           } else if (shiftChar === 'E') {
-             if (currentShift === 'E') newShift = 'OFF';
-             if (currentShift === 'ME') newShift = 'M';
-             if (currentShift === 'EN') newShift = 'N';
-             if (currentShift === 'MEN') newShift = 'MN';
-           } else if (shiftChar === 'N') {
-             if (currentShift === 'N') newShift = 'OFF';
-             if (currentShift === 'MN') newShift = 'M';
-             if (currentShift === 'EN') newShift = 'E';
-             if (currentShift === 'MEN') newShift = 'ME';
-           }
+           const newShift = setCoveragePeriod(assignments[p.id][d], shiftChar, false);
+           if (!newShift || !preservesExplicitPlan(p.id, d, newShift)) continue;
            assignments[p.id][d] = newShift;
         }
         return;
@@ -951,10 +1001,9 @@ export function solveNursingSchedule(
         }
 
         const currentShift = assignments[p.id][d];
-        
         if (shiftCoversPeriod(currentShift, shiftChar)) return false;
-
-
+        const prospectiveShift = setCoveragePeriod(currentShift, shiftChar, true);
+        if (!prospectiveShift || !preservesExplicitPlan(p.id, d, prospectiveShift)) return false;
 
         if (shiftChar === 'N' && currentShift === 'M') {
           const isExplicit = dailyRequests[p.id]?.[d]?.requestType === 'shift' && dailyRequests[p.id]?.[d]?.preferredShift === 'MN';
@@ -1028,16 +1077,6 @@ export function solveNursingSchedule(
               return false;
             }
           }
-        }
-
-        let prospectiveShift = currentShift;
-        if (currentShift === 'OFF') {
-          prospectiveShift = shiftChar;
-        } else {
-          if (currentShift === 'M' && shiftChar === 'E') prospectiveShift = 'ME';
-          if (currentShift === 'M' && shiftChar === 'N') prospectiveShift = 'MN';
-          if (currentShift === 'E' && shiftChar === 'N') prospectiveShift = 'EN';
-          if (currentShift === 'ME' && shiftChar === 'N') prospectiveShift = 'MEN';
         }
 
         // One shared hard evaluator governs every candidate writer. Workload cap,
@@ -1240,15 +1279,9 @@ export function solveNursingSchedule(
 
       for (let i = 0; i < available.length && gap > 0; i++) {
         const p = available[i];
-        if (assignments[p.id][d] === 'OFF') {
-          assignments[p.id][d] = shiftChar;
-        } else {
-          const prevS = assignments[p.id][d];
-          if (prevS === 'M' && shiftChar === 'E') assignments[p.id][d] = 'ME';
-          if (prevS === 'M' && shiftChar === 'N') assignments[p.id][d] = 'MN';
-          if (prevS === 'E' && shiftChar === 'N') assignments[p.id][d] = 'EN';
-          if (prevS === 'ME' && shiftChar === 'N') assignments[p.id][d] = 'MEN';
-        }
+        const candidateShift = setCoveragePeriod(assignments[p.id][d], shiftChar, true);
+        if (!candidateShift || !preservesExplicitPlan(p.id, d, candidateShift)) continue;
+        assignments[p.id][d] = candidateShift;
         gap--;
       }
 
@@ -1268,14 +1301,8 @@ export function solveNursingSchedule(
           // استاف و استراحت شب حتی در بن‌بست شکسته نمی‌شوند. Soft OFF همچنان
           // قابل نقض است (پایین‌تر، فقط با اولویت آخر) و سقف شیفت متوالی هم مثل
           // قبل صرفاً به ته صف رانده می‌شود، نه فیلترِ سخت.
-          const prospectiveShift = ((): ShiftType => {
-            if (currentShift === 'OFF') return shiftChar;
-            if (currentShift === 'M' && shiftChar === 'E') return 'ME';
-            if (currentShift === 'M' && shiftChar === 'N') return 'MN';
-            if (currentShift === 'E' && shiftChar === 'N') return 'EN';
-            if (currentShift === 'ME' && shiftChar === 'N') return 'MEN';
-            return currentShift;
-          })();
+          const prospectiveShift = setCoveragePeriod(currentShift, shiftChar, true);
+          if (!prospectiveShift || !preservesExplicitPlan(p.id, d, prospectiveShift)) return false;
 
           const emergencyViolation = evaluateHardConstraints(
             {
@@ -1359,15 +1386,9 @@ export function solveNursingSchedule(
 
         for (let i = 0; i < forceAvailable.length && gap > 0; i++) {
            const p = forceAvailable[i];
-           if (assignments[p.id][d] === 'OFF') {
-             assignments[p.id][d] = shiftChar;
-           } else {
-             const prevS = assignments[p.id][d];
-             if (prevS === 'M' && shiftChar === 'E') assignments[p.id][d] = 'ME';
-             if (prevS === 'M' && shiftChar === 'N') assignments[p.id][d] = 'MN';
-             if (prevS === 'E' && shiftChar === 'N') assignments[p.id][d] = 'EN';
-             if (prevS === 'ME' && shiftChar === 'N') assignments[p.id][d] = 'MEN';
-           }
+           const candidateShift = setCoveragePeriod(assignments[p.id][d], shiftChar, true);
+           if (!candidateShift || !preservesExplicitPlan(p.id, d, candidateShift)) continue;
+           assignments[p.id][d] = candidateShift;
            gap--;
         }
 

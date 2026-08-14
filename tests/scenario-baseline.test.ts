@@ -108,3 +108,16 @@ test('at most 3 scenarios are ever returned', () => {
   );
   assert.ok(result.top3.length <= 3);
 });
+
+test('scenario verification keeps a target unknown shift critical instead of canonicalizing it', () => {
+  const { baseline, personnel } = buildBaseline();
+  baseline.n1[1] = 'X';
+
+  const result = generateAndScoreScenarios(
+    1404, 2, personnel, [], settings, {}, undefined, null, 'nurse', baseline, []
+  );
+
+  assert.equal(result.top3.length, 0, 'the unknown target cell must remain a critical scenario warning');
+  assert.ok(result.generationLog.some(line => line.includes('برنامهٔ مبنا 1 هشدار سطح A')));
+  assert.ok(result.generationLog.some(line => line.includes('هشدار سطح A')));
+});

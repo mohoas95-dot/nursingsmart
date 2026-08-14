@@ -7,10 +7,12 @@ import {
 } from './smart-rules';
 import {
   evaluatePostHeavyOffPreference,
+  isUnknownShift,
   POST_HEAVY_OFF_PREFERENCE_PENALTY,
   shiftComponents,
   shiftContainsComponent,
   shiftFromComponents,
+  shiftSatisfiesRequestedShift,
 } from './workload';
 import {
   COVERAGE_FILL_HARD_RULES,
@@ -91,6 +93,58 @@ function setShiftPeriod(
   if (enabled) components.add(period);
   else components.delete(period);
   return shiftFromComponents(components) || 'OFF';
+}
+
+const WEEKDAY_DEPENDENT_SCOPES = new Set([
+  'saturdays', 'sundays', 'mondays', 'tuesdays', 'wednesdays', 'thursdays', 'fridays',
+  'weekly_even', 'weekly_odd',
+]);
+
+function isExplicitShiftRequestInScope(
+  request: ShiftRequest,
+  day: number,
+  dayOfWeek: number | undefined
+): boolean {
+  // Without calendar weekday data, preserve an explicit weekday plan rather than
+  // guessing that the cell is safe to rewrite.
+  if (dayOfWeek === undefined && WEEKDAY_DEPENDENT_SCOPES.has(request.scope)) return true;
+  return isDayInRequestScope(day, dayOfWeek ?? -1, request);
+}
+
+/**
+ * Reconciliation may add or remove a coverage component only when the resulting
+ * full-day shift still satisfies every explicit work plan for that cell. The
+ * shared workload helper defines the established semantics: M/E/N requests are
+ * component-compatible, while composite requests require their exact shift.
+ * Pattern steps intentionally retain the solver's existing all-month cadence.
+ */
+function isExplicitPlanCompatible(
+  requests: readonly ShiftRequest[] | undefined,
+  personnelId: string,
+  day: number,
+  dayOfWeek: number | undefined,
+  candidateShift: ShiftType
+): boolean {
+  for (const request of requests ?? []) {
+    if (request.personnelId !== personnelId) continue;
+
+    if (request.requestType === 'shift' && request.preferredShift) {
+      if (!isExplicitShiftRequestInScope(request, day, dayOfWeek)) continue;
+      if (!shiftSatisfiesRequestedShift(candidateShift, request.preferredShift)) return false;
+    }
+
+    if (request.requestType === 'pattern' && request.patternSteps?.length) {
+      const step = request.patternSteps[(day - 1) % request.patternSteps.length];
+      if (!step) continue;
+      // Pattern leave markers follow the existing pattern verifier semantics:
+      // any numbered/holiday leave marker satisfies a leave step.
+      const matchesPatternStep = step.startsWith('L')
+        ? candidateShift.startsWith('L')
+        : shiftSatisfiesRequestedShift(candidateShift, step);
+      if (!matchesPatternStep) return false;
+    }
+  }
+  return true;
 }
 
 function requiredCoverage(
@@ -191,6 +245,18 @@ export function reconcileStaffingCoverage(
             .filter(person => !lockedIds.has(person.id) && !person.locked)
             // سلول‌های محافظت‌شده (ویرایش دستی سرپرستار) هرگز دست‌نخورده باقی می‌مانند
             .filter(person => !isCellProtected(person.id, day))
+            .filter(person => {
+              const currentShift = reconciled[person.id]?.[day];
+              if (isUnknownShift(currentShift)) return false;
+              const candidateShift = setShiftPeriod(currentShift, shift, false);
+              return isExplicitPlanCompatible(
+                requests,
+                person.id,
+                day,
+                calendarDay.dayOfWeek,
+                candidateShift
+              );
+            })
             // Prefer removing a standalone period before breaking a combined shift.
             .sort((left, right) =>
               componentCount(reconciled[left.id]?.[day]) - componentCount(reconciled[right.id]?.[day])
@@ -247,7 +313,19 @@ export function reconcileStaffingCoverage(
           const available = group
             .filter(person => {
               const currentShift = reconciled[person.id]?.[day] || 'OFF';
-              if (shiftCoversPeriod(currentShift, shift)) return false;
+              // Unknown data is not empty capacity. Keep it verifier-visible until
+              // an explicit, safe transformation rule exists.
+              if (isUnknownShift(currentShift) || shiftCoversPeriod(currentShift, shift)) return false;
+              const candidateShift = nextShiftFor(person);
+              if (!isExplicitPlanCompatible(
+                requests,
+                person.id,
+                day,
+                calendarDay.dayOfWeek,
+                candidateShift
+              )) {
+                return false;
+              }
               return canAssignShift(
                 {
                   person,
@@ -255,7 +333,7 @@ export function reconcileStaffingCoverage(
                   dayOfWeek: calendarDay.dayOfWeek,
                   isHoliday: calendarDay.isHoliday,
                   period: shift,
-                  candidateShift: nextShiftFor(person),
+                  candidateShift,
                   assignments: reconciled,
                   totalDays,
                   requests,
