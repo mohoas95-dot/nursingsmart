@@ -27,6 +27,12 @@
 import { generateJalaliMonthCalendar } from './jalali';
 import { verifyCoverageAndLeaders } from './solver';
 import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
+import { repairScheduleBeforeWarnings } from '../domain/scheduling/repair-orchestrator';
+import {
+  COVERAGE_FILL_HARD_RULES,
+  evaluateHardConstraintLegality,
+} from '../domain/scheduling/hard-constraints';
+import { shiftSatisfiesRequestedShift } from '../domain/scheduling/workload';
 import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
 import {
   JobGroup,
@@ -136,7 +142,7 @@ interface ScenarioContext {
   freeTargetPersonnel: Personnel[];
   freeTargetIds: string[];
   lockedIdSet: Set<string>;
-  calendar: ReadonlyArray<{ day: number; dayOfWeek: number }>;
+  calendar: ReadonlyArray<{ day: number; dayOfWeek: number; isHoliday: boolean }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,15 +190,30 @@ function verifyScenarioSchedule(
   assignments: Record<string, Record<number, ShiftType>>,
   context: ScenarioContext
 ): VerifiedSchedule {
-  const reconciled = reconcileStaffingCoverage(
+  const calendarDays = generateJalaliMonthCalendar(
+    context.year,
+    context.month,
+    context.customHolidays,
+    context.firstDayOfWeekIndex
+  ).map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek }));
+  const coverageReconciled = reconcileStaffingCoverage(
     assignments,
     context.personnelList,
     context.settings,
-    generateJalaliMonthCalendar(context.year, context.month, context.customHolidays, context.firstDayOfWeekIndex).map(day => ({ day: day.day, isHoliday: day.isHoliday, dayOfWeek: day.dayOfWeek })),
+    calendarDays,
     context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
     context.lockedRows,
     context.requests
   ).assignments;
+  const reconciled = repairScheduleBeforeWarnings({
+    assignments: coverageReconciled,
+    personnelList: context.personnelList,
+    settings: context.settings,
+    calendarDays,
+    requests: context.requests,
+    targetJobGroups: context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
+    lockedRows: context.lockedRows,
+  }).assignments;
 
   const verification = verifyCoverageAndLeaders(
     context.year, context.month, context.personnelList, reconciled, context.settings,
@@ -350,10 +371,7 @@ function buildDiversityCandidate(
 // ---- نامزد درخواست‌محور: تعویض برای بهبود رعایت درخواست پرسنل ----------------
 
 function shiftCovers(shift: ShiftType, preferred: string): boolean {
-  if (preferred === 'M') return ['M', 'ME', 'MN', 'MEN'].includes(shift);
-  if (preferred === 'E') return ['E', 'ME', 'EN', 'MEN'].includes(shift);
-  if (preferred === 'N') return ['N', 'EN', 'MN', 'MEN'].includes(shift);
-  return shift === preferred;
+  return shiftSatisfiesRequestedShift(shift, preferred);
 }
 
 function isRequestSatisfiedForDay(request: ShiftRequest, shift: ShiftType, day: number, context: ScenarioContext): boolean {
@@ -428,6 +446,10 @@ export interface CriticalRepairContext {
   /** پرسنل آزادِ گروه هدف که تعمیر می‌تواند روی آن‌ها اعمال شود. */
   freeTargetPersonnel: readonly Personnel[];
   totalDays: number;
+  /** Optional for backwards-compatible unit tests; supplied by ScenarioContext. */
+  requests?: readonly ShiftRequest[];
+  calendarDays?: ReadonlyArray<{ day: number; dayOfWeek: number; isHoliday: boolean }>;
+  lockedRowIds?: ReadonlySet<string>;
 }
 
 export interface CriticalRepairEdit {
@@ -439,6 +461,31 @@ export interface CriticalRepairEdit {
 function findFreeTargetById(context: CriticalRepairContext, personnelId: string | undefined): Personnel | null {
   if (!personnelId) return null;
   return context.freeTargetPersonnel.find(person => person.id === personnelId) ?? null;
+}
+
+/** Shared hard-legality gate for scenario repair edits that add work. */
+function isLegalRepairWorkEdit(
+  schedule: VerifiedSchedule,
+  context: CriticalRepairContext,
+  person: Personnel,
+  day: number,
+  shift: ShiftType
+): boolean {
+  const calendarDay = context.calendarDays?.find(item => item.day === day);
+  return evaluateHardConstraintLegality(
+    {
+      person,
+      day,
+      dayOfWeek: calendarDay?.dayOfWeek,
+      isHoliday: calendarDay?.isHoliday,
+      candidateShift: shift,
+      assignments: schedule.assignments,
+      totalDays: context.totalDays,
+      requests: context.requests,
+      lockedRowIds: context.lockedRowIds,
+    },
+    COVERAGE_FILL_HARD_RULES
+  ).legal;
 }
 
 /**
@@ -462,7 +509,11 @@ export function generateCriticalRepairEdits(schedule: VerifiedSchedule, context:
         const shiftChar = warning.shift;
         if (!day || !shiftChar) break;
         for (const person of context.freeTargetPersonnel) {
-          if ((getAssignedShift(schedule, person.id, day)) === 'OFF') { push({ personnelId: person.id, day, shift: shiftChar }); break; }
+          if (getAssignedShift(schedule, person.id, day) === 'OFF'
+            && isLegalRepairWorkEdit(schedule, context, person, day, shiftChar)) {
+            push({ personnelId: person.id, day, shift: shiftChar });
+            break;
+          }
         }
         break;
       }
@@ -484,7 +535,12 @@ export function generateCriticalRepairEdits(schedule: VerifiedSchedule, context:
         // می‌شود: تغییر سیاستِ تعمیر غیرمجاز است؛ فقط عصر/شب تعمیر می‌شوند.
         if (!day || !code || code === 'M') break;
         for (const person of context.freeTargetPersonnel) {
-          if (person.canBeShiftLeader && getAssignedShift(schedule, person.id, day) === 'OFF') { push({ personnelId: person.id, day, shift: code }); break; }
+          if (person.canBeShiftLeader
+            && getAssignedShift(schedule, person.id, day) === 'OFF'
+            && isLegalRepairWorkEdit(schedule, context, person, day, code)) {
+            push({ personnelId: person.id, day, shift: code });
+            break;
+          }
         }
         break;
       }
@@ -520,10 +576,17 @@ export function generateCriticalRepairEdits(schedule: VerifiedSchedule, context:
 
 function repairCriticalAlerts(candidate: VerifiedSchedule, baseline: MonthlySchedule, context: ScenarioContext): VerifiedSchedule {
   let current = candidate;
+  const repairContext: CriticalRepairContext = {
+    freeTargetPersonnel: context.freeTargetPersonnel,
+    totalDays: context.totalDays,
+    requests: context.requests,
+    calendarDays: context.calendar,
+    lockedRowIds: context.lockedIdSet,
+  };
   // طبقه‌بندی بحرانی بر اساس کد ساخت‌یافته — نه پیشوندِ متن نمایشی.
   let criticalCount = countCriticalScheduleWarnings(current.structuredWarnings);
   for (let step = 0; step < MAX_CRITICAL_REPAIR_STEPS && criticalCount > 0; step += 1) {
-    const edits = generateCriticalRepairEdits(current, context);
+    const edits = generateCriticalRepairEdits(current, repairContext);
     if (edits.length === 0) break;
     let best: VerifiedSchedule | null = null;
     let bestCritical = criticalCount;

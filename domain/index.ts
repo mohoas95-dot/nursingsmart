@@ -104,32 +104,66 @@ export type {
 } from './scheduling/staffing-coverage';
 
 // ============================================================================
-// Smart Regeneration Rules — قوانین هوشمند بازتولید (سقف متوالی، شیفت تک‌تک، روتین کاری)
+// Authoritative Workload Model
+// ============================================================================
+
+export {
+  HEAVY_SHIFT_WORKLOAD_THRESHOLD,
+  MAX_CONSECUTIVE_NIGHTS,
+  MAX_CONSECUTIVE_SHIFTS,
+  PERIOD_WORKLOAD_WEIGHTS,
+  POST_HEAVY_OFF_PREFERENCE_PENALTY,
+  WORKLOAD_PERIODS,
+  endsMonthAtCapWithoutRest,
+  evaluatePostHeavyOffPreference,
+  findConsecutiveCapViolations,
+  findConsecutiveRuns,
+  getAdjacentWorkload,
+  getCandidateWorkloadContext,
+  getShiftWorkload,
+  isHeavyShift,
+  isKnownNonWorkShift,
+  isKnownShift,
+  isKnownWorkShift,
+  isUnknownShift,
+  isWorkShift,
+  shiftComponents,
+  shiftContainsComponent,
+  shiftContainsNight,
+  shiftFromComponents,
+  shiftSatisfiesRequestedShift,
+  wouldBreachConsecutiveCap,
+  wouldViolateNightRest,
+} from './scheduling/workload';
+
+export type {
+  AdjacentWorkload,
+  AssignmentMap,
+  CandidateWorkloadContext,
+  ConsecutiveRunSummary,
+  PostHeavyOffPreference,
+  NightRestViolation,
+  WorkloadPeriod,
+} from './scheduling/workload';
+
+// ============================================================================
+// Smart Regeneration Rules — قوانین روتین، شیفت تک‌تک، و مرخصی
 // ============================================================================
 
 export {
   HOLIDAY_LEAVE_HOURS,
   HOLIDAY_LEAVE_SHIFT,
-  MAX_CONSECUTIVE_SHIFTS,
   ROUTINE_PERIOD_ACCESS,
   ROUTINE_PREFERRED_SHIFTS,
-  endsMonthAtCapWithoutRest,
-  findConsecutiveCapViolations,
-  findConsecutiveRuns,
   findIsolatedSingleShiftDays,
   isHolidayLeaveShift,
   isIsolatedSingleShiftAt,
   isRoutineAllowedSingleShift,
-  isWorkShift,
   resolveLeaveShiftAssignment,
   routineAllowsPeriodAdd,
-  shiftContainsComponent,
   shiftMatchesRoutine,
-  wouldBreachConsecutiveCap,
   wouldCreateIsolatedShift,
 } from './scheduling/smart-rules';
-
-export type { AssignmentMap, ConsecutiveRunSummary } from './scheduling/smart-rules';
 
 // ============================================================================
 // Hard Constraints — قرارداد واحدِ محدودیت‌های سخت (Solver + reconcile)
@@ -141,10 +175,12 @@ export {
   EMERGENCY_FILL_HARD_RULES,
   EXPLICIT_REQUEST_HARD_RULES,
   HARD_CONSTRAINT_LABELS,
-  MAX_CONSECUTIVE_NIGHTS,
   OFF_BREAKER_HARD_RULES,
   UNKNOWN_DAY_OF_WEEK,
+  VERIFICATION_HARD_RULES,
   canAssignShift,
+  evaluateHardConstraintLegality,
+  evaluateHardConstraintViolations,
   evaluateHardConstraints,
   findHardOffRequest,
   findLeaveRequest,
@@ -162,8 +198,21 @@ export {
   violatesNightRest,
 } from './scheduling/hard-constraints';
 
+export {
+  repairScheduleBeforeWarnings,
+} from './scheduling/repair-orchestrator';
+
+export type {
+  DetectedRepairViolation,
+  RepairBeforeWarningInput,
+  RepairBeforeWarningResult,
+  RepairableViolationCode,
+  ScheduleRepairAction,
+} from './scheduling/repair-orchestrator';
+
 export type {
   ConstraintPeriod,
+  HardConstraintEvaluation,
   HardConstraintRules,
   HardConstraintViolation,
   LegalShiftResolution,

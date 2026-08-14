@@ -88,7 +88,7 @@ test('violatesHardOff only matches the right person, day and scope', () => {
   assert.equal(violatesHardOff([], 'p1', 5, 0), false);
 });
 
-test('violatesMorningOnly: supervisor/staff are blocked from E/N unless an explicit plan exists', () => {
+test('violatesMorningOnly: supervisor/staff are always blocked from E/N', () => {
   const supervisor = makePerson('s', { position: 'supervisor' });
   const staff = makePerson('t', { position: 'staff' });
   const general = makePerson('g');
@@ -101,21 +101,21 @@ test('violatesMorningOnly: supervisor/staff are blocked from E/N unless an expli
     assert.equal(violatesMorningOnly(person, 'M', false, false), false, 'morning is always allowed on a working day');
     assert.equal(violatesMorningOnly(person, 'E', false, false), true);
     assert.equal(violatesMorningOnly(person, 'N', false, false), true);
-    assert.equal(violatesMorningOnly(person, 'N', false, true), false, 'an explicit plan is the documented exception');
+    assert.equal(violatesMorningOnly(person, 'N', false, true), true, 'an explicit plan cannot bypass E/N hard restriction');
     assert.equal(violatesMorningOnly(person, 'M', true, false), true, 'holidays are rest days for supervisor/staff');
     assert.equal(violatesMorningOnly(person, 'M', true, false, false), false, 'holiday rest can be scoped out explicitly');
   }
   assert.equal(violatesMorningOnly(general, 'N', true, false), false, 'the rule never applies to general nurses');
 });
 
-test('violatesNightRest enforces the two-night cap and rest after a night', () => {
+test('violatesNightRest enforces the two-night cap but permits M after N', () => {
   assert.equal(MAX_CONSECUTIVE_NIGHTS, 2);
   const assignments = { p: { 1: 'N', 2: 'N', 3: 'OFF', 4: 'N' } };
 
   assert.equal(violatesNightRest(assignments, 'p', 3, 'N'), 'NIGHT_REST_CONSECUTIVE_NIGHTS');
   assert.equal(violatesNightRest(assignments, 'p', 3, 'E'), null, 'a non-night shift is unaffected');
   assert.equal(violatesNightRest(assignments, 'p', 2, 'N'), null, 'a second consecutive night is still allowed');
-  assert.equal(violatesNightRest(assignments, 'p', 5, 'M'), 'NIGHT_REST_MORNING_AFTER_NIGHT');
+  assert.equal(violatesNightRest(assignments, 'p', 5, 'M'), null, 'M after N is not a night-rest restriction');
   assert.equal(violatesNightRest(assignments, 'p', 5, 'E'), null);
 });
 
@@ -417,7 +417,7 @@ test('B3: when the only remaining candidates are supervisor/staff, the E/N short
   assert.equal(r.unresolvedGaps.length, 2, 'both the E and N gaps must be reported');
 });
 
-test('B3: supervisor/staff may still take the morning, and an explicit request unlocks E/N', () => {
+test('B3: supervisor/staff may take the morning, but explicit requests cannot unlock E/N', () => {
   const sup = makePerson('sup', { position: 'supervisor' });
   const morningOnly = reconcileStaffingCoverage(
     { sup: { 1: 'OFF' } },
@@ -437,7 +437,8 @@ test('B3: supervisor/staff may still take the morning, and an explicit request u
     makeSettings({ morningNurse: 0, afternoonNurse: 0, nightNurse: 1 }),
     weekdays(1), ['nurse'], [], requests
   );
-  assert.ok(coversN(withRequest.assignments.sup?.[1]), 'an explicit request is the documented exception');
+  assert.equal(withRequest.assignments.sup?.[1], 'OFF', 'an explicit request cannot bypass the hard E/N restriction');
+  assert.ok(withRequest.unresolvedGaps.some(gap => gap.shift === 'N'), 'the illegal night remains an unresolved shortage');
 });
 
 test('B3: end-to-end, supervisor and staff never work E/N in a feasible roster', () => {
@@ -490,20 +491,23 @@ test('B4: near-infeasible — the shortage is reported rather than a forbidden n
   );
 });
 
-test('B4: reconcile does not schedule a morning immediately after a night', () => {
+test('B4: reconcile may schedule M immediately after N when workload cap permits it', () => {
   const g1 = makePerson('g1');
-  const g2 = makePerson('g2');
-  const g3 = makePerson('g3');
-  // nightNurse stays 1 so g1's night on day 1 is real demand and is preserved.
   const r = reconcileStaffingCoverage(
-    { g1: { 1: 'N', 2: 'OFF' }, g2: { 1: 'OFF', 2: 'OFF' }, g3: { 1: 'OFF', 2: 'N' } },
-    [g1, g2, g3],
-    makeSettings({ morningNurse: 1, afternoonNurse: 0, nightNurse: 1 }),
-    weekdays(2), ['nurse'], [], []
+    { g1: { 1: 'N', 2: 'OFF' } },
+    [g1],
+    makeSettings(
+      { morningNurse: 1, afternoonNurse: 0, nightNurse: 0 },
+      { morningNurse: 0, afternoonNurse: 0, nightNurse: 1 }
+    ),
+    [
+      { day: 1, dayOfWeek: 0, isHoliday: true },
+      { day: 2, dayOfWeek: 1, isHoliday: false },
+    ],
+    ['nurse'], [], []
   );
   assert.equal(r.assignments.g1?.[1], 'N', 'the existing night must be preserved');
-  assert.ok(!coversM(r.assignments.g1?.[2]), `g1 got a morning right after a night (${r.assignments.g1?.[2]})`);
-  assert.ok(coversM(r.assignments.g2?.[2]), 'the legal candidate covers the morning instead');
+  assert.ok(coversM(r.assignments.g1?.[2]), 'N→M is legal when the workload cap is not exceeded');
 });
 
 test('B4: end-to-end, no personnel ever works three consecutive nights', () => {

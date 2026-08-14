@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { repairScheduleBeforeWarnings } from '../domain/scheduling/repair-orchestrator';
 import { reconcileStaffingCoverage, shiftCoversPeriod } from '../domain/scheduling/staffing-coverage';
 import { runOptimizerFacade } from '../features/scheduling/facades/shift-write-facade';
-import { solveNursingSchedule, solveWithPriority } from '../lib/solver';
+import { solveNursingSchedule, solveWithPriority, verifyCoverageAndLeaders } from '../lib/solver';
 import type { MonthlySchedule, Personnel, ShiftRequest, SystemSettings } from '../lib/types';
 
 function person(id: string, jobGroup: 'nurse' | 'assistant'): Personnel {
@@ -186,4 +187,315 @@ test('optimizer facade re-applies persisted staffing counts after target-group m
       assert.equal(count, 1, `day ${day}, shift ${shift} must match persisted demand`);
     }
   }
+});
+
+test('optimizer facade preserves a non-target cap violation while hardening its target group', async () => {
+  const nurse = person('n1', 'nurse');
+  const assistant = person('a1', 'assistant');
+  const preservedAssistantRow = { 1: 'MEN', 2: 'ME' };
+  let persisted: MonthlySchedule | null = null;
+
+  const result = await runOptimizerFacade(
+    {
+      jobGroup: 'nurse',
+      year: 1404,
+      month: 2,
+      personnel: [nurse, assistant],
+      requests: [],
+      settings: settingsWithDemand({}),
+      holidays: {},
+      firstDayOfWeek: undefined,
+      monthlyDutyHours: null,
+      currentSchedule: {
+        year: 1404,
+        month: 2,
+        assignments: {
+          n1: { 1: 'OFF', 2: 'OFF' },
+          a1: preservedAssistantRow,
+        },
+        shiftLeaders: {},
+        warnings: [],
+      },
+      lockState: {
+        finalizedNursesMonths: [],
+        finalizedAssistantsMonths: [],
+        lockedRows: [],
+      },
+      dismissedWarnings: [],
+    },
+    () => ({
+      assignments: {
+        n1: Object.fromEntries(Array.from({ length: 31 }, (_, index) => [index + 1, 'OFF'])),
+      },
+      warnings: [],
+    }),
+    () => ({ shiftLeaders: {}, warnings: [] }),
+    {
+      saveSchedule: async schedule => {
+        persisted = schedule as MonthlySchedule;
+      },
+    },
+    {
+      setSolvingTarget: () => undefined,
+      showConfirmation: () => true,
+      showError: message => assert.fail(message),
+    },
+    'test-department',
+    { delayMs: 0 }
+  );
+
+  assert.equal(result.success, true);
+  assert.ok(persisted);
+  assert.deepEqual((persisted as MonthlySchedule).assignments.a1, preservedAssistantRow);
+});
+
+test('reconciliation never treats an unknown shift as empty coverage capacity', () => {
+  const nurse = person('n1', 'nurse');
+  const result = reconcileStaffingCoverage(
+    { n1: { 1: 'X' } },
+    [nurse],
+    settingsWithDemand({ morningNurse: 1 }),
+    [{ day: 1, isHoliday: false, dayOfWeek: 0 }],
+    ['nurse']
+  );
+
+  assert.equal(result.assignments.n1[1], 'X');
+  assert.deepEqual(result.unresolvedGaps, [{
+    day: 1,
+    jobGroup: 'nurse',
+    shift: 'M',
+    required: 1,
+    assigned: 0,
+  }]);
+});
+
+test('reconciliation preserves exact composite requests while allowing single-component compatibility', () => {
+  const p1 = person('p1', 'nurse');
+  const p2 = person('p2', 'nurse');
+  const compositeRequest: ShiftRequest = {
+    id: 'p1-me',
+    personnelId: 'p1',
+    requestType: 'shift',
+    preferredShift: 'ME',
+    isEssential: true,
+    scope: 'custom_days',
+    selectedDays: [1],
+  };
+  const composite = reconcileStaffingCoverage(
+    { p1: { 1: 'ME' }, p2: { 1: 'OFF' } },
+    [p1, p2],
+    settingsWithDemand({ morningNurse: 1, afternoonNurse: 1, nightNurse: 1 }),
+    [{ day: 1, isHoliday: false, dayOfWeek: 0 }],
+    ['nurse'],
+    [],
+    [compositeRequest]
+  );
+
+  assert.equal(composite.assignments.p1[1], 'ME', 'ME must not be expanded to MEN');
+  assert.equal(composite.assignments.p2[1], 'N', 'a compatible alternative fills the N gap');
+  assert.deepEqual(composite.unresolvedGaps, []);
+
+  const componentRequest: ShiftRequest = {
+    ...compositeRequest,
+    id: 'p1-m',
+    preferredShift: 'M',
+  };
+  const component = reconcileStaffingCoverage(
+    { p1: { 1: 'M' } },
+    [p1],
+    settingsWithDemand({ morningNurse: 1, afternoonNurse: 1 }),
+    [{ day: 1, isHoliday: false, dayOfWeek: 0 }],
+    ['nurse'],
+    [],
+    [componentRequest]
+  );
+
+  assert.equal(component.assignments.p1[1], 'ME', 'single-M requests remain component-compatible');
+  assert.deepEqual(component.unresolvedGaps, []);
+});
+
+test('reconciliation honors exact pattern steps and leaves incompatible excess unresolved', () => {
+  const p1 = person('p1', 'nurse');
+  const p2 = person('p2', 'nurse');
+  const pattern: ShiftRequest = {
+    id: 'p1-pattern',
+    personnelId: 'p1',
+    requestType: 'pattern',
+    patternSteps: ['ME'],
+    isEssential: true,
+    scope: 'all',
+  };
+  const covered = reconcileStaffingCoverage(
+    { p1: { 1: 'ME' }, p2: { 1: 'OFF' } },
+    [p1, p2],
+    settingsWithDemand({ morningNurse: 1, afternoonNurse: 1, nightNurse: 1 }),
+    [{ day: 1, isHoliday: false, dayOfWeek: 0 }],
+    ['nurse'],
+    [],
+    [pattern]
+  );
+  assert.equal(covered.assignments.p1[1], 'ME');
+  assert.equal(covered.assignments.p2[1], 'N');
+
+  const excess = reconcileStaffingCoverage(
+    { p1: { 1: 'ME' } },
+    [p1],
+    settingsWithDemand({ morningNurse: 1, afternoonNurse: 0 }),
+    [{ day: 1, isHoliday: false, dayOfWeek: 0 }],
+    ['nurse'],
+    [],
+    [pattern]
+  );
+  assert.equal(excess.assignments.p1[1], 'ME', 'removing E would violate the exact pattern step');
+  assert.ok(excess.unresolvedGaps.some(gap => gap.shift === 'E' && gap.required === 0 && gap.assigned === 1));
+});
+
+test('optimizer facade preserves an unknown target cell through reconciliation and final verification', async () => {
+  const nurse = person('n1', 'nurse');
+  const settings = settingsWithDemand({ morningNurse: 1 });
+  let persisted: MonthlySchedule | null = null;
+
+  const result = await runOptimizerFacade(
+    {
+      jobGroup: 'nurse',
+      year: 1404,
+      month: 2,
+      personnel: [nurse],
+      requests: [],
+      settings,
+      holidays: {},
+      firstDayOfWeek: undefined,
+      monthlyDutyHours: null,
+      currentSchedule: null,
+      lockState: {
+        finalizedNursesMonths: [],
+        finalizedAssistantsMonths: [],
+        lockedRows: [],
+      },
+      dismissedWarnings: [],
+    },
+    () => ({
+      assignments: {
+        n1: Object.fromEntries(Array.from({ length: 31 }, (_, index) => [index + 1, index === 0 ? 'X' : 'OFF'])),
+      },
+      warnings: [],
+    }),
+    verifyCoverageAndLeaders,
+    {
+      saveSchedule: async schedule => {
+        persisted = schedule as MonthlySchedule;
+      },
+    },
+    {
+      setSolvingTarget: () => undefined,
+      showConfirmation: () => true,
+      showError: message => assert.fail(message),
+    },
+    'test-department',
+    { delayMs: 0 }
+  );
+
+  assert.equal(result.success, true);
+  assert.ok(persisted);
+  const saved = persisted as MonthlySchedule;
+  assert.equal(saved.assignments.n1[1], 'X');
+  assert.ok(saved.warnings.some(warning => warning.startsWith('Unknown Shift:')));
+  assert.ok(saved.warnings.some(warning => warning.startsWith('Coverage Shortage:') && warning.includes('روز 1 شیفت M')));
+});
+
+test('final reconciliation leaves an exact composite request intact before cap repair', () => {
+  const p1 = person('p1', 'nurse');
+  const p2 = person('p2', 'nurse');
+  const p3 = person('p3', 'nurse');
+  const q1 = person('q1', 'nurse');
+  const q2 = person('q2', 'nurse');
+  const q3 = person('q3', 'nurse');
+  const personnel = [p1, p2, p3, q1, q2, q3];
+  const calendarDays = [
+    { day: 1, dayOfWeek: 0, isHoliday: false },
+    { day: 2, dayOfWeek: 1, isHoliday: false },
+    { day: 3, dayOfWeek: 2, isHoliday: false },
+  ];
+  const settings = settingsWithDemand({ morningNurse: 2, afternoonNurse: 2, nightNurse: 2 });
+  const requests: ShiftRequest[] = [
+    {
+      id: 'p2-me', personnelId: 'p2', requestType: 'shift', preferredShift: 'ME',
+      isEssential: true, scope: 'custom_days', selectedDays: [3],
+    },
+    {
+      id: 'q1-leave', personnelId: 'q1', requestType: 'leave',
+      isEssential: true, scope: 'custom_days', selectedDays: [3],
+    },
+    {
+      id: 'q2-leave', personnelId: 'q2', requestType: 'leave',
+      isEssential: true, scope: 'custom_days', selectedDays: [3],
+    },
+  ];
+  const initial = {
+    p1: { 1: 'OFF', 2: 'MEN', 3: 'ME' },
+    p2: { 1: 'OFF', 2: 'OFF', 3: 'ME' },
+    p3: { 1: 'N', 2: 'N', 3: 'OFF' },
+    q1: { 1: 'ME', 2: 'ME', 3: 'L1' },
+    q2: { 1: 'ME', 2: 'OFF', 3: 'L1' },
+    q3: { 1: 'N', 2: 'OFF', 3: 'N' },
+  };
+
+  const preRepair = reconcileStaffingCoverage(initial, personnel, settings, calendarDays, ['nurse'], [], requests);
+  assert.equal(preRepair.assignments.p2[3], 'ME', 'pre-repair reconciliation must not turn ME into MEN');
+  assert.ok(preRepair.unresolvedGaps.some(gap =>
+    gap.day === 3 && gap.shift === 'N' && gap.required === 2 && gap.assigned === 1
+  ));
+
+  const repaired = repairScheduleBeforeWarnings({
+    assignments: preRepair.assignments,
+    personnelList: personnel,
+    settings,
+    calendarDays,
+    requests,
+    targetJobGroups: ['nurse'],
+  });
+  assert.equal(repaired.assignments.p2[3], 'ME');
+  assert.ok(repaired.repairs.some(repair => repair.personnelId === 'p1' && repair.code === 'MAX_CONSECUTIVE'));
+
+  const verification = verifyCoverageAndLeaders(
+    1404,
+    2,
+    personnel,
+    repaired.assignments,
+    settingsWithDemand({}),
+    {},
+    undefined,
+    requests
+  );
+  assert.equal(verification.structuredWarnings.some(warning =>
+    warning.code === 'MISMATCHED_REQUEST' && warning.personnelId === 'p2' && warning.day === 3
+  ), false);
+});
+
+test('solver coverage fill does not expand an exact ME request to MEN in an emergency shortage', () => {
+  const nurse = person('n1', 'nurse');
+  const request: ShiftRequest = {
+    id: 'n1-me',
+    personnelId: 'n1',
+    requestType: 'shift',
+    preferredShift: 'ME',
+    isEssential: true,
+    scope: 'custom_days',
+    selectedDays: [1],
+  };
+  const result = solveNursingSchedule(
+    1404,
+    2,
+    [nurse],
+    [request],
+    settingsWithDemand({ morningNurse: 1, afternoonNurse: 1, nightNurse: 1 }),
+    {},
+    undefined,
+    null
+  );
+
+  assert.equal(result.assignments.n1[1], 'ME');
+  assert.equal(result.warnings.some(warning =>
+    warning.startsWith('Mismatched Request:') && warning.includes('روز 1 درخواست شیفت ME')
+  ), false);
 });

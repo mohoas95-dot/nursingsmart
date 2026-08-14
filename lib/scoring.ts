@@ -8,6 +8,7 @@ import {
   SystemSettings,
 } from './types';
 import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
+import { shiftSatisfiesRequestedShift } from '../domain/scheduling/workload';
 import { generatePersonnelReports } from './solver';
 import {
   isCriticalWarningCode,
@@ -76,6 +77,9 @@ export const HARD_WARNING_PREFIXES = [
   'Missing Shift Leader:',
   'Max Consecutive:',
   'Mandatory Rest:',
+  'Night Rest:',
+  'Supervisor/Staff E/N Restriction:',
+  'Unknown Shift:',
 ] as const;
 
 export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number], string> = {
@@ -84,6 +88,9 @@ export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number],
   'Missing Shift Leader:': 'نبود سرشیفت',
   'Max Consecutive:': 'نقض سقف شیفت متوالی',
   'Mandatory Rest:': 'لزوم استراحت اجباری',
+  'Night Rest:': 'نقض استراحت شب',
+  'Supervisor/Staff E/N Restriction:': 'ممنوعیت عصر/شب سرپرستار یا استاف',
+  'Unknown Shift:': 'شیفت ناشناخته',
 };
 
 export const MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO = 4;
@@ -230,7 +237,7 @@ export function filterStructuredWarningsForScenarioGroup(
  * - ورودی رشته‌ای (LEGACY): بر اساس پیشوندهای تاریخی — فقط برای سازگاری با
  *   مصرف‌کننده‌هایی که هنوز رشته در دست دارند (UI، ذخیره‌سازی، موارد قدیمی).
  *
- * سیاست تغییر نکرده است: هر دو مسیر دقیقاً همان پنج نوع هشدار را بحرانی می‌دانند.
+ * هر دو مسیر همان مجموعهٔ هشدارهای سخت را بحرانی می‌دانند.
  */
 export function isHardConstraintWarning(warning: string | ScheduleWarning): boolean {
   if (typeof warning !== 'string') {
@@ -252,10 +259,7 @@ export function isHardWarningCountAcceptable(hardWarningCount: number): boolean 
 }
 
 function shiftSatisfiesPreferred(assigned: ShiftType, preferred: string): boolean {
-  if (preferred === 'M') return ['M', 'ME', 'MN', 'MEN'].includes(assigned);
-  if (preferred === 'E') return ['E', 'ME', 'EN', 'MEN'].includes(assigned);
-  if (preferred === 'N') return ['N', 'EN', 'MN', 'MEN'].includes(assigned);
-  return assigned === preferred;
+  return shiftSatisfiesRequestedShift(assigned, preferred);
 }
 
 function shiftViolatesAvoidRule(assigned: ShiftType, preferred: string): boolean {

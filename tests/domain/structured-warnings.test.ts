@@ -87,8 +87,11 @@ test('structured warning exposes code, severity and metadata fields', () => {
   assert.deepEqual(warning.metadata, { assigned: 1, demanded: 2, delta: -1 });
 });
 
-test('default severity mapping: 5 critical codes, auto-fix notices are info, rest are warnings', () => {
-  for (const code of ['COVERAGE_SHORTAGE', 'OVERSTAFFING', 'MISSING_SHIFT_LEADER', 'MAX_CONSECUTIVE', 'MANDATORY_REST'] as const) {
+test('default severity mapping: hard-rule warnings are critical, auto-fix notices are info, rest are warnings', () => {
+  for (const code of [
+    'COVERAGE_SHORTAGE', 'OVERSTAFFING', 'MISSING_SHIFT_LEADER', 'MAX_CONSECUTIVE', 'MANDATORY_REST',
+    'NIGHT_REST', 'SUPERVISOR_STAFF_EN_RESTRICTION', 'UNKNOWN_SHIFT',
+  ] as const) {
     assert.equal(isCriticalWarningCode(code), true);
     assert.equal(createScheduleWarning({ code, message: 'x' }).severity, 'critical');
   }

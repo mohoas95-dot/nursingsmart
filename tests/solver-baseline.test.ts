@@ -151,7 +151,7 @@ test('night-rest: an explicit N-all-month request never produces a third consecu
   const s = solved(personnel, requests, makeSettings());
   const row = s.assignments.g1 || {};
 
-  assert.equal(row[1], 'N', 'the first legal night is still honored');
+  assert.ok(coversN(row[1]), 'the first legal night is still honored (coverage may legally add E)');
   for (let d = 3; d <= daysInMonth(); d++) {
     assert.ok(
       !(coversN(row[d - 2]) && coversN(row[d - 1]) && coversN(row[d])),
@@ -285,16 +285,14 @@ test('soft OFF: unlike a hard OFF, a soft OFF may still be broken by the consecu
 // ---------------------------------------------------------------------------
 // 8. Locked rows / protected cells
 // ---------------------------------------------------------------------------
-test('[CURRENT-BEHAVIOR] personnel.locked is ignored by solveNursingSchedule (the row still gets shifts)', () => {
+test('personnel.locked is honored by solveNursingSchedule shared hard evaluation', () => {
   const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1', { locked: true })];
   const s = solved(personnel, [], makeSettings());
   const row = s.assignments.g1 || {};
-  let worked = 0;
   for (let d = 1; d <= daysInMonth(); d++) {
     const shift = row[d];
-    if (shift && shift !== 'OFF' && !String(shift).startsWith('L')) worked++;
+    assert.ok(!shift || shift === 'OFF' || String(shift).startsWith('L'), `locked personnel must remain non-working on day ${d}`);
   }
-  assert.ok(worked > 0, 'locked personnel still received working shifts');
 });
 
 test('locked rows: reconcileStaffingCoverage never modifies a locked row', () => {
@@ -471,11 +469,15 @@ test('[CURRENT-BEHAVIOR] scenario ranking: totalScore is exactly the baseline si
 // ---------------------------------------------------------------------------
 // 13. Infeasible coverage
 // ---------------------------------------------------------------------------
-test('[CURRENT-BEHAVIOR] infeasible coverage: per-day Coverage Shortage warnings + best-effort assignments', () => {
+test('infeasible coverage: shortages are reported without using supervisor/staff for E/N', () => {
   const p = scenarioInfeasible();
   const s = solved(p.personnel, p.requests, p.settings);
-  assert.equal(s.warnings.length, 31, 'one Coverage Shortage per day for M');
-  assert.ok(s.warnings.every(w => w.startsWith('Coverage Shortage:')), 'only coverage warnings expected');
+  assert.ok(s.warnings.some(w => w.startsWith('Coverage Shortage:')), 'infeasible demand must remain visible');
+  for (const id of ['sup', 'stf']) {
+    for (let d = 1; d <= daysInMonth(); d++) {
+      assert.ok(!coversE(s.assignments[id]?.[d]) && !coversN(s.assignments[id]?.[d]), `${id} must not cover E/N on day ${d}`);
+    }
+  }
   // Assignments are still produced for every active person on every day.
   for (const person of p.personnel) {
     for (let d = 1; d <= daysInMonth(); d++) {

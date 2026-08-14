@@ -16,11 +16,9 @@
  *   - هر نقطهٔ تصمیم‌گیری می‌تواند «زیرمجموعه‌ای» از قوانین را فعال کند، اما
  *     تعریف هر قانون فقط یک‌جا (همین فایل) نگهداری می‌شود.
  *
- * تعارض‌های شناخته‌شده و آگاهانه (silent override نداریم):
- *   • سقف شیفت متوالی (MAX_CONSECUTIVE_SHIFTS) در `reconcileStaffingCoverage`
- *     به‌صورت «اولویت» اعمال می‌شود نه «فیلتر سخت»، چون مسیر اضطراریِ خودِ
- *     solver هم در بن‌بست همین کار را می‌کند و نقض آن به‌صورت هشدار بحرانی
- *     `MAX_CONSECUTIVE` گزارش می‌شود. این تصمیم در همان محل به‌صراحت مستند شده است.
+ * قرارداد فعلی:
+ *   • سقف workload، استراحت شب، Hard OFF/leave، و ممنوعیت E/N برای
+ *     Supervisor/Staff در تمام نویسندگان خودکار محدودیت سخت‌اند.
  *   • Soft OFF عمداً «سخت» نیست: در بن‌بست قابل نقض است. تفاوت Hard/Soft فقط
  *     از طریق `isHardOffRequest` تعیین می‌شود.
  */
@@ -28,10 +26,15 @@
 import type { Personnel, ShiftRequest, ShiftType } from '../../lib/types';
 import { isDayInRequestScope } from '../requests/request-scope-matcher';
 import {
+  MAX_CONSECUTIVE_NIGHTS as WORKLOAD_MAX_CONSECUTIVE_NIGHTS,
+  isKnownWorkShift,
+  isUnknownShift,
   shiftContainsComponent,
+  shiftFromComponents,
   wouldBreachConsecutiveCap,
+  wouldViolateNightRest,
   type AssignmentMap,
-} from './smart-rules';
+} from './workload';
 
 /** دوره‌های زمانی روز که مبنای پوشش نیرو هستند. */
 export type ConstraintPeriod = 'M' | 'E' | 'N';
@@ -43,7 +46,7 @@ export type ConstraintPeriod = 'M' | 'E' | 'N';
  * `solveNursingSchedule` اگر پرسنل در دو روز گذشته شب کار کرده باشد، شبِ سوم
  * غیرمجاز است (`workedN1 && workedN2 → reject`). یعنی سقف دو شب متوالی.
  */
-export const MAX_CONSECUTIVE_NIGHTS = 2;
+export const MAX_CONSECUTIVE_NIGHTS = WORKLOAD_MAX_CONSECUTIVE_NIGHTS;
 
 /** شناسهٔ ماشینیِ نوع نقض — برای گزارش ساخت‌یافته، بدون تجزیهٔ متن. */
 export type HardConstraintViolation =
@@ -55,8 +58,8 @@ export type HardConstraintViolation =
   | 'PROTECTED_CELL'
   | 'MORNING_ONLY'
   | 'NIGHT_REST_CONSECUTIVE_NIGHTS'
-  | 'NIGHT_REST_MORNING_AFTER_NIGHT'
-  | 'MAX_CONSECUTIVE';
+  | 'MAX_CONSECUTIVE'
+  | 'UNKNOWN_SHIFT';
 
 /** برچسب فارسیِ نمایشی هر نقض (فقط برای متن هشدار؛ منطق ماشینی از کد استفاده می‌کند). */
 export const HARD_CONSTRAINT_LABELS: Readonly<Record<HardConstraintViolation, string>> = {
@@ -68,8 +71,8 @@ export const HARD_CONSTRAINT_LABELS: Readonly<Record<HardConstraintViolation, st
   PROTECTED_CELL: 'ویرایش دستی سرپرستار',
   MORNING_ONLY: 'محدودیت صبح‌کاری سرپرستار/استاف',
   NIGHT_REST_CONSECUTIVE_NIGHTS: 'سقف شب متوالی',
-  NIGHT_REST_MORNING_AFTER_NIGHT: 'استراحت پس از شب',
   MAX_CONSECUTIVE: 'سقف شیفت متوالی',
+  UNKNOWN_SHIFT: 'شیفت ناشناخته',
 };
 
 // ---------------------------------------------------------------------------
@@ -201,15 +204,12 @@ export function hasExplicitPlanForPeriod(
 /**
  * آیا تخصیص این دوره به سرپرستار/استاف، قانون صبح‌کاری را نقض می‌کند؟
  *
- * قانون استخراج‌شده از چینش حریصانهٔ `solveNursingSchedule`:
- *   • روز کاری: عصر (E) و شب (N) ممنوع است.
- *   • روز تعطیل: هر سه دوره ممنوع است (سرپرستار/استاف تعطیل‌اند).
- *   • استثنا: وجود درخواست شیفت/الگوی کاری صریح برای همان دوره.
+ * Domain rule:
+ *   • Supervisor/Staff must never cover E or N, including an explicit request.
+ *   • On holidays M is also rest by default; an explicit M plan may still opt into
+ *     that holiday morning when the caller enables holiday-rest protection.
  *
- * @param includeHolidayRest اگر false باشد، فقط بخش «E/N ممنوع» اعمال می‌شود و
- *   تعطیلیِ روزهای تعطیل نادیده گرفته می‌شود. این تفکیک عمدی و صریح است تا
- *   نقاط تصمیم‌گیریِ مختلف بتوانند دامنهٔ قانون را بدون بازنویسیِ آن انتخاب کنند
- *   (مثلاً جبران پوشش، صبحِ روز تعطیل را همچنان مجاز می‌داند).
+ * @param includeHolidayRest If false, only the absolute E/N restriction applies.
  */
 export function violatesMorningOnly(
   person: Pick<Personnel, 'position'>,
@@ -219,30 +219,21 @@ export function violatesMorningOnly(
   includeHolidayRest = true
 ): boolean {
   if (!isMorningOnlyPosition(person)) return false;
-  if (hasExplicitPlan) return false;
-  if (isHoliday && includeHolidayRest) return true;
-  return period === 'E' || period === 'N';
+  // E/N is absolute for Supervisor/Staff. Explicit requests and patterns cannot
+  // turn this hard domain restriction into a legal coverage candidate.
+  if (period === 'E' || period === 'N') return true;
+  // Preserve the existing holiday-morning behavior: M is normally rest on a
+  // holiday, but an explicit M plan can opt into it where that policy is enabled.
+  return isHoliday && includeHolidayRest && !hasExplicitPlan;
 }
 
 // ---------------------------------------------------------------------------
 // قانون: استراحت شب
 // ---------------------------------------------------------------------------
 
-/** آیا شیفت این روز شامل شب است؟ */
-function worksNightOn(assignments: AssignmentMap, personnelId: string, day: number): boolean {
-  if (day < 1) return false;
-  return shiftContainsComponent(assignments[personnelId]?.[day], 'N');
-}
-
 /**
- * آیا این تخصیص، قوانین استراحت شب را نقض می‌کند؟
- *
- * دو زیرقانون که هر دو مستقیماً از چینش حریصانهٔ `solveNursingSchedule`
- * استخراج شده‌اند:
- *   1. شبِ سوم متوالی ممنوع است (سقف = MAX_CONSECUTIVE_NIGHTS = ۲).
- *   2. صبحِ بلافاصله پس از شب ممنوع است (استراحت پس از شب‌کاری).
- *
- * @returns کد نقض، یا null اگر مجاز باشد.
+ * Backwards-compatible hard-constraint adapter around the authoritative workload
+ * model's night-rest evaluator.
  */
 export function violatesNightRest(
   assignments: AssignmentMap,
@@ -250,20 +241,8 @@ export function violatesNightRest(
   day: number,
   candidateShift: ShiftType
 ): HardConstraintViolation | null {
-  if (shiftContainsComponent(candidateShift, 'N')) {
-    let consecutive = 0;
-    for (let previous = day - 1; previous >= 1; previous--) {
-      if (!worksNightOn(assignments, personnelId, previous)) break;
-      consecutive += 1;
-      if (consecutive >= MAX_CONSECUTIVE_NIGHTS) return 'NIGHT_REST_CONSECUTIVE_NIGHTS';
-    }
-  }
-
-  if (shiftContainsComponent(candidateShift, 'M') && worksNightOn(assignments, personnelId, day - 1)) {
-    return 'NIGHT_REST_MORNING_AFTER_NIGHT';
-  }
-
-  return null;
+  const violation = wouldViolateNightRest(assignments, personnelId, day, candidateShift);
+  return violation === 'CONSECUTIVE_NIGHTS' ? 'NIGHT_REST_CONSECUTIVE_NIGHTS' : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +252,7 @@ export function violatesNightRest(
 /**
  * آیا این تخصیص، سقف شیفت متوالی را می‌شکند؟
  * پوشش نازکی روی `wouldBreachConsecutiveCap` تا همهٔ نقاط تصمیم‌گیری از یک نام
- * و یک تعریف استفاده کنند (منبع حقیقت همچنان smart-rules است).
+ * و یک تعریف استفاده کنند (منبع حقیقت workload.ts است).
  */
 export function violatesConsecutiveLimit(
   assignments: AssignmentMap,
@@ -326,6 +305,8 @@ export interface HardConstraintRules {
   morningOnlyIncludesHoliday?: boolean;
   nightRest?: boolean;
   consecutiveCap?: boolean;
+  /** Reject unknown shift strings rather than inventing a safe workload. */
+  knownShift?: boolean;
 }
 
 /** همهٔ قوانین سخت. */
@@ -339,68 +320,73 @@ export const ALL_HARD_RULES: HardConstraintRules = {
   morningOnly: true,
   nightRest: true,
   consecutiveCap: true,
+  knownShift: true,
 };
 
 /**
  * قوانینی که هنگام نوشتن «درخواست شیفت صریح» سخت‌اند.
  *
  * ترتیب اولویت: محدودیت سخت > قفل/محافظت > درخواست صریح > سایر ترجیحات.
- * قانون صبح‌کاری اینجا فعال نیست، چون خودِ درخواست صریح استثنای آن قانون است.
+ * درخواست صریح هیچ استثنایی برای ممنوعیت E/N Supervisor/Staff ایجاد نمی‌کند.
  */
 export const EXPLICIT_REQUEST_HARD_RULES: HardConstraintRules = {
   hardOff: true,
   essentialLeave: true,
   leaveRequest: true,
   leaveCell: true,
+  lockedRow: true,
+  protectedCell: true,
+  // Explicit requests must not bypass the absolute Supervisor/Staff E/N ban.
+  morningOnly: true,
   nightRest: true,
   consecutiveCap: true,
+  knownShift: true,
 };
 
 /**
  * قوانینی که هنگام «شکستن زنجیرهٔ آف» (پس‌پردازش solver) سخت‌اند.
  *
  * این قاعده کم‌اولویت است و صرفاً برای رعایت سقف ۳ روز آف متوالی اجرا می‌شود؛
- * پس هرگز نباید آفِ قطعی یا مرخصی را بازنویسی کند. سقف شیفت متوالی جداگانه در
- * همان محل با `wouldBreachConsecutiveCap` بررسی می‌شود (رفتار موجود، بدون تغییر).
+ * پس هرگز نباید آفِ قطعی، مرخصی، قفل، استراحت شب، سقف workload، یا محدودیت
+ * E/N Supervisor/Staff را نقض کند.
  */
 export const OFF_BREAKER_HARD_RULES: HardConstraintRules = {
   hardOff: true,
   essentialLeave: true,
   leaveRequest: true,
   leaveCell: true,
-  // `personnel.locked` عمداً اینجا اعمال نمی‌شود: نادیده‌گرفتنِ آن توسط
-  // solveNursingSchedule یک باگ جداگانه (B6) و خارج از دامنهٔ این Session است.
-  // سقف شیفت متوالی هم در همان محل با wouldBreachConsecutiveCap بررسی می‌شود.
+  lockedRow: true,
+  morningOnly: true,
+  nightRest: true,
+  consecutiveCap: true,
+  knownShift: true,
 };
 
 /**
- * قوانینی که در «مسیر اضطراریِ بن‌بست» solver سخت‌اند.
+ * قوانین سختِ مسیر اضطراری solver.
  *
- * دامنه عمداً حداقلی است و دقیقاً همان چیزی را اضافه می‌کند که برای تضمین
- * B4/B5 لازم است: هیچ جبران‌کنندهٔ پوششی — حتی مسیر اضطراری — حق ندارد یک
- * دنبالهٔ شبِ ممنوع بسازد. آف قطعی و مرخصیِ ضروری هم مثل قبل حفظ می‌شوند.
- *
- * عمداً اضافه نشده (خارج از دامنهٔ B1–B5):
- *   • `morningOnly` — امروز مسیر اضطراری این قانون را اعمال نمی‌کند. سخت‌کردن
- *     آن اینجا باعث می‌شد در روسترهای ناممکن، پوششِ E/N سرپرستار/استاف کاملاً
- *     حذف و ده‌ها هشدار «نبود سرشیفت» تولید شود؛ یعنی تغییری بسیار فراتر از
- *     B3 که فقط دربارهٔ reconcile است. این ناسازگاریِ باقی‌مانده در گزارش
- *     نهایی به‌صراحت ثبت شده است.
- *   • `consecutiveCap` — مثل قبل فقط ترتیب صف را تعیین می‌کند و نقضش به‌صورت
- *     هشدار بحرانی MAX_CONSECUTIVE گزارش می‌شود.
+ * Emergency means broader search among legal candidates; it never permits a
+ * hard OFF/leave/lock breach, workload-cap breach, night-rest breach, or
+ * Supervisor/Staff E/N assignment.
  */
 export const EMERGENCY_FILL_HARD_RULES: HardConstraintRules = {
   hardOff: true,
   essentialLeave: true,
+  leaveRequest: true,
   leaveCell: true,
+  lockedRow: true,
+  protectedCell: true,
+  morningOnly: true,
+  // Holiday M-rest remains a scheduling policy, but E/N is absolute.
+  morningOnlyIncludesHoliday: false,
   nightRest: true,
+  consecutiveCap: true,
+  knownShift: true,
 };
 
 /**
- * قوانینی که هنگام جبران کمبود پوشش در `reconcileStaffingCoverage` سخت‌اند.
- *
- * توجه (تعارض آگاهانه): `consecutiveCap` عمداً اینجا سخت نیست و به‌صورت اولویت
- * اعمال می‌شود؛ دلیل و محل آن در `staffing-coverage.ts` مستند شده است.
+ * قوانین سخت هنگام جبران کمبود پوشش در `reconcileStaffingCoverage`.
+ * A remaining shortage is preferred to intentionally violating any enabled rule.
  */
 export const COVERAGE_FILL_HARD_RULES: HardConstraintRules = {
   hardOff: true,
@@ -410,83 +396,120 @@ export const COVERAGE_FILL_HARD_RULES: HardConstraintRules = {
   lockedRow: true,
   protectedCell: true,
   morningOnly: true,
-  // جبران پوشش فقط ممنوعیت E/N را اعمال می‌کند؛ «تعطیلیِ روز تعطیل» یک ترجیح
-  // چینشی است نه محدودیت سخت، و اعمال آن اینجا رفتار پوشش موجود را می‌شکست.
+  // Coverage filling enforces the absolute E/N restriction but may still use a
+  // Supervisor/Staff morning on a holiday when required.
   morningOnlyIncludesHoliday: false,
   nightRest: true,
+  consecutiveCap: true,
+  knownShift: true,
 };
 
 /**
- * اولین نقضِ محدودیت سختِ فعال را برمی‌گرداند (یا null اگر تخصیص مجاز باشد).
- * ترتیب بررسی از «غیرقابل‌تغییرترین» به «قاعده‌مندترین» است تا کد نقضِ گزارش‌شده
- * معنادار و پایدار باشد.
+ * Rules for validating an already-written work assignment. Lock/protected and
+ * leave-cell checks are intentionally absent: a verifier reports schedule
+ * legality, not whether a historic assignment was editable.
  */
-export function evaluateHardConstraints(
+export const VERIFICATION_HARD_RULES: HardConstraintRules = {
+  hardOff: true,
+  essentialLeave: true,
+  leaveRequest: true,
+  morningOnly: true,
+  morningOnlyIncludesHoliday: false,
+  nightRest: true,
+  consecutiveCap: true,
+  knownShift: true,
+};
+
+/** A composable, machine-readable hard-legality result for one candidate assignment. */
+export interface HardConstraintEvaluation {
+  legal: boolean;
+  violations: HardConstraintViolation[];
+}
+
+/**
+ * Evaluate every enabled hard rule in a stable order. Callers that only need the
+ * historical first reason can continue using `evaluateHardConstraints` below.
+ */
+export function evaluateHardConstraintViolations(
   decision: Readonly<ShiftAssignmentDecision>,
   rules: Readonly<HardConstraintRules> = ALL_HARD_RULES
-): HardConstraintViolation | null {
+): HardConstraintViolation[] {
   const {
     person, day, candidateShift, assignments, totalDays,
     requests, lockedRowIds, protectedCells,
   } = decision;
-  const dayOfWeek = decision.dayOfWeek ?? -1;
+  const dayOfWeek = decision.dayOfWeek ?? UNKNOWN_DAY_OF_WEEK;
+  const violations: HardConstraintViolation[] = [];
+  const add = (violation: HardConstraintViolation) => {
+    if (!violations.includes(violation)) violations.push(violation);
+  };
 
-  if (rules.lockedRow && (person.locked || lockedRowIds?.has(person.id))) {
-    return 'LOCKED_ROW';
-  }
-
-  if (rules.protectedCell && protectedCells?.has(`${person.id}:${day}`)) {
-    return 'PROTECTED_CELL';
-  }
-
-  if (rules.leaveCell && isLeaveCell(assignments[person.id]?.[day])) {
-    return 'LEAVE_CELL';
-  }
-
-  if (rules.hardOff && violatesHardOff(requests, person.id, day, dayOfWeek)) {
-    return 'HARD_OFF';
-  }
+  if (rules.knownShift && isUnknownShift(candidateShift)) add('UNKNOWN_SHIFT');
+  if (rules.lockedRow && (person.locked || lockedRowIds?.has(person.id))) add('LOCKED_ROW');
+  if (rules.protectedCell && protectedCells?.has(`${person.id}:${day}`)) add('PROTECTED_CELL');
+  if (rules.leaveCell && isLeaveCell(assignments[person.id]?.[day])) add('LEAVE_CELL');
+  if (rules.hardOff && violatesHardOff(requests, person.id, day, dayOfWeek)) add('HARD_OFF');
 
   if (rules.essentialLeave || rules.leaveRequest) {
     const leave = findLeaveRequest(requests, person.id, day, dayOfWeek);
     if (leave) {
-      if (leave.isEssential && rules.essentialLeave) return 'ESSENTIAL_LEAVE';
-      if (rules.leaveRequest) return 'LEAVE_REQUEST';
+      if (leave.isEssential && rules.essentialLeave) add('ESSENTIAL_LEAVE');
+      else if (rules.leaveRequest) add('LEAVE_REQUEST');
     }
   }
 
-  if (rules.morningOnly && decision.period) {
-    const hasExplicitPlan = hasExplicitPlanForPeriod(
-      requests, person.id, day, dayOfWeek, decision.period
-    );
-    const violates = violatesMorningOnly(
-      person,
-      decision.period,
-      !!decision.isHoliday,
-      hasExplicitPlan,
-      rules.morningOnlyIncludesHoliday ?? true
-    );
-    if (violates) return 'MORNING_ONLY';
+  if (rules.morningOnly) {
+    const periods = decision.period ? [decision.period] : shiftPeriods(candidateShift);
+    for (const period of periods) {
+      const hasExplicitPlan = hasExplicitPlanForPeriod(requests, person.id, day, dayOfWeek, period);
+      if (violatesMorningOnly(
+        person,
+        period,
+        !!decision.isHoliday,
+        hasExplicitPlan,
+        rules.morningOnlyIncludesHoliday ?? true
+      )) {
+        add('MORNING_ONLY');
+        break;
+      }
+    }
   }
 
   if (rules.nightRest) {
     const nightViolation = violatesNightRest(assignments, person.id, day, candidateShift);
-    if (nightViolation) return nightViolation;
+    if (nightViolation) add(nightViolation);
   }
 
   if (rules.consecutiveCap && violatesConsecutiveLimit(assignments, person.id, day, candidateShift, totalDays)) {
-    return 'MAX_CONSECUTIVE';
+    add('MAX_CONSECUTIVE');
   }
 
-  return null;
+  return violations;
 }
 
-/** نسخهٔ بولیِ `evaluateHardConstraints` برای فیلترهای انتخاب نامزد. */
+/** Structured legality API for all candidate-assignment callers. */
+export function evaluateHardConstraintLegality(
+  decision: Readonly<ShiftAssignmentDecision>,
+  rules: Readonly<HardConstraintRules> = ALL_HARD_RULES
+): HardConstraintEvaluation {
+  const violations = evaluateHardConstraintViolations(decision, rules);
+  return { legal: violations.length === 0, violations };
+}
+
+/** Backwards-compatible first-violation adapter. */
+export function evaluateHardConstraints(
+  decision: Readonly<ShiftAssignmentDecision>,
+  rules: Readonly<HardConstraintRules> = ALL_HARD_RULES
+): HardConstraintViolation | null {
+  return evaluateHardConstraintViolations(decision, rules)[0] ?? null;
+}
+
+/** Boolean adapter for candidate filters. */
 export function canAssignShift(
   decision: Readonly<ShiftAssignmentDecision>,
   rules: Readonly<HardConstraintRules> = ALL_HARD_RULES
 ): boolean {
-  return evaluateHardConstraints(decision, rules) === null;
+  return evaluateHardConstraintLegality(decision, rules).legal;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,10 +517,6 @@ export function canAssignShift(
 // ---------------------------------------------------------------------------
 
 const PERIOD_ORDER: readonly ConstraintPeriod[] = ['M', 'E', 'N'];
-
-const COMPONENTS_TO_SHIFT: Readonly<Record<string, ShiftType>> = {
-  M: 'M', E: 'E', N: 'N', ME: 'ME', EN: 'EN', MN: 'MN', MEN: 'MEN',
-};
 
 /** مؤلفه‌های M/E/N یک شیفت (ترکیبی یا تک). */
 export function shiftPeriods(shift: ShiftType | undefined): ConstraintPeriod[] {
@@ -520,7 +539,9 @@ export function shiftSubsetsByCoverage(shift: ShiftType): ShiftType[] {
   }
 
   subsets.sort((left, right) => (right.size - left.size) || (left.rank - right.rank));
-  return subsets.map(subset => COMPONENTS_TO_SHIFT[subset.key]).filter(Boolean);
+  return subsets
+    .map(subset => shiftFromComponents(subset.key.split('') as ConstraintPeriod[]))
+    .filter((candidate): candidate is ShiftType => !!candidate);
 }
 
 /** نتیجهٔ تلاش برای اعمال یک شیفت درخواستی زیر سایهٔ محدودیت‌های سخت. */
@@ -546,6 +567,10 @@ export function resolveLegalShiftForRequest(
   requestedShift: ShiftType,
   rules: Readonly<HardConstraintRules> = ALL_HARD_RULES
 ): LegalShiftResolution {
+  if (!isKnownWorkShift(requestedShift)) {
+    return { shift: null, exact: false, blockedBy: 'UNKNOWN_SHIFT' };
+  }
+
   const candidates = shiftSubsetsByCoverage(requestedShift);
   if (candidates.length === 0) {
     return { shift: null, exact: false, blockedBy: null };
