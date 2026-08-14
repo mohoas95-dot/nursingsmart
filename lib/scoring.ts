@@ -80,6 +80,7 @@ export const HARD_WARNING_PREFIXES = [
   'Night Rest:',
   'Supervisor/Staff E/N Restriction:',
   'Unknown Shift:',
+  'Hard Constraint Violation:',
 ] as const;
 
 export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number], string> = {
@@ -91,6 +92,7 @@ export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number],
   'Night Rest:': 'نقض استراحت شب',
   'Supervisor/Staff E/N Restriction:': 'ممنوعیت عصر/شب سرپرستار یا استاف',
   'Unknown Shift:': 'شیفت ناشناخته',
+  'Hard Constraint Violation:': 'نقض محدودیت سخت',
 };
 
 export const MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO = 4;

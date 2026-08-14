@@ -20,6 +20,7 @@ import {
   evaluatePostHeavyOffPreference,
   isHeavyShift,
   isUnknownShift,
+  isWorkShift,
   POST_HEAVY_OFF_PREFERENCE_PENALTY,
   shiftContainsComponent,
   shiftSatisfiesRequestedShift,
@@ -41,6 +42,7 @@ import {
   HARD_CONSTRAINT_LABELS,
   OFF_BREAKER_HARD_RULES,
   VERIFICATION_HARD_RULES,
+  isHardOffRequest,
   isMorningOnlyPosition,
   evaluateHardConstraintViolations,
   evaluateHardConstraints,
@@ -1827,6 +1829,12 @@ export function solveNursingSchedule(
     && warning.code !== 'OVERSTAFFING'
     && warning.code !== 'MISSING_SHIFT_LEADER'
     && warning.code !== 'HARD_CONSTRAINT_CONFLICT'
+    && (
+      warning.code !== 'OFF_REMOVED'
+      || (warning.personnelId !== undefined
+        && warning.day !== undefined
+        && finalAssignments[warning.personnelId]?.[warning.day] === warning.shift)
+    )
   ));
   const unresolvedConflictWarnings = warningMessages([
     ...warnings.filter(warning =>
@@ -1971,6 +1979,20 @@ export function verifyCoverageAndLeaders(
             shift: assigned,
             metadata: { violation },
           }));
+        } else if (
+          isWorkShift(assigned)
+          && (violation === 'HARD_OFF'
+            || violation === 'ESSENTIAL_LEAVE'
+            || violation === 'LEAVE_REQUEST')
+        ) {
+          warnings.push(createScheduleWarning({
+            code: 'HARD_CONSTRAINT_VIOLATION',
+            message: `Hard Constraint Violation: نقض ${HARD_CONSTRAINT_LABELS[violation]} برای ${person.firstName} ${person.lastName} در روز ${d} (شیفت ${assigned})`,
+            day: d,
+            personnelId: person.id,
+            shift: assigned,
+            metadata: { violation },
+          }));
         } else if (violation === 'UNKNOWN_SHIFT') {
           warnings.push(createScheduleWarning({
             code: 'UNKNOWN_SHIFT',
@@ -2045,6 +2067,26 @@ export function verifyCoverageAndLeaders(
         const personRequests = requests.filter(r => r.personnelId === p.id);
         
         personRequests.forEach(req => {
+          // Pattern application intentionally follows its established all-month
+          // cadence. Verification mirrors that current behavior without changing
+          // pattern scope or priority semantics.
+          if (req.requestType === 'pattern' && req.patternSteps?.length) {
+            const expected = req.patternSteps[(d - 1) % req.patternSteps.length];
+            const matchesPattern = expected.startsWith('L')
+              ? assigned.startsWith('L')
+              : shiftSatisfiesRequestedShift(assigned, expected);
+            if (!matchesPattern) {
+              warnings.push(createScheduleWarning({
+                code: 'MISMATCHED_REQUEST',
+                message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} الگوی شیفت ${expected} ثبت شده اما شیفت ${assigned} تخصیص یافته است`,
+                day: d,
+                personnelId: p.id,
+                metadata: { requestType: 'pattern', requestedShift: expected, assignedShift: assigned },
+              }));
+            }
+            return;
+          }
+
           let matchesScope = false;
 
           if (req.scope === 'all') {
@@ -2100,6 +2142,10 @@ export function verifyCoverageAndLeaders(
               }
             } else if (req.requestType === 'OFF') {
               if (assigned !== 'OFF' && !assigned.startsWith('L')) {
+                // A work assignment on hard OFF is already surfaced above as a
+                // critical structured hard-constraint violation. Soft OFF retains
+                // the existing noncritical request-mismatch behavior.
+                if (isWorkShift(assigned) && isHardOffRequest(req)) return;
                 warnings.push(createScheduleWarning({
                   code: 'MISMATCHED_REQUEST',
                   message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست OFF ثبت شده اما شیفت ${assigned} تخصیص یافته است`,
@@ -2110,6 +2156,10 @@ export function verifyCoverageAndLeaders(
               }
             } else if (req.requestType === 'leave') {
               if (!assigned.startsWith('L')) {
+                // Approved leave plus work is reported by the hard evaluator. A
+                // non-work mismatch (for example OFF instead of L) remains a normal
+                // request mismatch and is not promoted to a new hard rule.
+                if (isWorkShift(assigned)) return;
                 warnings.push(createScheduleWarning({
                   code: 'MISMATCHED_REQUEST',
                   message: `Mismatched Request: برای ${p.firstName} ${p.lastName} در روز ${d} درخواست مرخصی ثبت شده اما شیفت ${assigned} تخصیص یافته است`,

@@ -1,9 +1,9 @@
 /**
- * Scheduling rule characterization suite.
+ * Scheduling rule characterization and focused regression suite.
  *
- * These tests intentionally pin current behavior, including behavior that may later
- * be judged undesirable. They are a safety baseline only: no assertion in this file
- * should be read as a new business-policy decision.
+ * `characterizes_…` tests still pin policy-ambiguous current behavior. `regression_…`
+ * tests cover the confirmed correctness gaps fixed after the characterization phase.
+ * No assertion in this file should be read as a broader business-policy redesign.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -14,7 +14,10 @@ import {
   evaluateHardConstraintViolations,
 } from '../domain/scheduling/hard-constraints';
 import {
+  getUnfinalizedJobGroups,
   mergeOptimizerAssignments,
+  protectedCellKey,
+  protectedCellsForContext,
   updateScheduleCell,
 } from '../domain/scheduling/schedule-operations';
 import {
@@ -212,7 +215,7 @@ test('characterizes_current_pattern_scope_behavior_as_all_month_cadence', () => 
   assert.equal(solved.assignments[nurse.id][3], 'EN', 'the repeating work step is also applied outside scope');
 });
 
-test('characterizes_current_pattern_mismatch_verification_as_not_reported', () => {
+test('regression_reports_current_all_month_pattern_cadence_mismatch', () => {
   const nurse = person('pattern-mismatch');
   const pattern: ShiftRequest = {
     id: 'expected-evening',
@@ -240,15 +243,21 @@ test('characterizes_current_pattern_mismatch_verification_as_not_reported', () =
     && warning.day === 1
   );
 
-  assert.deepEqual(patternMismatchWarnings, []);
-  assert.equal(
-    countCriticalScheduleWarnings(patternMismatchWarnings),
-    0,
-    'there is no warning code or severity because pattern requests are not checked by final request verification'
-  );
+  assert.equal(patternMismatchWarnings.length, 1);
+  assert.equal(patternMismatchWarnings[0].severity, 'warning');
+  assert.equal(patternMismatchWarnings[0].metadata?.requestType, 'pattern');
+  assert.equal(patternMismatchWarnings[0].metadata?.requestedShift, 'E');
+  assert.equal(patternMismatchWarnings[0].metadata?.assignedShift, 'M');
+  assert.equal(countCriticalScheduleWarnings(patternMismatchWarnings), 0);
+  assert.ok(verification.structuredWarnings.some(warning =>
+    warning.code === 'MISMATCHED_REQUEST'
+    && warning.personnelId === nurse.id
+    && warning.day === 2
+    && warning.metadata?.requestType === 'pattern'
+  ), 'verification follows the existing all-month cadence outside the declared scope');
 });
 
-test('characterizes_current_pattern_OFF_as_overwritten_by_consecutive_OFF_breaker', () => {
+test('regression_makes_pattern_OFF_overwrite_visible_without_changing_OFF_breaker_priority', () => {
   const nurse = person('pattern-off');
   const pattern: ShiftRequest = {
     id: 'four-offs-then-morning',
@@ -283,9 +292,13 @@ test('characterizes_current_pattern_OFF_as_overwritten_by_consecutive_OFF_breake
     && warning.includes('سقف ۳ روز متوالی')
   ));
   assert.equal(
-    solved.warnings.some(warning => warning.startsWith('Mismatched Request:') && warning.includes('روز 4')),
-    false,
-    'final verification does not report the resulting pattern mismatch'
+    solved.warnings.some(warning =>
+      warning.startsWith('Mismatched Request:')
+      && warning.includes('روز 4')
+      && warning.includes('الگوی شیفت OFF')
+    ),
+    true,
+    'the existing overwrite remains allowed but is no longer silent'
   );
 });
 
@@ -293,7 +306,7 @@ test('characterizes_current_pattern_OFF_as_overwritten_by_consecutive_OFF_breake
 // Manual/protected hard-OFF and leave warning severity
 // ---------------------------------------------------------------------------
 
-test('characterizes_manual_hard_OFF_violation_as_generic_noncritical_request_mismatch', async () => {
+test('regression_surfaces_manual_hard_OFF_violation_as_structured_critical_warning', async () => {
   const nurse = person('manual-hard-off');
   const hardOff: ShiftRequest = {
     id: 'hard-off-day-1',
@@ -338,17 +351,18 @@ test('characterizes_manual_hard_OFF_violation_as_generic_noncritical_request_mis
     warning.personnelId === nurse.id && warning.day === 1
   );
 
-  assert.deepEqual(surfaced.map(warning => warning.code), ['MISMATCHED_REQUEST']);
-  assert.equal(surfaced[0].severity, 'warning');
-  assert.equal(countCriticalScheduleWarnings(surfaced), 0);
+  assert.deepEqual(surfaced.map(warning => warning.code), ['HARD_CONSTRAINT_VIOLATION']);
+  assert.equal(surfaced[0].severity, 'critical');
+  assert.equal(surfaced[0].metadata?.violation, 'HARD_OFF');
+  assert.equal(countCriticalScheduleWarnings(surfaced), 1);
   assert.equal(
-    surfaced.some(warning => warning.metadata?.violation === 'HARD_OFF'),
+    surfaced.some(warning => warning.code === 'MISMATCHED_REQUEST'),
     false,
-    'the internal HARD_OFF code is not surfaced directly'
+    'a hard OFF breach is no longer surfaced only as a generic request mismatch'
   );
 });
 
-test('characterizes_manual_leave_violation_as_generic_noncritical_request_mismatch', async () => {
+test('regression_surfaces_manual_leave_violation_as_structured_critical_warning', async () => {
   const nurse = person('manual-leave');
   const leave: ShiftRequest = {
     id: 'leave-day-1',
@@ -408,13 +422,14 @@ test('characterizes_manual_leave_violation_as_generic_noncritical_request_mismat
     warning.personnelId === nurse.id && warning.day === 1
   );
 
-  assert.deepEqual(surfaced.map(warning => warning.code), ['MISMATCHED_REQUEST']);
-  assert.equal(surfaced[0].severity, 'warning');
-  assert.equal(countCriticalScheduleWarnings(surfaced), 0);
+  assert.deepEqual(surfaced.map(warning => warning.code), ['HARD_CONSTRAINT_VIOLATION']);
+  assert.equal(surfaced[0].severity, 'critical');
+  assert.equal(surfaced[0].metadata?.violation, 'LEAVE_REQUEST');
+  assert.equal(countCriticalScheduleWarnings(surfaced), 1);
   assert.equal(
-    surfaced.some(warning => warning.metadata?.violation === 'LEAVE_REQUEST'),
+    surfaced.some(warning => warning.code === 'MISMATCHED_REQUEST'),
     false,
-    'the internal leave hard-violation code is not surfaced directly'
+    'a work assignment on approved leave is no longer surfaced only as a generic mismatch'
   );
 });
 
@@ -422,7 +437,7 @@ test('characterizes_manual_leave_violation_as_generic_noncritical_request_mismat
 // Finalization and protected-cell lifecycle boundaries
 // ---------------------------------------------------------------------------
 
-test('characterizes_current_continuous_reconciliation_boundary_as_ignoring_finalized_group_metadata', () => {
+test('regression_continuous_reconciliation_excludes_finalized_job_groups', () => {
   const nurse = person('finalized-nurse');
   const assistant = person('mutated-assistant', {
     jobGroup: 'assistant',
@@ -437,15 +452,15 @@ test('characterizes_current_continuous_reconciliation_boundary_as_ignoring_final
     { finalizedNurses: true, finalizedAssistants: false }
   );
 
-  // This is the same integration boundary used by the continuous UI effect: it
-  // passes assignments, both groups, lockedRows and protected cells, but no
-  // finalized-group input.
+  // This mirrors the last automatic writer: finalized metadata is translated to
+  // mutable target groups before reconciliation begins.
+  const targetJobGroups = getUnfinalizedJobGroups(schedule);
   const reconciled = reconcileStaffingCoverage(
     schedule.assignments,
     [nurse, assistant],
     settingsWithDemand(),
     oneDayCalendar(),
-    ['nurse', 'assistant'],
+    targetJobGroups,
     [],
     []
   );
@@ -454,19 +469,28 @@ test('characterizes_current_continuous_reconciliation_boundary_as_ignoring_final
     assignments: reconciled.assignments,
   };
 
-  assert.equal(effectStyleResult.finalizedNurses, true, 'the metadata flag remains set');
+  assert.deepEqual(targetJobGroups, ['assistant']);
+  assert.equal(effectStyleResult.finalizedNurses, true);
   assert.equal(
     effectStyleResult.assignments[nurse.id][1],
-    'OFF',
-    'the finalized nurse row is nevertheless changed by reconciliation'
+    'M',
+    'the finalized nurse row remains immutable'
   );
   assert.equal(effectStyleResult.assignments[assistant.id][1], 'OFF');
 });
 
+const PROTECTED_CONTEXT = {
+  departmentId: 'department-a',
+  year: YEAR,
+  month: MONTH,
+};
+
 function reconcileProtectedContext(
-  protectedCells: ReadonlySet<string>
+  allProtectedCells: ReadonlySet<string>,
+  context = PROTECTED_CONTEXT
 ) {
   const nurse = person('protected-person');
+  const localProtectedCells = protectedCellsForContext(allProtectedCells, context);
   return reconcileStaffingCoverage(
     { [nurse.id]: { 1: 'M' } },
     [nurse],
@@ -475,12 +499,15 @@ function reconcileProtectedContext(
     ['nurse'],
     [],
     [],
-    protectedCells
+    localProtectedCells
   );
 }
 
-test('characterizes_protected_cell_lifecycle_within_same_session', () => {
-  const protectedCells = new Set(['protected-person:1']);
+test('regression_preserves_protected_cell_within_same_context', () => {
+  const protectedCells = new Set([
+    protectedCellKey(PROTECTED_CONTEXT, 'protected-person', 1),
+  ]);
+  const localProtectedCells = protectedCellsForContext(protectedCells, PROTECTED_CONTEXT);
   const firstPass = reconcileProtectedContext(protectedCells);
   const secondPass = reconcileStaffingCoverage(
     firstPass.assignments,
@@ -490,47 +517,42 @@ test('characterizes_protected_cell_lifecycle_within_same_session', () => {
     ['nurse'],
     [],
     [],
-    protectedCells
+    localProtectedCells
   );
 
+  assert.deepEqual([...localProtectedCells], ['protected-person:1']);
   assert.equal(firstPass.assignments['protected-person'][1], 'M');
   assert.equal(secondPass.assignments['protected-person'][1], 'M');
 });
 
-test('characterizes_protected_cell_lifecycle_as_leaking_when_set_is_reused_across_month_change', () => {
-  const sessionProtectedCells = new Set(['protected-person:1']);
+test('regression_does_not_reuse_protected_cell_across_month_change', () => {
+  const sessionProtectedCells = new Set([
+    protectedCellKey(PROTECTED_CONTEXT, 'protected-person', 1),
+  ]);
 
-  const monthOne = reconcileProtectedContext(sessionProtectedCells);
-  const monthTwoWithReusedSet = reconcileProtectedContext(sessionProtectedCells);
-  const monthTwoWithResetSet = reconcileProtectedContext(new Set());
+  const monthOne = reconcileProtectedContext(sessionProtectedCells, PROTECTED_CONTEXT);
+  const monthTwo = reconcileProtectedContext(sessionProtectedCells, {
+    ...PROTECTED_CONTEXT,
+    month: MONTH + 1,
+  });
 
   assert.equal(monthOne.assignments['protected-person'][1], 'M');
-  assert.equal(
-    monthTwoWithReusedSet.assignments['protected-person'][1],
-    'M',
-    'the protection key has no month namespace'
-  );
-  assert.equal(
-    monthTwoWithResetSet.assignments['protected-person'][1],
-    'OFF',
-    'only an external reset removes protection for the same person/day in a new month'
-  );
+  assert.equal(monthTwo.assignments['protected-person'][1], 'OFF');
 });
 
-test('characterizes_protected_cell_lifecycle_as_leaking_when_set_is_reused_across_department_change', () => {
-  const sessionProtectedCells = new Set(['protected-person:1']);
+test('regression_does_not_reuse_protected_cell_across_department_change', () => {
+  const sessionProtectedCells = new Set([
+    protectedCellKey(PROTECTED_CONTEXT, 'protected-person', 1),
+  ]);
 
-  const departmentOne = reconcileProtectedContext(sessionProtectedCells);
-  const departmentTwoWithReusedSet = reconcileProtectedContext(sessionProtectedCells);
-  const departmentTwoWithResetSet = reconcileProtectedContext(new Set());
+  const departmentOne = reconcileProtectedContext(sessionProtectedCells, PROTECTED_CONTEXT);
+  const departmentTwo = reconcileProtectedContext(sessionProtectedCells, {
+    ...PROTECTED_CONTEXT,
+    departmentId: 'department-b',
+  });
 
   assert.equal(departmentOne.assignments['protected-person'][1], 'M');
-  assert.equal(
-    departmentTwoWithReusedSet.assignments['protected-person'][1],
-    'M',
-    'the protection key has no department namespace'
-  );
-  assert.equal(departmentTwoWithResetSet.assignments['protected-person'][1], 'OFF');
+  assert.equal(departmentTwo.assignments['protected-person'][1], 'OFF');
 });
 
 // ---------------------------------------------------------------------------
@@ -578,7 +600,7 @@ test('characterizes_current_OFF_after_leave_postprocessor_as_choosing_M_when_cov
   ));
 });
 
-test('characterizes_current_OFF_after_leave_notice_as_stale_after_final_reconciliation', () => {
+test('regression_removes_stale_OFF_REMOVED_notice_after_final_reconciliation_restores_OFF', () => {
   const nurse = person('leave-then-final-off');
   const leave: ShiftRequest = {
     id: 'leave-first-day-zero-demand',
@@ -622,10 +644,10 @@ test('characterizes_current_OFF_after_leave_notice_as_stale_after_final_reconcil
 
   assert.equal(solved.assignments[nurse.id][1], 'L1');
   assert.equal(solved.assignments[nurse.id][2], 'OFF');
-  assert.ok(offRemoved, 'the intermediate M rewrite remains recorded');
-  assert.ok(
-    offRemoved!.includes('حذف OFF'),
-    'the informational warning says OFF was removed although the final cell is OFF'
+  assert.equal(
+    offRemoved,
+    undefined,
+    'an intermediate OFF removal is not reported when the final cell is OFF again'
   );
 });
 
@@ -727,7 +749,7 @@ function scenarioPersonnel(): Personnel[] {
   return [person('n1'), person('n2'), person('n3'), person('n4')];
 }
 
-test('characterizes_scenario_generation_as_preserving_lockedRows_but_not_person_locked', () => {
+test('regression_scenario_generation_preserves_both_person_locked_and_lockedRows', () => {
   const unlockedPersonnel = scenarioPersonnel();
   const baseline = solveNursingSchedule(
     YEAR, MONTH, unlockedPersonnel, [], ALL_PERIODS_DEMAND, {}, undefined, null
@@ -750,12 +772,13 @@ test('characterizes_scenario_generation_as_preserving_lockedRows_but_not_person_
     []
   );
   assert.ok(personLockedResult.top3.length > 0);
-  assert.ok(
-    personLockedResult.top3.some(scenario =>
-      rowsDiffer(baseline.n1, scenario.schedule.assignments.n1)
-    ),
-    'person.locked is still part of the free scenario target set'
-  );
+  for (const scenario of personLockedResult.top3) {
+    assert.equal(
+      rowsDiffer(baseline.n1, scenario.schedule.assignments.n1),
+      false,
+      'person.locked is excluded from the free scenario target set'
+    );
+  }
 
   const rowLockedResult = generateAndScoreScenarios(
     YEAR,
@@ -776,7 +799,7 @@ test('characterizes_scenario_generation_as_preserving_lockedRows_but_not_person_
   }
 });
 
-test('characterizes_optimizer_merge_as_honoring_lockedRows_but_ignoring_person_locked', () => {
+test('regression_optimizer_merge_preserves_both_person_locked_and_lockedRows', () => {
   const lockedPerson = person('merge-locked-person', { locked: true });
   const current = { [lockedPerson.id]: { 1: 'OFF' } };
   const optimized = { [lockedPerson.id]: { 1: 'M' } };
@@ -795,9 +818,17 @@ test('characterizes_optimizer_merge_as_honoring_lockedRows_but_ignoring_person_l
     'nurse',
     [lockedPerson.id]
   );
+  const withoutCurrentSchedule = mergeOptimizerAssignments(
+    undefined,
+    optimized,
+    [lockedPerson],
+    'nurse',
+    []
+  );
 
-  assert.equal(withoutRowLock[lockedPerson.id][1], 'M');
+  assert.equal(withoutRowLock[lockedPerson.id][1], 'OFF');
   assert.equal(withRowLock[lockedPerson.id][1], 'OFF');
+  assert.deepEqual(withoutCurrentSchedule[lockedPerson.id], {});
 });
 
 test('characterizes_manual_facade_as_relying_on_separate_UI_lock_guard', async () => {

@@ -91,6 +91,11 @@ import {
   toggleHolidayOverride,
 } from '../domain/calendar/holiday-overrides';
 import { resolveLeaveShiftAssignment } from '../domain/scheduling/smart-rules';
+import {
+  getUnfinalizedJobGroups,
+  protectedCellKey,
+  protectedCellsForContext,
+} from '../domain/scheduling/schedule-operations';
 import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
 import {
   dismissedWarningsChanged,
@@ -2388,20 +2393,26 @@ export default function Home() {
         currentYear, currentMonth, currentHolidays, currentFirstDay === -1 ? undefined : currentFirstDay
       );
       const calendarDays = calendar.map(d => ({ day: d.day, isHoliday: d.isHoliday, dayOfWeek: d.dayOfWeek }));
-      const protectedSet = protectedCellsRef.current;
+      const protectionContext = {
+        departmentId: selectedDepartmentId || 'sepehr',
+        year: currentYear,
+        month: currentMonth,
+      };
+      const protectedSet = protectedCellsForContext(protectedCellsRef.current, protectionContext);
+      const reconciliationTargetGroups = getUnfinalizedJobGroups(schedule);
 
       const MAX_PASSES = 3;
       let prevUnresolvedCount = Infinity;
-      for (let pass = 0; pass < MAX_PASSES; pass++) {
+      for (let pass = 0; pass < MAX_PASSES && reconciliationTargetGroups.length > 0; pass++) {
         const staffingResult = reconcileStaffingCoverage(
           effectiveAssignments,
           currentPersonnel,
           currentSettings,
           calendarDays,
-          ['nurse', 'assistant'],
+          reconciliationTargetGroups,
           currentLocked, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
           currentRequests,
-          protectedSet   // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
+          protectedSet   // ← فقط ویرایش‌های همین بخش/ماه محافظت می‌شوند
         );
         effectiveAssignments = staffingResult.assignments;
         if (staffingResult.unresolvedGaps.length === 0) break;
@@ -4763,8 +4774,17 @@ export default function Home() {
 
       // Use the Facade (delegates pure logic to domain layer)
       // ====== نکته کلیدی: currentSchedule از آخرین وضعیت تعهدشده خوانده می‌شود ======
-      // ثبت سلول ویرایش‌شده در فهرست محافظت‌شده‌ها (سیستم هرگز این سلول را تغییر نمی‌دهد)
-      protectedCellsRef.current.add(`${pId}:${day}`);
+      // شناسهٔ محافظت شامل بخش و ماه است تا به context دیگری نشت نکند.
+      const protectionContext = {
+        departmentId: deptId,
+        year: currentYear,
+        month: currentMonth,
+      };
+      protectedCellsRef.current.add(protectedCellKey(protectionContext, pId, day));
+      const currentProtectedCells = protectedCellsForContext(
+        protectedCellsRef.current,
+        protectionContext
+      );
 
       const result = await applyManualShiftChangeFacade(
         {
@@ -4785,7 +4805,7 @@ export default function Home() {
             lockedRows: currentLocked,
           },
           dismissedWarnings: currentDismissed,
-          protectedCells: Array.from(protectedCellsRef.current),
+          protectedCells: Array.from(currentProtectedCells),
         },
         verifyCoverageAndLeaders,
         persistenceAdapter,

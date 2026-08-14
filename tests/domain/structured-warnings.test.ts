@@ -90,7 +90,7 @@ test('structured warning exposes code, severity and metadata fields', () => {
 test('default severity mapping: hard-rule warnings are critical, auto-fix notices are info, rest are warnings', () => {
   for (const code of [
     'COVERAGE_SHORTAGE', 'OVERSTAFFING', 'MISSING_SHIFT_LEADER', 'MAX_CONSECUTIVE', 'MANDATORY_REST',
-    'NIGHT_REST', 'SUPERVISOR_STAFF_EN_RESTRICTION', 'UNKNOWN_SHIFT',
+    'NIGHT_REST', 'SUPERVISOR_STAFF_EN_RESTRICTION', 'UNKNOWN_SHIFT', 'HARD_CONSTRAINT_VIOLATION',
   ] as const) {
     assert.equal(isCriticalWarningCode(code), true);
     assert.equal(createScheduleWarning({ code, message: 'x' }).severity, 'critical');
@@ -170,7 +170,7 @@ test('missing shift leader warning: day and shift component are structural, mess
   assert.equal(morning.message, `Missing Shift Leader: نبود سرشیفت در نوبت صبح روز تعطیل ${morning.day}`);
 });
 
-test('mismatched request warning: personnelId and day are structural, message unchanged', () => {
+test('hard OFF violation warning: evaluator violation is surfaced structurally and critically', () => {
   const nurse = makePerson('n1');
   const requests = [
     makeRequest('n1', {
@@ -181,13 +181,16 @@ test('mismatched request warning: personnelId and day are structural, message un
   const result = verifyCoverageAndLeaders(
     CAL_YEAR, CAL_MONTH, [nurse], { n1: { 3: 'M' } }, zeroDemandSettings(), {}, undefined, requests
   );
-  const warning = result.structuredWarnings.find(w => w.code === 'MISMATCHED_REQUEST');
-  assert.ok(warning, 'expected a mismatched request warning');
+  const warning = result.structuredWarnings.find(w => w.code === 'HARD_CONSTRAINT_VIOLATION');
+  assert.ok(warning, 'expected a hard-constraint violation warning');
   assert.equal(warning.personnelId, 'n1');
   assert.equal(warning.day, 3);
-  assert.equal(warning.severity, 'warning'); // سیاست دست‌نخورده: بحرانی نیست
-  assert.equal(warning.metadata?.requestType, 'OFF');
-  assert.equal(warning.message, 'Mismatched Request: برای n1 T در روز 3 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است');
+  assert.equal(warning.severity, 'critical');
+  assert.equal(warning.metadata?.violation, 'HARD_OFF');
+  assert.equal(warning.message, 'Hard Constraint Violation: نقض آف قطعی برای n1 T در روز 3 (شیفت M)');
+  assert.equal(result.structuredWarnings.some(w =>
+    w.code === 'MISMATCHED_REQUEST' && w.personnelId === 'n1' && w.day === 3
+  ), false);
 });
 
 test('max consecutive warning: day range and personnelId are structural, message unchanged', () => {

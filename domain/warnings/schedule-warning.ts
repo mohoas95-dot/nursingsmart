@@ -44,6 +44,7 @@ import type { JobGroup, ShiftType } from '../../lib/types';
  *   | NIGHT_REST            | `Night Rest:`             |
  *   | SUPERVISOR_STAFF_EN_RESTRICTION | `Supervisor/Staff E/N Restriction:` |
  *   | UNKNOWN_SHIFT         | `Unknown Shift:`          |
+ *   | HARD_CONSTRAINT_VIOLATION | `Hard Constraint Violation:` |
  *   | MISMATCHED_REQUEST    | `Mismatched Request:`     |
  *   | CONSECUTIVE_OFFS      | `Consecutive OFFs:`       |
  *   | LEAVE_CONTINUITY      | `Leave Continuity:`       |
@@ -65,6 +66,7 @@ export type ScheduleWarningCode =
   | 'NIGHT_REST'
   | 'SUPERVISOR_STAFF_EN_RESTRICTION'
   | 'UNKNOWN_SHIFT'
+  | 'HARD_CONSTRAINT_VIOLATION'
   | 'MISMATCHED_REQUEST'
   | 'CONSECUTIVE_OFFS'
   | 'LEAVE_CONTINUITY'
@@ -145,6 +147,7 @@ export const CRITICAL_WARNING_CODES: readonly ScheduleWarningCode[] = [
   'NIGHT_REST',
   'SUPERVISOR_STAFF_EN_RESTRICTION',
   'UNKNOWN_SHIFT',
+  'HARD_CONSTRAINT_VIOLATION',
 ];
 
 /** آیا این کد، هشدار سطح A (بحرانی) است؟ — معیار ماشینی، بدون نگاه به متن. */
