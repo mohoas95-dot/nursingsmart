@@ -236,6 +236,7 @@ export {
 
 export {
   CRITICAL_WARNING_CODES,
+  INFORMATIONAL_WARNING_CODES,
   countCriticalScheduleWarnings,
   createScheduleWarning,
   dedupeScheduleWarningsByMessage,
@@ -244,6 +245,7 @@ export {
   hasCriticalScheduleWarning,
   isCriticalScheduleWarning,
   isCriticalWarningCode,
+  isInformationalWarningCode,
   warningMessages,
 } from './warnings/schedule-warning';
 

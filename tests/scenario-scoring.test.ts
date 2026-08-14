@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import {
   countHardConstraintWarnings,
+  countScoringDefectWarnings,
   evaluateScenarioSchedule,
   filterWarningsForScenarioGroup,
   getHardConstraintWarnings,
   isHardWarningCountAcceptable,
+  isInformationalWarning,
   MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO,
 } from '../lib/scoring';
 import type { MonthlySchedule, Personnel, ShiftRequest, SystemSettings } from '../lib/types';
@@ -221,10 +223,78 @@ test('hard warnings are extracted correctly and up to 4 remain eligible for scen
     'Mismatched Request: برای n2 test در روز 2 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است',
   ];
 
+  // Mandatory Rest دیگر هشدار سخت (سطح A) نیست — یادآور مرزی پایان ماه است.
   const hardWarnings = getHardConstraintWarnings(warnings);
-  assert.equal(hardWarnings.length, 5);
-  assert.equal(countHardConstraintWarnings(warnings), 5);
+  assert.equal(hardWarnings.length, 4);
+  assert.equal(countHardConstraintWarnings(warnings), 4);
+  assert.equal(
+    hardWarnings.some(warning => warning.startsWith('Mandatory Rest:')),
+    false,
+    'the boundary reminder is not extracted as a hard warning'
+  );
   assert.equal(MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO, 4);
   assert.equal(isHardWarningCountAcceptable(4), true);
   assert.equal(isHardWarningCountAcceptable(5), false);
+});
+
+// ---------------------------------------------------------------------------
+// Informational notices (OFF Removed / Isolated Shift Fixed) are not defects
+// ---------------------------------------------------------------------------
+
+test('informational auto-fix notices do not reduce the warning-defect ranking', () => {
+  const evaluate = (warnings: string[]) => evaluateScenarioSchedule({
+    id: 1,
+    type: 'MIXED',
+    schedule: { ...scheduleAllRequestsMet, warnings },
+    personnelList: personnel,
+    requests: satisfiedRequests,
+    settings,
+    year: 1404,
+    month: 2,
+    customHolidays: {},
+    targetJobGroup: 'nurse',
+  });
+
+  const noWarnings = evaluate([]);
+  const infoOnly = evaluate([
+    'OFF Removed: حذف OFF ناخواسته پرسنل n1 test در روز 2 به دلیل قانون ممنوعیت آف بعد از مرخصی',
+    'Isolated Shift Fixed: شیفت تک (E) پرسنل n2 test در روز 3 برای حفظ الگوی پیوسته به n1 test منتقل شد',
+  ]);
+
+  // Two otherwise identical schedules: informational notices must not change
+  // the warning-defect based optimization ranking.
+  assert.equal(infoOnly.metrics.optimizationScore, noWarnings.metrics.optimizationScore);
+  assert.equal(infoOnly.metrics.warningCount, 0, 'informational notices are not counted as defects');
+  assert.equal(infoOnly.metrics.hardWarningCount, 0);
+  assert.equal(infoOnly.totalScore, noWarnings.totalScore);
+
+  // A genuine noncritical violation still lowers the score.
+  const genuineViolation = evaluate([
+    'Mismatched Request: برای n2 test در روز 2 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است',
+  ]);
+  assert.ok(
+    genuineViolation.metrics.optimizationScore < noWarnings.metrics.optimizationScore,
+    'a real noncritical violation still affects scoring'
+  );
+  assert.equal(genuineViolation.metrics.warningCount, 1);
+});
+
+test('legacy persisted warning strings classify informational notices by their historical prefixes', () => {
+  // Persisted warnings exist only as strings ("<English prefix>: <Persian text>").
+  // The legacy string path must classify identically to the structured codes.
+  assert.equal(isInformationalWarning('OFF Removed: حذف OFF ناخواسته پرسنل n1 test در روز 2'), true);
+  assert.equal(isInformationalWarning('Isolated Shift Fixed: شیفت تک (E) پرسنل n2 test در روز 3'), true);
+  assert.equal(isInformationalWarning('Mismatched Request: ...'), false);
+  assert.equal(isInformationalWarning('Coverage Shortage: ...'), false);
+  // Structured warnings classify by machine code, not by message text.
+  assert.equal(isInformationalWarning({ code: 'OFF_REMOVED', severity: 'info', message: 'بازنویسی‌شده' }), true);
+  assert.equal(isInformationalWarning({ code: 'ISOLATED_SHIFT_FIXED', severity: 'info', message: 'بازنویسی‌شده' }), true);
+  assert.equal(isInformationalWarning({ code: 'MISMATCHED_REQUEST', severity: 'warning', message: 'OFF Removed: قیافهٔ اطلاع‌رسانی' }), false);
+
+  assert.equal(countScoringDefectWarnings([
+    'OFF Removed: ...',
+    'Isolated Shift Fixed: ...',
+    'Mismatched Request: ...',
+    'Coverage Shortage: ...',
+  ]), 2);
 });

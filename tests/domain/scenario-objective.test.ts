@@ -39,7 +39,8 @@ test('level-A classification matches the hard-constraint prefixes', () => {
   assert.equal(isCriticalWarning('Overstaffing: نیروی مازاد در روز 2 شیفت M'), true);
   assert.equal(isCriticalWarning('Missing Shift Leader: نبود سرشیفت در نوبت عصر روز 2'), true);
   assert.equal(isCriticalWarning('Max Consecutive: ...'), true);
-  assert.equal(isCriticalWarning('Mandatory Rest: ...'), true);
+  // Mandatory Rest is a next-month boundary reminder, not a current-month hard gate.
+  assert.equal(isCriticalWarning('Mandatory Rest: ...'), false);
   assert.equal(isCriticalWarning('Mismatched Request: ...'), false);
   assert.equal(isCriticalWarning('یک هشدار دلخواه'), false);
 });
@@ -51,9 +52,10 @@ test('hasCriticalWarning and countCriticalWarnings aggregate correctly', () => {
     'Max Consecutive: ...',
     'Mandatory Rest: ...',
   ];
-  assert.equal(countCriticalWarnings(warnings), 3);
+  assert.equal(countCriticalWarnings(warnings), 2);
   assert.equal(hasCriticalWarning(warnings), true);
   assert.equal(hasCriticalWarning(['Mismatched Request: ...']), false);
+  assert.equal(hasCriticalWarning(['Mandatory Rest: ...']), false);
 });
 
 test('a candidate identical to the baseline has 100% similarity', () => {

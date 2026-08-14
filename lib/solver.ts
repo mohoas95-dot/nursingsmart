@@ -1052,7 +1052,18 @@ export function solveNursingSchedule(
           for (let day = 1; day <= totalDays; day++) {
             hrs += getShiftHours(assignments[p.id][day], p.employmentType);
           }
-          if (hrs + getShiftHours(shiftChar, p.employmentType) > 240.0) {
+          // سقف اضافه‌کار از تنظیمات خوانده می‌شود (settings.dutyHours.overtime —
+          // همان مقداری که UI به‌عنوان «سقف اضافه‌کار» نشان می‌دهد؛ مقدار
+          // تصویب‌شدهٔ ماهانه مقدم است). مقدار پیکربندی‌نشده (صفر/نامعتبر) مثل
+          // گذشته به سقف تاریخی ۲۴۰ برمی‌گردد تا رفتار قبلی حفظ شود.
+          const configuredOvertimeCap = Number(
+            monthlyDutyHours?.overtime ?? settings.dutyHours.overtime
+          );
+          const effectiveOvertimeCap =
+            Number.isFinite(configuredOvertimeCap) && configuredOvertimeCap > 0
+              ? configuredOvertimeCap
+              : 240.0;
+          if (hrs + getShiftHours(shiftChar, p.employmentType) > effectiveOvertimeCap) {
             return false;
           }
         }

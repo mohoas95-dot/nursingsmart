@@ -89,12 +89,16 @@ test('structured warning exposes code, severity and metadata fields', () => {
 
 test('default severity mapping: hard-rule warnings are critical, auto-fix notices are info, rest are warnings', () => {
   for (const code of [
-    'COVERAGE_SHORTAGE', 'OVERSTAFFING', 'MISSING_SHIFT_LEADER', 'MAX_CONSECUTIVE', 'MANDATORY_REST',
+    'COVERAGE_SHORTAGE', 'OVERSTAFFING', 'MISSING_SHIFT_LEADER', 'MAX_CONSECUTIVE',
     'NIGHT_REST', 'SUPERVISOR_STAFF_EN_RESTRICTION', 'UNKNOWN_SHIFT', 'HARD_CONSTRAINT_VIOLATION',
   ] as const) {
     assert.equal(isCriticalWarningCode(code), true);
     assert.equal(createScheduleWarning({ code, message: 'x' }).severity, 'critical');
   }
+  // MANDATORY_REST is a next-month boundary reminder — informational for the
+  // current month's legality, so it is no longer a level-A (critical) code.
+  assert.equal(isCriticalWarningCode('MANDATORY_REST'), false);
+  assert.equal(createScheduleWarning({ code: 'MANDATORY_REST', message: 'x' }).severity, 'warning');
   assert.equal(createScheduleWarning({ code: 'OFF_REMOVED', message: 'x' }).severity, 'info');
   assert.equal(createScheduleWarning({ code: 'ISOLATED_SHIFT_FIXED', message: 'x' }).severity, 'info');
   assert.equal(createScheduleWarning({ code: 'MISMATCHED_REQUEST', message: 'x' }).severity, 'warning');
@@ -218,7 +222,8 @@ test('mandatory rest warning: personnelId is structural (no day, exactly like th
   assert.ok(warning, 'expected a mandatory rest warning');
   assert.equal(warning.personnelId, 'n1');
   assert.equal(warning.day, undefined);
-  assert.equal(warning.severity, 'critical');
+  // یادآور مرزی ماه آینده است — دیگر بحرانی نیست (سلامت ماه جاری را نمی‌شکند).
+  assert.equal(warning.severity, 'warning');
 });
 
 test('consecutive OFFs warning: day range is structural', () => {
@@ -360,7 +365,9 @@ test('repair edit for max consecutive uses structured personnelId and day range'
   assert.deepEqual(edits, [{ personnelId: 'b', day: 12, shift: 'OFF' }]);
 });
 
-test('repair edit for mandatory rest uses structured personnelId (no name search in text)', () => {
+test('mandatory rest is a boundary reminder and never produces a critical repair edit', () => {
+  // MANDATORY_REST دیگر بحرانی نیست: یادآور مرزی پایان ماه دربارهٔ ماه آینده است
+  // و تعمیر بحرانی نباید سلول کاریِ قانونیِ ماه جاری را به‌خاطر آن حذف کند.
   const warning = createScheduleWarning({
     code: 'MANDATORY_REST',
     message: REWORDED_MESSAGE,
@@ -370,14 +377,7 @@ test('repair edit for mandatory rest uses structured personnelId (no name search
     fakeVerifiedSchedule({ a: { 31: 'N' }, b: {} }, [warning]),
     REPAIR_CONTEXT
   );
-  assert.deepEqual(edits, [{ personnelId: 'a', day: 31, shift: 'OFF' }]);
-
-  // اگر پرسنل در فهرست پرسنل آزاد نباشد (مثل قفل‌شده‌ها)، همانند مسیر قدیمی ویرایشی ساخته نمی‌شود
-  const unknown = createScheduleWarning({ code: 'MANDATORY_REST', message: REWORDED_MESSAGE, personnelId: 'stranger' });
-  assert.deepEqual(
-    generateCriticalRepairEdits(fakeVerifiedSchedule({ a: {}, b: {} }, [unknown]), REPAIR_CONTEXT),
-    []
-  );
+  assert.deepEqual(edits, []);
 });
 
 test('repair ignores non-critical codes and warnings without required metadata (no guessing)', () => {
