@@ -12,6 +12,7 @@ import { shiftSatisfiesRequestedShift } from '../domain/scheduling/workload';
 import { generatePersonnelReports } from './solver';
 import {
   isCriticalWarningCode,
+  isInformationalWarningCode,
   type ScheduleWarning,
 } from '../domain/warnings/schedule-warning';
 
@@ -71,12 +72,15 @@ export interface ScoredSchedule {
   criticalWarningCount?: number;
 }
 
+// «Mandatory Rest:» دیگر پیشوند سطح A نیست: مدل بار کاری فقط زنجیرهٔ وزنیِ
+// «بیش از ۵» را غیرقانونی می‌داند (Max Consecutive). یادآور مرز پایان ماه
+// دربارهٔ ماه آینده است و برنامهٔ قانونیِ ماه جاری را بحرانی نمی‌کند.
+// (هم‌راستا با CRITICAL_WARNING_CODES در domain/warnings/schedule-warning.)
 export const HARD_WARNING_PREFIXES = [
   'Coverage Shortage:',
   'Overstaffing:',
   'Missing Shift Leader:',
   'Max Consecutive:',
-  'Mandatory Rest:',
   'Night Rest:',
   'Supervisor/Staff E/N Restriction:',
   'Unknown Shift:',
@@ -88,7 +92,6 @@ export const HARD_WARNING_LABELS: Record<(typeof HARD_WARNING_PREFIXES)[number],
   'Overstaffing:': 'نیروی مازاد',
   'Missing Shift Leader:': 'نبود سرشیفت',
   'Max Consecutive:': 'نقض سقف شیفت متوالی',
-  'Mandatory Rest:': 'لزوم استراحت اجباری',
   'Night Rest:': 'نقض استراحت شب',
   'Supervisor/Staff E/N Restriction:': 'ممنوعیت عصر/شب سرپرستار یا استاف',
   'Unknown Shift:': 'شیفت ناشناخته',
@@ -246,6 +249,44 @@ export function isHardConstraintWarning(warning: string | ScheduleWarning): bool
     return isCriticalWarningCode(warning.code);
   }
   return HARD_WARNING_PREFIXES.some(prefix => warning.startsWith(prefix));
+}
+
+/**
+ * پیشوندهای تاریخیِ هشدارهای صرفاً اطلاع‌رسانی (اصلاح‌های خودکار solver).
+ *
+ * قالب رشته‌ایِ ذخیره‌شده (MonthlySchedule.warnings: string[]) همان قرارداد
+ * پیشوندیِ HARD_WARNING_PREFIXES را دارد: `OFF Removed: …` و
+ * `Isolated Shift Fixed: …`. مدل ساخت‌یافته این دو را `info` می‌داند؛ این
+ * فهرست همان طبقه‌بندی را برای رشته‌های legacy فراهم می‌کند.
+ */
+export const INFORMATIONAL_WARNING_PREFIXES = [
+  'OFF Removed:',
+  'Isolated Shift Fixed:',
+] as const;
+
+/**
+ * طبقه‌بندی «هشدار صرفاً اطلاع‌رسانی».
+ *
+ * - ورودی ساخت‌یافته: بر اساس کد ماشینی (OFF_REMOVED / ISOLATED_SHIFT_FIXED).
+ * - ورودی رشته‌ای (LEGACY): بر اساس پیشوند تاریخی متن.
+ *
+ * هر دو مسیر همان مجموعه را اطلاع‌رسانی می‌دانند؛ این هشدارها برای نمایش و
+ * حسابرسی می‌مانند اما «نقص» نیستند و نباید در جریمهٔ امتیازدهی شمرده شوند.
+ */
+export function isInformationalWarning(warning: string | ScheduleWarning): boolean {
+  if (typeof warning !== 'string') {
+    return isInformationalWarningCode(warning.code);
+  }
+  return INFORMATIONAL_WARNING_PREFIXES.some(prefix => warning.startsWith(prefix));
+}
+
+/**
+ * تعداد هشدارهایی که در امتیازدهی «نقص» به‌حساب می‌آیند: همهٔ هشدارها منهای
+ * اطلاع‌رسانی‌های خودکار. هشدارهای بحرانی و تخلف‌های غیربحرانیِ واقعی همچنان
+ * شمرده می‌شوند.
+ */
+export function countScoringDefectWarnings(warnings: readonly string[]): number {
+  return warnings.filter(warning => !isInformationalWarning(warning)).length;
 }
 
 export function getHardConstraintWarnings(warnings: readonly string[]): string[] {
@@ -472,7 +513,9 @@ function calculateOptimizationScore(
     return Math.abs(report.workedHours - reference);
   }));
 
-  const warningCount = schedule.warnings.length;
+  // اطلاع‌رسانی‌های خودکار (OFF Removed / Isolated Shift Fixed) تخلف نیستند و
+  // در جریمهٔ امتیازدهی شمرده نمی‌شوند؛ خودشان برای نمایش/حسابرسی می‌مانند.
+  const warningCount = countScoringDefectWarnings(schedule.warnings);
   const hardWarningCount = countHardConstraintWarnings(schedule.warnings);
   const warningScore = clamp(100 - ((warningCount * 6) + (hardWarningCount * 18)), 0, 100);
   const efficiencyScore = clamp(100 * (1 - clamp(meanDeviation / 28, 0, 1)), 0, 100);

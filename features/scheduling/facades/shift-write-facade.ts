@@ -35,7 +35,7 @@ import {
 import { reconcileStaffingCoverage } from '../../../domain/scheduling/staffing-coverage';
 import { repairScheduleBeforeWarnings } from '../../../domain/scheduling/repair-orchestrator';
 import { findResolvedWarnings, pruneDismissedWarnings } from '../../../domain/scheduling/alert-lifecycle';
-import { isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
+import { canEditShiftCell, isScheduleLocked } from '../../../domain/guards/shift-edit-guards';
 import { generateJalaliMonthCalendar } from '../../../lib/jalali';
 
 interface ShiftLeaderRecord {
@@ -319,6 +319,34 @@ export async function applyManualShiftChangeFacade(
   } = input;
 
   const lockedRows = lockState?.lockedRows ?? [];
+
+  // ====== مرز نوشتن (write boundary) ======
+  // همان قول‌های قفلی که UI می‌دهد باید اینجا هم — پیش از هر persist —
+  // اجرا شوند؛ وگرنه فراخوانی مستقیم facade می‌تواند گروهِ ثبت‌نهایی‌شده یا
+  // ردیف قفل‌شده را بازنویسی کند. از همان گزارهٔ خالص UI (canEditShiftCell)
+  // استفاده می‌شود تا سیاست تکراری ساخته نشود.
+  // (سمنتیک person.locked عمداً اینجا تصمیم‌گیری نمی‌شود — policy-pending.)
+  const guardedPerson = personnel.find(p => p.id === personnelId);
+  if (guardedPerson && lockState) {
+    const finalizedMonthsForGroup =
+      guardedPerson.jobGroup === 'nurse'
+        ? lockState.finalizedNursesMonths
+        : lockState.finalizedAssistantsMonths;
+    const editCheck = canEditShiftCell({
+      jobGroup: guardedPerson.jobGroup,
+      personnelId,
+      finalizedMonths: finalizedMonthsForGroup,
+      lockedRows,
+      monthKey: `${year}_${month}`,
+    });
+    if (!editCheck.allowed) {
+      return {
+        success: false,
+        schedule: null,
+        error: editCheck.message ?? 'ویرایش این سلول مجاز نیست.',
+      };
+    }
+  }
 
   // سلول ویرایش‌شده توسط سرپرستار + تمام سلول‌های محافظت‌شده قبلی
   const protectedSet = new Set<string>(protectedCellsInput ?? []);

@@ -30,7 +30,11 @@ import {
 } from '../domain/warnings/schedule-warning';
 import { evaluateBaselineObjective } from '../domain/scenarios/objective';
 import { applyManualShiftChangeFacade } from '../features/scheduling/facades/shift-write-facade';
-import { generateAndScoreScenarios } from '../lib/scenarioGenerator';
+import {
+  generateAndScoreScenarios,
+  generateCriticalRepairEdits,
+  type VerifiedSchedule,
+} from '../lib/scenarioGenerator';
 import { evaluateScenarioSchedule } from '../lib/scoring';
 import {
   getShiftHours,
@@ -831,20 +835,128 @@ test('regression_optimizer_merge_preserves_both_person_locked_and_lockedRows', (
   assert.deepEqual(withoutCurrentSchedule[lockedPerson.id], {});
 });
 
-test('characterizes_manual_facade_as_relying_on_separate_UI_lock_guard', async () => {
-  const doublyLocked = person('manual-locked-person', { locked: true });
+// ---------------------------------------------------------------------------
+// Manual facade write boundary: finalized groups and lockedRows are enforced
+// at the facade itself (not only in the UI). person.locked semantics remain
+// policy-pending and are intentionally NOT enforced here.
+// ---------------------------------------------------------------------------
+
+async function applyDirectFacadeEdit(options: {
+  person: Personnel;
+  finalizedNursesMonths?: string[];
+  finalizedAssistantsMonths?: string[];
+  lockedRows?: string[];
+  onSave?: () => void;
+}) {
+  const currentSchedule = scheduleWith({
+    [options.person.id]: { 1: 'OFF' },
+  });
+
+  return applyManualShiftChangeFacade(
+    {
+      personnelId: options.person.id,
+      day: 1,
+      shift: 'M',
+      year: YEAR,
+      month: MONTH,
+      currentSchedule,
+      personnel: [options.person],
+      requests: [],
+      settings: settingsWithDemand(),
+      holidays: {},
+      firstDayOfWeek: undefined,
+      lockState: {
+        finalizedNursesMonths: options.finalizedNursesMonths ?? [],
+        finalizedAssistantsMonths: options.finalizedAssistantsMonths ?? [],
+        lockedRows: options.lockedRows ?? [],
+      },
+      protectedCells: [`${options.person.id}:1`],
+    },
+    verifyCoverageAndLeaders,
+    {
+      saveSchedule: async () => {
+        options.onSave?.();
+      },
+    },
+    'characterization-department'
+  );
+}
+
+test('regression_manual_facade_rejects_write_for_finalized_nurse_group', async () => {
+  let persisted = 0;
+  const nurse = person('facade-finalized-nurse');
+  const result = await applyDirectFacadeEdit({
+    person: nurse,
+    finalizedNursesMonths: [`${YEAR}_${MONTH}`],
+    onSave: () => { persisted += 1; },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.schedule, null);
+  assert.ok(result.error, 'a rejection reason is returned');
+  assert.equal(persisted, 0, 'a rejected mutation never reaches persistence');
+});
+
+test('regression_manual_facade_rejects_write_for_finalized_assistant_group', async () => {
+  let persisted = 0;
+  const assistant = person('facade-finalized-assistant', { jobGroup: 'assistant', position: 'none', canBeShiftLeader: false });
+  const result = await applyDirectFacadeEdit({
+    person: assistant,
+    finalizedAssistantsMonths: [`${YEAR}_${MONTH}`],
+    onSave: () => { persisted += 1; },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.schedule, null);
+  assert.equal(persisted, 0, 'a rejected mutation never reaches persistence');
+});
+
+test('regression_manual_facade_rejects_write_for_locked_row', async () => {
+  let persisted = 0;
+  const nurse = person('facade-locked-row');
+  const result = await applyDirectFacadeEdit({
+    person: nurse,
+    lockedRows: [nurse.id],
+    onSave: () => { persisted += 1; },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.schedule, null);
+  assert.equal(persisted, 0, 'a rejected mutation never reaches persistence');
+});
+
+test('regression_manual_facade_accepts_write_for_unlocked_row_and_group', async () => {
+  let persisted = 0;
+  const nurse = person('facade-unlocked');
+  const result = await applyDirectFacadeEdit({
+    person: nurse,
+    // Finalized months for OTHER months / the other group do not block this cell.
+    finalizedNursesMonths: [`${YEAR}_${MONTH + 1}`],
+    finalizedAssistantsMonths: [`${YEAR}_${MONTH}`],
+    lockedRows: ['someone-else'],
+    onSave: () => { persisted += 1; },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.schedule?.assignments[nurse.id][1], 'M');
+  assert.equal(persisted, 1, 'the accepted mutation is persisted exactly once');
+});
+
+test('characterizes_manual_facade_as_not_enforcing_person_locked_alone', async () => {
+  // person.locked semantics remain policy-pending: the facade only enforces the
+  // finalized-group and lockedRows promises that the UI already makes.
+  const personLockedOnly = person('manual-locked-person', { locked: true });
   const result = await applyProtectedManualEdit({
-    person: doublyLocked,
+    person: personLockedOnly,
     currentShift: 'OFF',
     newShift: 'M',
-    lockedRows: [doublyLocked.id],
   });
 
   assert.equal(result.success, true);
   assert.equal(
-    result.schedule?.assignments[doublyLocked.id][1],
+    result.schedule?.assignments[personLockedOnly.id][1],
     'M',
-    'the facade itself writes the protected edit even when both lock representations are present'
+    'person.locked alone does not block the facade write (policy-pending)'
   );
 });
 
@@ -1200,6 +1312,147 @@ test('characterizes_240_hour_overtime_filter_as_normal_candidate_filter_only', (
     requests
   );
   assert.equal(reconciled.assignments[overtime.id][19], 'M');
+});
+
+// ---------------------------------------------------------------------------
+// Mandatory Rest is a next-month boundary reminder, not a current-month gate
+// ---------------------------------------------------------------------------
+
+test('regression_legal_end_of_month_run_at_exactly_weight_5_is_not_gated_or_repaired_as_mandatory_rest', () => {
+  const nurse = person('boundary-cap-nurse');
+  // EN (day 30) + ME (day 31) = 1+2+1+1 = exactly 5 weighted units — legal.
+  const assignments = { [nurse.id]: { 30: 'EN', 31: 'ME' } };
+
+  const verification = verifyCoverageAndLeaders(
+    YEAR, MONTH, [nurse], assignments, settingsWithDemand(), {}, undefined, []
+  );
+
+  // 1) No MAX_CONSECUTIVE violation: the workload arithmetic (>5 illegal) is untouched.
+  assert.equal(
+    verification.warnings.some(warning => warning.startsWith('Max Consecutive:')),
+    false,
+    'a weighted run of exactly 5 is legal for the current month'
+  );
+
+  // 2) The run stays scenario-eligible: neither the workload run nor the
+  //    boundary reminder is critical. (Unrelated shift-leader warnings from the
+  //    minimal one-person roster are excluded — they are not under test.)
+  const runWarnings = verification.structuredWarnings.filter(
+    warning => warning.code === 'MAX_CONSECUTIVE' || warning.code === 'MANDATORY_REST'
+  );
+  assert.equal(countCriticalScheduleWarnings(runWarnings), 0);
+  const plainSchedule = scheduleWith(assignments, { warnings: runWarnings.map(w => w.message) });
+  const objective = evaluateBaselineObjective({
+    baseline: plainSchedule,
+    candidate: plainSchedule,
+    warnings: plainSchedule.warnings,
+    structuredWarnings: runWarnings,
+    targetPersonnelIds: [nurse.id],
+    totalDays: TOTAL_DAYS,
+    lockedRows: [],
+    requestSatisfactionPercent: 100,
+  });
+  assert.equal(objective.criticalResolved, true, 'the legal boundary run is not a scenario hard gate');
+
+  // 3) Critical repair never deletes a current-month work cell solely because of
+  //    the boundary reminder — even if a MANDATORY_REST warning is present.
+  const reminderOnly: VerifiedSchedule = {
+    year: YEAR,
+    month: MONTH,
+    assignments: assignments as MonthlySchedule['assignments'],
+    shiftLeaders: {},
+    warnings: ['Mandatory Rest: synthetic reminder'],
+    structuredWarnings: [{
+      code: 'MANDATORY_REST',
+      severity: 'warning',
+      message: 'Mandatory Rest: synthetic reminder',
+      personnelId: nurse.id,
+    }],
+  };
+  const edits = generateCriticalRepairEdits(reminderOnly, {
+    freeTargetPersonnel: [nurse],
+    totalDays: TOTAL_DAYS,
+    requests: [],
+    calendarDays: [{ day: 30, dayOfWeek: 0, isHoliday: false }, { day: 31, dayOfWeek: 1, isHoliday: false }],
+  });
+  assert.deepEqual(edits, [], 'no repair edit deletes a legal current-month work cell for the reminder');
+});
+
+test('regression_actual_weight_over_5_violation_still_reports_max_consecutive_and_keeps_the_boundary_reminder', () => {
+  const nurse = person('boundary-breach-nurse');
+  // N (day 30) + MEN (day 31) = 2+1+1+2 = 6 weighted units — a genuine breach
+  // whose run also reaches the month boundary at the final night.
+  const verification = verifyCoverageAndLeaders(
+    YEAR, MONTH, [nurse], { [nurse.id]: { 30: 'N', 31: 'MEN' } }, settingsWithDemand(), {}, undefined, []
+  );
+
+  const maxConsecutive = verification.structuredWarnings.find(w => w.code === 'MAX_CONSECUTIVE');
+  assert.ok(maxConsecutive, 'the actual weight > 5 violation is still reported');
+  assert.equal(isCriticalScheduleWarning(maxConsecutive!), true, 'MAX_CONSECUTIVE remains critical');
+
+  const reminder = verification.structuredWarnings.find(w => w.code === 'MANDATORY_REST');
+  assert.ok(reminder, 'the boundary reminder is preserved for reporting');
+  assert.equal(isCriticalScheduleWarning(reminder!), false, 'the reminder itself is not a level-A gate');
+});
+
+test('regression_normal_candidate_filter_honors_the_configured_overtime_cap', () => {
+  // Same roster for every configured cap. The overtime person accumulates
+  // 156h (12 × ME) before the first uncovered holiday (day 19, Friday), where
+  // holiday demand asks for one extra morning nurse (M = +6.5h → 162.5h).
+  const buildRoster = () => {
+    const overtime = person('overtime-capped', { employmentType: 'overtime' });
+    const alternative = person('overtime-cap-alternative');
+    const requests = [
+      shiftRequest('cap-overtime-plan', overtime.id, 'ME', Array.from({ length: 12 }, (_, index) => index + 1)),
+      shiftRequest('cap-alternative-plan', alternative.id, 'ME', Array.from({ length: 14 }, (_, index) => index + 1)),
+    ];
+    return { overtime, alternative, requests };
+  };
+
+  const solveWithCap = (overtimeCap: number) => {
+    const { overtime, alternative, requests } = buildRoster();
+    const settings: SystemSettings = {
+      dutyHours: { official: 176, contract: 190, conscript: 200, overtime: overtimeCap },
+      demand: {
+        weekday: { ...ZERO_DEMAND },
+        holiday: { ...ZERO_DEMAND, morningNurse: 1 },
+      },
+    };
+    const solved = solveNursingSchedule(
+      YEAR, MONTH, [overtime, alternative], requests, settings, {}, undefined, null
+    );
+    return { solved, overtime, alternative };
+  };
+
+  // Configured cap 240: 156 + 6.5 = 162.5 ≤ 240 → the overtime person stays eligible.
+  const highCap = solveWithCap(240);
+  assert.equal(highCap.solved.assignments[highCap.overtime.id][19], 'M');
+  assert.equal(highCap.solved.assignments[highCap.alternative.id][19], 'OFF');
+
+  // Configured cap 150: 156 + 6.5 > 150 → filtered out; the alternative covers the gap.
+  const lowCap = solveWithCap(150);
+  assert.equal(lowCap.solved.assignments[lowCap.overtime.id][19], 'OFF');
+  assert.equal(lowCap.solved.assignments[lowCap.alternative.id][19], 'M');
+
+  // Exact boundary: 156 + 6.5 = 162.5 is NOT beyond the cap → still eligible.
+  const exactCap = solveWithCap(162.5);
+  assert.equal(exactCap.solved.assignments[exactCap.overtime.id][19], 'M');
+
+  // One shift beyond the cap: 162.5 > 162 → rejected.
+  const beyondCap = solveWithCap(162);
+  assert.equal(beyondCap.solved.assignments[beyondCap.overtime.id][19], 'OFF');
+  assert.equal(beyondCap.solved.assignments[beyondCap.alternative.id][19], 'M');
+
+  // Unconfigured (0) keeps the historical 240 fallback, so pre-existing rosters
+  // built with overtime: 0 behave exactly as before.
+  const unconfigured = solveWithCap(0);
+  assert.equal(unconfigured.solved.assignments[unconfigured.overtime.id][19], 'M');
+
+  // Behavior unrelated to the overtime cap is unchanged: day 26 (the following
+  // Friday) is covered by the official nurse in every configuration.
+  for (const { solved, alternative } of [highCap, lowCap, exactCap, beyondCap, unconfigured]) {
+    assert.equal(solved.assignments[alternative.id][26], 'M');
+  }
 });
 
 test('characterizes_scenario_generation_as_not_enforcing_MN_E_only_or_extra_shift_heuristics', () => {

@@ -137,13 +137,18 @@ export interface ScheduleWarning {
  *
  * این فهرست با `HARD_WARNING_PREFIXES` هم‌راستا است. نقض‌های جدیدی که همان
  * shared hard evaluator تشخیص می‌دهد نیز بحرانی‌اند تا سناریوها آن‌ها را نادیده نگیرند.
+ *
+ * `MANDATORY_REST` عمداً بحرانی نیست: مدل بار کاری فقط زنجیرهٔ وزنیِ «بیش از ۵»
+ * را غیرقانونی می‌داند و آن تخلف با `MAX_CONSECUTIVE` گزارش می‌شود. یادآورِ مرز
+ * پایان ماه (endsMonthAtCapWithoutRest) دربارهٔ «ابتدای ماه آینده» است و یک
+ * برنامهٔ قانونیِ ماه جاری را نباید critical-invalid کند؛ به‌عنوان هشدار
+ * غیربحرانی برای گزارش‌دهی حفظ می‌شود.
  */
 export const CRITICAL_WARNING_CODES: readonly ScheduleWarningCode[] = [
   'COVERAGE_SHORTAGE',
   'OVERSTAFFING',
   'MISSING_SHIFT_LEADER',
   'MAX_CONSECUTIVE',
-  'MANDATORY_REST',
   'NIGHT_REST',
   'SUPERVISOR_STAFF_EN_RESTRICTION',
   'UNKNOWN_SHIFT',
@@ -155,10 +160,25 @@ export function isCriticalWarningCode(code: ScheduleWarningCode): boolean {
   return CRITICAL_WARNING_CODES.includes(code);
 }
 
+/**
+ * کدهای صرفاً اطلاع‌رسانی (severity = info): اصلاح‌های خودکار solver که هیچ
+ * تخلفی گزارش نمی‌کنند. برای نمایش/حسابرسی حفظ می‌شوند اما نباید به‌عنوان
+ * «نقص» در امتیازدهی/رتبه‌بندی شمرده شوند.
+ */
+export const INFORMATIONAL_WARNING_CODES: readonly ScheduleWarningCode[] = [
+  'ISOLATED_SHIFT_FIXED',
+  'OFF_REMOVED',
+];
+
+/** آیا این کد صرفاً اطلاع‌رسانی است؟ */
+export function isInformationalWarningCode(code: ScheduleWarningCode): boolean {
+  return INFORMATIONAL_WARNING_CODES.includes(code);
+}
+
 /** شدتِ پیش‌فرضِ هر کد (نگهداری متمرکز نگاشت code → severity). */
 export function defaultSeverityForCode(code: ScheduleWarningCode): ScheduleWarningSeverity {
   if (isCriticalWarningCode(code)) return 'critical';
-  if (code === 'ISOLATED_SHIFT_FIXED' || code === 'OFF_REMOVED') return 'info';
+  if (isInformationalWarningCode(code)) return 'info';
   // HARD_CONSTRAINT_CONFLICT عمداً بحرانی نیست: محدودیت سخت رعایت شده و چیزی
   // نقض نشده؛ فقط یک قاعدهٔ کم‌اولویت‌تر اعمال‌نشدنی بوده است. بحرانی‌کردن آن
   // سیاست طبقه‌بندی سطح A و رتبه‌بندی سناریوها را تغییر می‌داد.

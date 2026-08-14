@@ -44,6 +44,7 @@ import {
 } from './types';
 import {
   calculateRequestSatisfactionPercent,
+  countScoringDefectWarnings,
   evaluateScenarioSchedule,
   filterStructuredWarningsForScenarioGroup,
   SCENARIO_KEYS,
@@ -561,14 +562,10 @@ export function generateCriticalRepairEdits(schedule: VerifiedSchedule, context:
         }
         break;
       }
-      case 'MANDATORY_REST': {
-        const person = findFreeTargetById(context, warning.personnelId);
-        if (person) for (let d = context.totalDays; d >= Math.max(1, context.totalDays - 3); d -= 1) {
-          const cur = getAssignedShift(schedule, person.id, d);
-          if (cur !== 'OFF' && !cur.startsWith('L')) { push({ personnelId: person.id, day: d, shift: 'OFF' }); break; }
-        }
-        break;
-      }
+      // MANDATORY_REST عمداً case ندارد: یادآور مرزی پایان ماه است (دربارهٔ ماه
+      // آینده) و دیگر بحرانی نیست؛ تعمیر بحرانی نباید صرفاً به‌خاطر آن یک سلول
+      // کاریِ قانونیِ ماه جاری را حذف کند. تخلف واقعی (وزن > ۵) همچنان با
+      // MAX_CONSECUTIVE تعمیر می‌شود.
       default:
         // هشدارهای غیربحرانی (و کدهای ناشناخته) هرگز ویرایش تعمیر تولید نمی‌کنند.
         break;
@@ -636,7 +633,11 @@ function scoreCandidate(
     targetPersonnelIds: context.targetPersonnelIds, totalDays: context.totalDays,
     lockedRows: context.lockedRows, requestSatisfactionPercent,
   });
-  const nonCriticalWarningCount = Math.max(0, schedule.warnings.length - objective.criticalWarningCount);
+  // اطلاع‌رسانی‌های خودکار solver (OFF_REMOVED / ISOLATED_SHIFT_FIXED) تخلف
+  // نیستند و نباید رتبهٔ بهینه‌سازی را پایین بیاورند؛ فقط تخلف‌های غیربحرانیِ
+  // واقعی در این معیارِ رتبه‌بندی شمرده می‌شوند.
+  const defectWarningCount = countScoringDefectWarnings(schedule.warnings);
+  const nonCriticalWarningCount = Math.max(0, defectWarningCount - objective.criticalWarningCount);
   scored.baselineSimilarityPercent = objective.similarityPercent;
   scored.baselineDifferencePercent = objective.baselineDifferencePercent;
   scored.criticalWarningCount = objective.criticalWarningCount;
