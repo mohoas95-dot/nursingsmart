@@ -17,6 +17,49 @@ import type { JobGroup, ShiftType, MonthlySchedule } from '../types';
 import type { Personnel, ShiftRequest, SystemSettings, WorkRoutineTag } from '../../lib/types';
 import { isPersonnelOptimizationTarget } from '../guards/shift-edit-guards';
 
+/** Context required to keep session-local manual-cell protection from leaking. */
+export interface ProtectedCellContext {
+  departmentId: string;
+  year: number;
+  month: number;
+}
+
+/** Context-qualified identity stored by the UI for a protected manual edit. */
+export function protectedCellKey(
+  context: Readonly<ProtectedCellContext>,
+  personnelId: string,
+  day: number
+): string {
+  return `${context.departmentId}:${context.year}:${context.month}:${personnelId}:${day}`;
+}
+
+/**
+ * Project context-qualified protection identities to the local `personnelId:day`
+ * keys consumed by reconciliation and the shared hard evaluator.
+ */
+export function protectedCellsForContext(
+  protectedCells: ReadonlySet<string>,
+  context: Readonly<ProtectedCellContext>
+): Set<string> {
+  const prefix = `${context.departmentId}:${context.year}:${context.month}:`;
+  const localCells = new Set<string>();
+  for (const key of protectedCells) {
+    if (key.startsWith(prefix)) localCells.add(key.slice(prefix.length));
+  }
+  return localCells;
+}
+
+/** Job groups that remain mutable at the continuous-reconciliation boundary. */
+export function getUnfinalizedJobGroups(
+  schedule: Pick<MonthlySchedule, 'finalized' | 'finalizedNurses' | 'finalizedAssistants'>
+): JobGroup[] {
+  const allFinalized = !!schedule.finalized;
+  const groups: JobGroup[] = [];
+  if (!allFinalized && !schedule.finalizedNurses) groups.push('nurse');
+  if (!allFinalized && !schedule.finalizedAssistants) groups.push('assistant');
+  return groups;
+}
+
 // ============================================================================
 // Schedule Assignment Normalization
 // ============================================================================
@@ -76,11 +119,19 @@ export function mergeOptimizerAssignments(
 
   // Only update personnel who are targets (correct job group + not locked)
   const targetPersonnel = personnel.filter((p) =>
-    isPersonnelOptimizationTarget(p.jobGroup, targetJobGroup, p.id, lockedRows)
+    !p.locked && isPersonnelOptimizationTarget(p.jobGroup, targetJobGroup, p.id, lockedRows)
   );
 
   for (const person of targetPersonnel) {
     mergedAssignments[person.id] = { ...(optimizedAssignments[person.id] || {}) };
+  }
+
+  // `person.locked` is also honored by the normal solver. It is not merged with
+  // the separate lockedRows model here; it simply prevents optimizer mutation.
+  for (const person of personnel) {
+    if (person.locked) {
+      mergedAssignments[person.id] = { ...(currentAssignments?.[person.id] || {}) };
+    }
   }
 
   return mergedAssignments;

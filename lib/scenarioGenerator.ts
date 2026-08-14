@@ -276,7 +276,10 @@ function buildScenarioContext(options: ScenarioGenerationOptions): ScenarioConte
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const lockedIdSet = new Set(lockedRows);
   const targetPersonnel = personnelList.filter(person =>
-    person.active && !lockedIdSet.has(person.id) && (!targetJobGroup || person.jobGroup === targetJobGroup));
+    person.active
+    && !person.locked
+    && !lockedIdSet.has(person.id)
+    && (!targetJobGroup || person.jobGroup === targetJobGroup));
   return {
     year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex,
     monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows,
