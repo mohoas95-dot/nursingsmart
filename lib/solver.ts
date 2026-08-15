@@ -554,44 +554,10 @@ export function solveNursingSchedule(
 
     for (let d = 1; d <= totalDays; d++) {
       const dateInfo = calendar[d - 1];
-      let matchesScope = false;
-
-      if (req.scope === 'all') {
-        matchesScope = true;
-      } else if (req.scope === 'even' && d % 2 === 0) {
-        matchesScope = true;
-      } else if (req.scope === 'odd' && d % 2 !== 0) {
-        matchesScope = true;
-      } else if (req.scope === 'saturdays' && dateInfo.dayOfWeek === 0) {
-        matchesScope = true;
-      } else if (req.scope === 'sundays' && dateInfo.dayOfWeek === 1) {
-        matchesScope = true;
-      } else if (req.scope === 'mondays' && dateInfo.dayOfWeek === 2) {
-        matchesScope = true;
-      } else if (req.scope === 'tuesdays' && dateInfo.dayOfWeek === 3) {
-        matchesScope = true;
-      } else if (req.scope === 'wednesdays' && dateInfo.dayOfWeek === 4) {
-        matchesScope = true;
-      } else if (req.scope === 'thursdays' && dateInfo.dayOfWeek === 5) {
-        matchesScope = true;
-      } else if (req.scope === 'fridays' && dateInfo.dayOfWeek === 6) {
-        matchesScope = true;
-      } else if (req.scope === 'weekly_even' && (dateInfo.dayOfWeek === 0 || dateInfo.dayOfWeek === 2 || dateInfo.dayOfWeek === 4)) {
-        matchesScope = true;
-      } else if (req.scope === 'weekly_odd' && (dateInfo.dayOfWeek === 1 || dateInfo.dayOfWeek === 3 || dateInfo.dayOfWeek === 5)) {
-        matchesScope = true;
-      } else if (req.scope === 'custom_days' && req.selectedDays && req.selectedDays.includes(d)) {
-        matchesScope = true;
-      } else if (req.scope === 'range' && req.startDate && req.endDate) {
-        const currentStr = `${year}/${month < 10 ? '0' + month : month}/${d < 10 ? '0' + d : d}`;
-        const startNormalized = req.startDate.replace(/\//g, '-');
-        const endNormalized = req.endDate.replace(/\//g, '-');
-        const currNormalized = currentStr.replace(/\//g, '-');
-        
-        if (currNormalized >= startNormalized && currNormalized <= endNormalized) {
-          matchesScope = true;
-        }
-      }
+      // Canonical scope matching (single source of truth). Ranges are
+      // single-month by policy, so day-of-month comparison is equivalent to the
+      // previous full-date-string check.
+      const matchesScope = isDayInRequestScope(d, dateInfo.dayOfWeek, req);
 
       if (matchesScope) {
         if (req.requestType === 'avoid_shift') {
@@ -2117,43 +2083,10 @@ export function verifyCoverageAndLeaders(
             return;
           }
 
-          let matchesScope = false;
-
-          if (req.scope === 'all') {
-            matchesScope = true;
-          } else if (req.scope === 'even' && d % 2 === 0) {
-            matchesScope = true;
-          } else if (req.scope === 'odd' && d % 2 !== 0) {
-            matchesScope = true;
-          } else if (req.scope === 'saturdays' && dateInfo.dayOfWeek === 0) {
-            matchesScope = true;
-          } else if (req.scope === 'sundays' && dateInfo.dayOfWeek === 1) {
-            matchesScope = true;
-          } else if (req.scope === 'mondays' && dateInfo.dayOfWeek === 2) {
-            matchesScope = true;
-          } else if (req.scope === 'tuesdays' && dateInfo.dayOfWeek === 3) {
-            matchesScope = true;
-          } else if (req.scope === 'wednesdays' && dateInfo.dayOfWeek === 4) {
-            matchesScope = true;
-          } else if (req.scope === 'thursdays' && dateInfo.dayOfWeek === 5) {
-            matchesScope = true;
-          } else if (req.scope === 'fridays' && dateInfo.dayOfWeek === 6) {
-            matchesScope = true;
-          } else if (req.scope === 'weekly_even' && (dateInfo.dayOfWeek === 0 || dateInfo.dayOfWeek === 2 || dateInfo.dayOfWeek === 4)) {
-            matchesScope = true;
-          } else if (req.scope === 'weekly_odd' && (dateInfo.dayOfWeek === 1 || dateInfo.dayOfWeek === 3 || dateInfo.dayOfWeek === 5)) {
-            matchesScope = true;
-          } else if (req.scope === 'custom_days' && req.selectedDays && req.selectedDays.includes(d)) {
-            matchesScope = true;
-          } else if (req.scope === 'range' && req.startDate && req.endDate) {
-            const currentStr = `${year}/${month < 10 ? '0' + month : month}/${d < 10 ? '0' + d : d}`;
-            const startNormalized = req.startDate.replace(/\//g, '-');
-            const endNormalized = req.endDate.replace(/\//g, '-');
-            const currNormalized = currentStr.replace(/\//g, '-');
-            if (currNormalized >= startNormalized && currNormalized <= endNormalized) {
-              matchesScope = true;
-            }
-          }
+          // Canonical scope matching (single source of truth). Ranges are
+          // single-month by policy, so day-of-month comparison is equivalent to
+          // the previous full-date-string check.
+          const matchesScope = isDayInRequestScope(d, dateInfo.dayOfWeek, req);
 
           if (matchesScope) {
             if (req.requestType === 'avoid_shift') {

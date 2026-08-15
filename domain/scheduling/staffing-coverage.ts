@@ -23,31 +23,6 @@ import {
   wouldExceedOvertimeCap,
 } from './overtime-cap';
 
-/**
- * Simplified scope matcher for reconcile context where dayOfWeek is not available.
- * Only checks scopes that can be determined from day number alone:
- *   all, even, odd, custom_days, range.
- * Weekday-specific scopes (saturdays–fridays, weekly_even, weekly_odd) always match
- * here to avoid accidentally respecting Soft OFF on those days without full calendar info.
- */
-function matchRequestScopeSimple(day: number, request: ShiftRequest): boolean {
-  switch (request.scope) {
-    case 'all': return true;
-    case 'even': return day % 2 === 0;
-    case 'odd': return day % 2 === 1;
-    case 'custom_days': return !!request.selectedDays && request.selectedDays.includes(day);
-    case 'range':
-      if (!request.startDate || !request.endDate) return false;
-      // Simple day-of-month range matching
-      const startDay = parseInt(request.startDate.split('/').pop() || '0', 10);
-      const endDay = parseInt(request.endDate.split('/').pop() || '0', 10);
-      return day >= startDay && day <= endDay;
-    // Weekday-specific scopes: we can't determine dayOfWeek here, so conservatively
-    // return true (Soft OFF on these scopes won't get the penalty boost)
-    default: return false;
-  }
-}
-
 export type CoverageShift = 'M' | 'E' | 'N';
 
 export interface StaffingCalendarDay {
@@ -311,8 +286,9 @@ export function reconcileStaffingCoverage(
               r.personnelId === person.id &&
               r.requestType === 'OFF' &&
               r.offHardness === 'soft' &&
-              // Scope matching for reconcile: simplified check for all/custom_days/even/odd/range
-              matchRequestScopeSimple(day, r)
+              // Canonical scope matching (weekday-aware); `calendarDay.dayOfWeek`
+              // is available here, so use the same matcher as avoid_shift below.
+              isDayInRequestScope(day, calendarDay.dayOfWeek ?? -1, r)
             );
             if (softOffReq) priority += 80;
             // avoid-shift یک ترجیح است، نه محدودیت سخت: کاندیدای سازگار ترجیح داده
