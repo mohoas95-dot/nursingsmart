@@ -499,3 +499,115 @@ test('solver coverage fill does not expand an exact ME request to MEN in an emer
     warning.startsWith('Mismatched Request:') && warning.includes('روز 1 درخواست شیفت ME')
   ), false);
 });
+
+// ---------------------------------------------------------------------------
+// Regression (Phase 3, Fix 1): Soft-OFF weekday scope in reconcile.
+//
+// A Soft OFF scoped to a weekday (e.g. 'thursdays') must be recognized during
+// reconcile candidate ranking, exactly like 'avoid_shift' already is, because
+// `calendarDay.dayOfWeek` is available. Before the fix, the simplified scope
+// matcher returned false for weekday scopes, so the Soft-OFF person received no
+// preference penalty and could be picked ahead of an equally-legal candidate.
+// ---------------------------------------------------------------------------
+
+test('reconcile respects a Soft-OFF scoped to a weekday (thursdays) when ranking candidates', () => {
+  // Two equally-legal OFF nurses; the E period needs one more.
+  // n_soft has a Soft OFF scoped to Thursdays; n_free has no request.
+  // The reconcile must prefer n_free (no Soft-OFF penalty) on the Thursday.
+  const personnel = [person('n_soft', 'nurse'), person('n_free', 'nurse')];
+  const assignments = {
+    n_soft: { 5: 'OFF' },
+    n_free: { 5: 'OFF' },
+  };
+  const softOffThursdays: ShiftRequest = {
+    id: 'soft-thu',
+    personnelId: 'n_soft',
+    requestType: 'OFF',
+    offHardness: 'soft',
+    scope: 'thursdays',
+    isEssential: false,
+  };
+
+  // Day 5 is declared a Thursday (dayOfWeek === 5) via the calendar input.
+  const result = reconcileStaffingCoverage(
+    assignments,
+    personnel,
+    settingsWithDemand({ afternoonNurse: 1 }),
+    [{ day: 5, isHoliday: false, dayOfWeek: 5 }],
+    ['nurse'],
+    [],
+    [softOffThursdays],
+  );
+
+  // The free nurse (no Soft-OFF on Thursday) is the one moved onto E.
+  assert.ok(shiftCoversPeriod(result.assignments.n_free?.[5], 'E'),
+    'n_free should be assigned E because they carry no Soft-OFF penalty on Thursday');
+  assert.equal(shiftCoversPeriod(result.assignments.n_soft?.[5], 'E'), false,
+    'n_soft should be spared because their Soft OFF is scoped to Thursdays and day 5 is a Thursday');
+});
+
+test('reconcile does not apply a thursdays Soft-OFF penalty on a non-Thursday day', () => {
+  // Same setup, but day 5 is NOT a Thursday (dayOfWeek === 0 = Saturday), so the
+  // 'thursdays' Soft OFF is out of scope and must NOT deprioritize n_soft.
+  // With the Soft-OFF out of scope, both candidates are equal; tie-break falls to
+  // definition order, so n_soft (first in the group) is picked.
+  const personnel = [person('n_soft', 'nurse'), person('n_free', 'nurse')];
+  const assignments = {
+    n_soft: { 5: 'OFF' },
+    n_free: { 5: 'OFF' },
+  };
+  const softOffThursdays: ShiftRequest = {
+    id: 'soft-thu',
+    personnelId: 'n_soft',
+    requestType: 'OFF',
+    offHardness: 'soft',
+    scope: 'thursdays',
+    isEssential: false,
+  };
+
+  const result = reconcileStaffingCoverage(
+    assignments,
+    personnel,
+    settingsWithDemand({ afternoonNurse: 1 }),
+    [{ day: 5, isHoliday: false, dayOfWeek: 0 }], // Saturday, not Thursday
+    ['nurse'],
+    [],
+    [softOffThursdays],
+  );
+
+  assert.ok(shiftCoversPeriod(result.assignments.n_soft?.[5], 'E'),
+    'n_soft may be assigned E on a non-Thursday because the thursdays Soft-OFF is out of scope');
+});
+
+test('reconcile still honors a day-of-month Soft-OFF scope (custom_days) after the fix', () => {
+  // Guardrail: the fix must not break non-weekday scopes. A custom_days Soft OFF
+  // on day 5 must still deprioritize its owner.
+  const personnel = [person('n_soft', 'nurse'), person('n_free', 'nurse')];
+  const assignments = {
+    n_soft: { 5: 'OFF' },
+    n_free: { 5: 'OFF' },
+  };
+  const softOffCustom: ShiftRequest = {
+    id: 'soft-custom',
+    personnelId: 'n_soft',
+    requestType: 'OFF',
+    offHardness: 'soft',
+    scope: 'custom_days',
+    selectedDays: [5],
+    isEssential: false,
+  };
+
+  const result = reconcileStaffingCoverage(
+    assignments,
+    personnel,
+    settingsWithDemand({ afternoonNurse: 1 }),
+    [{ day: 5, isHoliday: false, dayOfWeek: 5 }],
+    ['nurse'],
+    [],
+    [softOffCustom],
+  );
+
+  assert.ok(shiftCoversPeriod(result.assignments.n_free?.[5], 'E'),
+    'n_free should be preferred because n_soft has a custom_days Soft-OFF on day 5');
+  assert.equal(shiftCoversPeriod(result.assignments.n_soft?.[5], 'E'), false);
+});
