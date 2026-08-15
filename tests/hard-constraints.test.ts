@@ -334,16 +334,17 @@ test('B2: locked rows stay untouched even when that leaves a shortage', () => {
   assert.equal(r.assignments.g1?.[1], 'OFF', 'the locked row must not be modified');
   assert.equal(r.unresolvedGaps.length, 1);
 
-  // `personnel.locked` must behave identically to the lockedRows list.
-  const locked = makePerson('g3', { locked: true });
+  // The global `person.locked` field is NOT a scheduling lock (monthly policy):
+  // a person flagged `locked` on the Personnel record but absent from the month's
+  // `lockedRows` is still fillable.
+  const flagged = makePerson('g3', { locked: true });
   const r2 = reconcileStaffingCoverage(
     { g3: { 1: 'OFF' }, g2: { 1: 'OFF' } },
-    [locked, g2],
+    [flagged, g2],
     makeSettings({ morningNurse: 2, afternoonNurse: 0, nightNurse: 0 }),
     weekdays(1), ['nurse'], [], []
   );
-  assert.equal(r2.assignments.g3?.[1], 'OFF');
-  assert.equal(r2.unresolvedGaps.length, 1);
+  assert.notEqual(r2.assignments.g3?.[1], 'OFF', 'the global flag alone must not lock g3');
 });
 
 test('B2: protected cells stay untouched even when that leaves a shortage', () => {

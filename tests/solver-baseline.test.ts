@@ -285,9 +285,10 @@ test('soft OFF: unlike a hard OFF, a soft OFF may still be broken by the consecu
 // ---------------------------------------------------------------------------
 // 8. Locked rows / protected cells
 // ---------------------------------------------------------------------------
-test('personnel.locked is honored by solveNursingSchedule shared hard evaluation', () => {
-  const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1', { locked: true })];
-  const s = solved(personnel, [], makeSettings());
+test('monthly lock (lockedPersonIds) is honored by solveNursingSchedule shared hard evaluation', () => {
+  const personnel = [makePerson('sup', { position: 'supervisor' }), makePerson('stf', { position: 'staff' }), makePerson('g1')];
+  // g1 is locked for THIS month via the monthly lock ids (not the global field).
+  const s = solveNursingSchedule(CAL_YEAR, CAL_MONTH, personnel, [], makeSettings(), {}, undefined, null, ['g1']);
   const row = s.assignments.g1 || {};
   for (let d = 1; d <= daysInMonth(); d++) {
     const shift = row[d];

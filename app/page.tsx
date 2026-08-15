@@ -2412,7 +2412,8 @@ export default function Home() {
           reconciliationTargetGroups,
           currentLocked, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
           currentRequests,
-          protectedSet   // ← فقط ویرایش‌های همین بخش/ماه محافظت می‌شوند
+          protectedSet,   // ← فقط ویرایش‌های همین بخش/ماه محافظت می‌شوند
+          monthlyDutyHoursRef.current
         );
         effectiveAssignments = staffingResult.assignments;
         if (staffingResult.unresolvedGaps.length === 0) break;
@@ -2430,7 +2431,8 @@ export default function Home() {
       currentSettings,
       currentHolidays,
       currentFirstDay === -1 ? undefined : currentFirstDay,
-      currentRequests
+      currentRequests,
+      monthlyDutyHoursRef.current
     );
 
     const freshWarnings = verification.warnings;
@@ -2973,7 +2975,8 @@ export default function Home() {
           cleanUpdatedS,
           updatedH,
           activeFd === -1 ? undefined : activeFd,
-          updatedR
+          updatedR,
+          calculatedMonthlyDutyHours
         );
 
         solved = {
@@ -3007,7 +3010,8 @@ export default function Home() {
             cleanUpdatedS,
             updatedH,
             activeFd === -1 ? undefined : activeFd,
-            updatedR
+            updatedR,
+            calculatedMonthlyDutyHours
           );
           solved = {
             ...currentMonthSchedule,
@@ -4806,6 +4810,7 @@ export default function Home() {
           },
           dismissedWarnings: currentDismissed,
           protectedCells: Array.from(currentProtectedCells),
+          monthlyDutyHours: monthlyDutyHoursRef.current,
         },
         verifyCoverageAndLeaders,
         persistenceAdapter,
@@ -6434,7 +6439,8 @@ export default function Home() {
 
                               const verification = verifyCoverageAndLeaders(
                                 currentYear, currentMonth, personnel, updatedAssignments,
-                                settings, customHolidays, firstDayOfWeekIndex, requests
+                                settings, customHolidays, firstDayOfWeekIndex, requests,
+                                monthlyDutyHours
                               );
 
                               const nextDb = getFreshDbCopy();

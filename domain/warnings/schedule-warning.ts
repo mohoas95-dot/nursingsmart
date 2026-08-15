@@ -73,7 +73,8 @@ export type ScheduleWarningCode =
   | 'ISOLATED_SHIFT'
   | 'ISOLATED_SHIFT_FIXED'
   | 'OFF_REMOVED'
-  | 'HARD_CONSTRAINT_CONFLICT';
+  | 'HARD_CONSTRAINT_CONFLICT'
+  | 'OVERTIME_CAP_EXCEEDED';
 
 // ---------------------------------------------------------------------------
 // شدت هشدار

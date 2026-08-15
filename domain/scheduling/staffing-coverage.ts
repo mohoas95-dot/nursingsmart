@@ -1,5 +1,5 @@
 import type { JobGroup, Personnel, ShiftRequest, ShiftType, SystemSettings } from '../../lib/types';
-import { isDayInRequestScope } from '../requests/request-scope-matcher';
+import { isDayInRequestScope, patternStepForDay } from '../requests/request-scope-matcher';
 import {
   routineAllowsPeriodAdd,
   shiftMatchesRoutine,
@@ -18,6 +18,10 @@ import {
   COVERAGE_FILL_HARD_RULES,
   canAssignShift,
 } from './hard-constraints';
+import {
+  effectiveOvertimeCap,
+  wouldExceedOvertimeCap,
+} from './overtime-cap';
 
 /**
  * Simplified scope matcher for reconcile context where dayOfWeek is not available.
@@ -134,7 +138,7 @@ function isExplicitPlanCompatible(
     }
 
     if (request.requestType === 'pattern' && request.patternSteps?.length) {
-      const step = request.patternSteps[(day - 1) % request.patternSteps.length];
+      const step = patternStepForDay(request, day, dayOfWeek ?? -1);
       if (!step) continue;
       // Pattern leave markers follow the existing pattern verifier semantics:
       // any numbered/holiday leave marker satisfies a leave step.
@@ -193,7 +197,8 @@ export function reconcileStaffingCoverage(
   targetJobGroups: readonly JobGroup[] = ['nurse', 'assistant'],
   lockedRows: readonly string[] = [],
   requests?: readonly ShiftRequest[],
-  protectedCells?: ReadonlySet<string>
+  protectedCells?: ReadonlySet<string>,
+  monthlyDutyHours?: { overtime?: number } | null
 ): StaffingCoverageResult {
   const reconciled: Record<string, Record<number, ShiftType>> = {};
   for (const [personnelId, dayAssignments] of Object.entries(assignments)) {
@@ -206,6 +211,9 @@ export function reconcileStaffingCoverage(
     protectedSet.has(`${personId}:${dayNum}`);
   const unresolvedGaps: StaffingCoverageGap[] = [];
   const totalDays = calendarDays.reduce((max, calendarDay) => Math.max(max, calendarDay.day), 0);
+  // سقف اضافه‌کارِ مؤثر: override ماهانه مقدم بر تنظیمات بخش؛ پیکربندی‌نشده
+  // مثل گذشته به ۲۴۰ برمی‌گردد.
+  const overtimeCap = effectiveOvertimeCap({ settings, monthlyDutyHours });
 
   // نفراتی که درخواست شیفت/الگوی کاری ثبت کرده‌اند؛ نفراتِ دارای تگ روتین که هیچ
   // برنامه‌ای ندارند، ترجیحاً فقط در دوره‌های سازگار با تگشان چیده می‌شوند.
@@ -242,7 +250,7 @@ export function reconcileStaffingCoverage(
 
         if (assigned > required) {
           const removable = assignedPersonnel()
-            .filter(person => !lockedIds.has(person.id) && !person.locked)
+            .filter(person => !lockedIds.has(person.id))
             // سلول‌های محافظت‌شده (ویرایش دستی سرپرستار) هرگز دست‌نخورده باقی می‌مانند
             .filter(person => !isCellProtected(person.id, day))
             .filter(person => {
@@ -307,6 +315,16 @@ export function reconcileStaffingCoverage(
               matchRequestScopeSimple(day, r)
             );
             if (softOffReq) priority += 80;
+            // avoid-shift یک ترجیح است، نه محدودیت سخت: کاندیدای سازگار ترجیح داده
+            // می‌شود، اما در نبود جایگزین شیفتِ اجتناب‌شده هم قابل تخصیص است.
+            const avoidsShift = (requests ?? []).some(r =>
+              r.personnelId === person.id &&
+              r.requestType === 'avoid_shift' &&
+              !!r.preferredShift &&
+              isDayInRequestScope(day, calendarDay.dayOfWeek ?? -1, r) &&
+              shiftSatisfiesRequestedShift(nextShift, r.preferredShift)
+            );
+            if (avoidsShift) priority += 80;
             return priority;
           };
 
@@ -326,7 +344,7 @@ export function reconcileStaffingCoverage(
               )) {
                 return false;
               }
-              return canAssignShift(
+              if (!canAssignShift(
                 {
                   person,
                   day,
@@ -341,6 +359,18 @@ export function reconcileStaffingCoverage(
                   protectedCells: protectedSet,
                 },
                 COVERAGE_FILL_HARD_RULES
+              )) {
+                return false;
+              }
+              // سقف اضافه‌کار: کاندیدایی که سقف را رد می‌کند انتخاب نمی‌شود؛ در نبود
+              // جایگزین، کمبود پوشش گزارش می‌شود و سقف به‌عمد نقض نمی‌شود.
+              return !wouldExceedOvertimeCap(
+                reconciled,
+                person,
+                day,
+                candidateShift,
+                totalDays,
+                overtimeCap
               );
             })
             .sort((left, right) => candidatePriority(left) - candidatePriority(right));

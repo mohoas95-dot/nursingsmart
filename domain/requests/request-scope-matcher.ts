@@ -118,3 +118,28 @@ function parseDayFromDate(dateString: string): number {
   const parts = dateString.split('/').map(Number);
   return parts[2] ?? 0;
 }
+
+/**
+ * The canonical pattern-step lookup: a pattern only applies inside its configured
+ * scope. Returns the pattern step for `day` when the day is in scope, otherwise
+ * `undefined` (the pattern has no instruction for that day).
+ *
+ * The step index keeps the established `(day - 1) % steps.length` cadence; scope
+ * only gates whether the pattern applies at all on that day.
+ *
+ * @pure
+ */
+export interface PatternScopeRequest extends ShiftRequestScope {
+  patternSteps?: readonly string[];
+}
+
+export function patternStepForDay(
+  request: Readonly<PatternScopeRequest>,
+  day: number,
+  dayOfWeek: number
+): string | undefined {
+  if (!isDayInRequestScope(day, dayOfWeek, request)) return undefined;
+  const steps = request.patternSteps;
+  if (!steps || steps.length === 0) return undefined;
+  return steps[(day - 1) % steps.length];
+}

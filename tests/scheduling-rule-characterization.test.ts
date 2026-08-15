@@ -191,7 +191,7 @@ async function applyProtectedManualEdit(options: {
 // Pattern scope and pattern verification
 // ---------------------------------------------------------------------------
 
-test('characterizes_current_pattern_scope_behavior_as_all_month_cadence', () => {
+test('regression_pattern_applies_only_inside_its_configured_scope', () => {
   const nurse = person('pattern-worker');
   const pattern: ShiftRequest = {
     id: 'limited-pattern',
@@ -215,11 +215,11 @@ test('characterizes_current_pattern_scope_behavior_as_all_month_cadence', () => 
   );
 
   assert.equal(solved.assignments[nurse.id][1], 'EN', 'day 1 is inside the declared scope');
-  assert.equal(solved.assignments[nurse.id][2], 'OFF', 'the second cadence step is applied outside scope');
-  assert.equal(solved.assignments[nurse.id][3], 'EN', 'the repeating work step is also applied outside scope');
+  assert.equal(solved.assignments[nurse.id][2], 'OFF', 'out-of-scope day 2 carries no pattern instruction');
+  assert.equal(solved.assignments[nurse.id][3], 'OFF', 'out-of-scope day 3 carries no pattern instruction');
 });
 
-test('regression_reports_current_all_month_pattern_cadence_mismatch', () => {
+test('regression_pattern_verification_reports_mismatch_only_inside_scope', () => {
   const nurse = person('pattern-mismatch');
   const pattern: ShiftRequest = {
     id: 'expected-evening',
@@ -253,12 +253,16 @@ test('regression_reports_current_all_month_pattern_cadence_mismatch', () => {
   assert.equal(patternMismatchWarnings[0].metadata?.requestedShift, 'E');
   assert.equal(patternMismatchWarnings[0].metadata?.assignedShift, 'M');
   assert.equal(countCriticalScheduleWarnings(patternMismatchWarnings), 0);
-  assert.ok(verification.structuredWarnings.some(warning =>
-    warning.code === 'MISMATCHED_REQUEST'
-    && warning.personnelId === nurse.id
-    && warning.day === 2
-    && warning.metadata?.requestType === 'pattern'
-  ), 'verification follows the existing all-month cadence outside the declared scope');
+  assert.equal(
+    verification.structuredWarnings.some(warning =>
+      warning.code === 'MISMATCHED_REQUEST'
+      && warning.personnelId === nurse.id
+      && warning.day === 2
+      && warning.metadata?.requestType === 'pattern'
+    ),
+    false,
+    'out-of-scope day 2 produces no pattern mismatch'
+  );
 });
 
 test('regression_makes_pattern_OFF_overwrite_visible_without_changing_OFF_breaker_priority', () => {
@@ -701,32 +705,16 @@ test('characterizes_nightLeader_zero_as_still_requiring_an_N_leader_when_N_deman
   assert.equal(warning!.severity, 'critical');
 });
 
-test('characterizes_zero_E_demand_as_still_producing_a_missing_E_leader_warning_and_scenario_gate', () => {
+test('regression_zero_E_demand_manufactures_no_missing_E_leader_warning', () => {
   const nurse = person('zero-evening-demand');
   const assignments = { [nurse.id]: { 1: 'OFF' } };
   const settings = sameDemand({ afternoonNurse: 0, afternoonLeader: 0 });
   const warning = leaderWarningFor('E', assignments, settings, [nurse]);
 
-  assert.ok(warning);
-  assert.equal(warning!.severity, 'critical');
-  assert.equal(isCriticalScheduleWarning(warning!), true);
-
-  const plainSchedule = scheduleWith(assignments, { warnings: [warning!.message] });
-  const objective = evaluateBaselineObjective({
-    baseline: plainSchedule,
-    candidate: plainSchedule,
-    warnings: plainSchedule.warnings,
-    structuredWarnings: [warning!],
-    targetPersonnelIds: [nurse.id],
-    totalDays: TOTAL_DAYS,
-    lockedRows: [],
-    requestSatisfactionPercent: 100,
-  });
-  assert.equal(objective.criticalResolved, false, 'the normal verifier warning is a scenario hard gate');
-  assert.equal(objective.criticalWarningCount, 1);
+  assert.equal(warning, undefined, 'a shift with no demand has no leader requirement');
 });
 
-test('characterizes_zero_N_demand_as_still_producing_a_missing_N_leader_warning', () => {
+test('regression_zero_N_demand_manufactures_no_missing_N_leader_warning', () => {
   const nurse = person('zero-night-demand');
   const warning = leaderWarningFor(
     'N',
@@ -735,8 +723,7 @@ test('characterizes_zero_N_demand_as_still_producing_a_missing_N_leader_warning'
     [nurse]
   );
 
-  assert.ok(warning);
-  assert.equal(warning!.severity, 'critical');
+  assert.equal(warning, undefined, 'a shift with no demand has no leader requirement');
 });
 
 // ---------------------------------------------------------------------------
@@ -753,49 +740,27 @@ function scenarioPersonnel(): Personnel[] {
   return [person('n1'), person('n2'), person('n3'), person('n4')];
 }
 
-test('regression_scenario_generation_preserves_both_person_locked_and_lockedRows', () => {
+test('regression_scenario_generation_respects_the_monthly_lock_only', () => {
   const unlockedPersonnel = scenarioPersonnel();
   const baseline = solveNursingSchedule(
     YEAR, MONTH, unlockedPersonnel, [], ALL_PERIODS_DEMAND, {}, undefined, null
   ).assignments;
 
+  // The global `person.locked` flag is NOT a scenario lock: a flagged person
+  // absent from the month's lockedRows is still a free target.
   const personLockedPersonnel = scenarioPersonnel().map(item =>
     item.id === 'n1' ? { ...item, locked: true } : item
   );
   const personLockedResult = generateAndScoreScenarios(
-    YEAR,
-    MONTH,
-    personLockedPersonnel,
-    [],
-    ALL_PERIODS_DEMAND,
-    {},
-    undefined,
-    null,
-    'nurse',
-    baseline,
-    []
+    YEAR, MONTH, personLockedPersonnel, [], ALL_PERIODS_DEMAND, {}, undefined, null,
+    'nurse', baseline, []
   );
   assert.ok(personLockedResult.top3.length > 0);
-  for (const scenario of personLockedResult.top3) {
-    assert.equal(
-      rowsDiffer(baseline.n1, scenario.schedule.assignments.n1),
-      false,
-      'person.locked is excluded from the free scenario target set'
-    );
-  }
 
+  // The monthly lock (lockedRows) preserves the row across every scenario.
   const rowLockedResult = generateAndScoreScenarios(
-    YEAR,
-    MONTH,
-    unlockedPersonnel,
-    [],
-    ALL_PERIODS_DEMAND,
-    {},
-    undefined,
-    null,
-    'nurse',
-    baseline,
-    ['n1']
+    YEAR, MONTH, unlockedPersonnel, [], ALL_PERIODS_DEMAND, {}, undefined, null,
+    'nurse', baseline, ['n1']
   );
   assert.ok(rowLockedResult.top3.length > 0);
   for (const scenario of rowLockedResult.top3) {
@@ -803,36 +768,26 @@ test('regression_scenario_generation_preserves_both_person_locked_and_lockedRows
   }
 });
 
-test('regression_optimizer_merge_preserves_both_person_locked_and_lockedRows', () => {
-  const lockedPerson = person('merge-locked-person', { locked: true });
-  const current = { [lockedPerson.id]: { 1: 'OFF' } };
-  const optimized = { [lockedPerson.id]: { 1: 'M' } };
+test('regression_optimizer_merge_respects_the_monthly_lock_only', () => {
+  const flaggedPerson = person('merge-flagged-person', { locked: true });
+  const current = { [flaggedPerson.id]: { 1: 'OFF' } };
+  const optimized = { [flaggedPerson.id]: { 1: 'M' } };
 
+  // Global flag alone does NOT lock: the optimized row is applied.
   const withoutRowLock = mergeOptimizerAssignments(
-    current,
-    optimized,
-    [lockedPerson],
-    'nurse',
-    []
+    current, optimized, [flaggedPerson], 'nurse', []
   );
+  // Monthly lock preserves the current row.
   const withRowLock = mergeOptimizerAssignments(
-    current,
-    optimized,
-    [lockedPerson],
-    'nurse',
-    [lockedPerson.id]
+    current, optimized, [flaggedPerson], 'nurse', [flaggedPerson.id]
   );
   const withoutCurrentSchedule = mergeOptimizerAssignments(
-    undefined,
-    optimized,
-    [lockedPerson],
-    'nurse',
-    []
+    undefined, optimized, [flaggedPerson], 'nurse', []
   );
 
-  assert.equal(withoutRowLock[lockedPerson.id][1], 'OFF');
-  assert.equal(withRowLock[lockedPerson.id][1], 'OFF');
-  assert.deepEqual(withoutCurrentSchedule[lockedPerson.id], {});
+  assert.equal(withoutRowLock[flaggedPerson.id][1], 'M');
+  assert.equal(withRowLock[flaggedPerson.id][1], 'OFF');
+  assert.deepEqual(withoutCurrentSchedule[flaggedPerson.id], { 1: 'M' });
 });
 
 // ---------------------------------------------------------------------------
@@ -942,22 +897,28 @@ test('regression_manual_facade_accepts_write_for_unlocked_row_and_group', async 
   assert.equal(persisted, 1, 'the accepted mutation is persisted exactly once');
 });
 
-test('characterizes_manual_facade_as_not_enforcing_person_locked_alone', async () => {
-  // person.locked semantics remain policy-pending: the facade only enforces the
-  // finalized-group and lockedRows promises that the UI already makes.
-  const personLockedOnly = person('manual-locked-person', { locked: true });
-  const result = await applyProtectedManualEdit({
-    person: personLockedOnly,
+test('regression_manual_facade_respects_the_monthly_lock_only', async () => {
+  // The lock is MONTHLY: the facade rejects only when the person is in the
+  // month's lockedRows, not because of the global `person.locked` flag.
+  const flagged = person('manual-locked-person', { locked: true });
+
+  const monthlyLocked = await applyProtectedManualEdit({
+    person: flagged,
     currentShift: 'OFF',
     newShift: 'M',
+    lockedRows: [flagged.id],
   });
+  assert.equal(monthlyLocked.success, false);
+  assert.equal(monthlyLocked.schedule, null);
+  assert.ok(monthlyLocked.error, 'a rejection reason is returned for a monthly-locked person');
 
-  assert.equal(result.success, true);
-  assert.equal(
-    result.schedule?.assignments[personLockedOnly.id][1],
-    'M',
-    'person.locked alone does not block the facade write (policy-pending)'
-  );
+  const unlockedMonth = await applyProtectedManualEdit({
+    person: flagged,
+    currentShift: 'OFF',
+    newShift: 'M',
+    lockedRows: [],
+  });
+  assert.equal(unlockedMonth.success, true, 'the global flag alone must not reject a manual edit');
 });
 
 // ---------------------------------------------------------------------------
@@ -1019,7 +980,7 @@ test('characterizes_emergency_fill_as_bypassing_avoid_shift_when_it_is_the_only_
   ));
 });
 
-test('characterizes_reconciliation_as_ignoring_avoid_shift', () => {
+test('regression_reconciliation_assigns_avoided_shift_only_when_no_alternative_exists', () => {
   const avoiding = person('avoid-reconcile');
   const request = avoidMorningRequest(avoiding.id);
 
@@ -1033,6 +994,7 @@ test('characterizes_reconciliation_as_ignoring_avoid_shift', () => {
     [request]
   );
 
+  // avoid-shift یک ترجیح است: وقتی هیچ جایگزینی نباشد، شیفتِ اجتناب‌شده هم تخصیص می‌یابد.
   assert.equal(reconciled.assignments[avoiding.id][1], 'M');
 });
 
@@ -1275,7 +1237,7 @@ test('characterizes_max_two_unrequested_extras_as_normal_candidate_filter_only',
   assert.equal(reconciled.assignments[planned.id][3], 'M');
 });
 
-test('characterizes_240_hour_overtime_filter_as_normal_candidate_filter_only', () => {
+test('regression_overtime_cap_is_respected_across_normal_and_reconcile_paths', () => {
   const overtime = person('overtime-primary', { employmentType: 'overtime' });
   const alternative = person('overtime-alternative');
   const firstEighteenDays = Array.from({ length: 18 }, (_, index) => index + 1);
@@ -1311,7 +1273,12 @@ test('characterizes_240_hour_overtime_filter_as_normal_candidate_filter_only', (
     [],
     requests
   );
-  assert.equal(reconciled.assignments[overtime.id][19], 'M');
+  // Reconciliation now shares the same effective cap: it must not push the
+  // overtime-type person past 240 hours, so the gap remains unresolved.
+  assert.equal(reconciled.assignments[overtime.id][19], 'OFF');
+  assert.equal(reconciled.unresolvedGaps.some(gap =>
+    gap.day === 19 && gap.shift === 'M' && gap.jobGroup === 'nurse'
+  ), true);
 });
 
 // ---------------------------------------------------------------------------

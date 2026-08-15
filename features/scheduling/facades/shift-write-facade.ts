@@ -97,7 +97,7 @@ export async function runOptimizerFacade(
     settings: SystemSettings,
     holidays: Readonly<Record<number, string>>,
     firstDayOfWeek: number | undefined,
-    monthlyDutyHours: { official: number; contract: number } | null
+    monthlyDutyHours: { official?: number; contract?: number; conscript?: number; overtime?: number } | null
   ) => { assignments: Record<string, Record<number, string>>; warnings: string[] },
   verifier: (
     year: number,
@@ -107,7 +107,8 @@ export async function runOptimizerFacade(
     settings: SystemSettings,
     holidays: Readonly<Record<number, string>>,
     firstDayOfWeek: number | undefined,
-    requests: ReadonlyArray<ShiftRequest>
+    requests: ReadonlyArray<ShiftRequest>,
+    monthlyDutyHours?: { overtime?: number } | null
   ) => { shiftLeaders: Record<number, ShiftLeaderRecord>; warnings: string[] },
   persistence: SchedulePersistence,
   ui: ScheduleUIFeedback,
@@ -198,7 +199,9 @@ export async function runOptimizerFacade(
       calendarDays,
       [jobGroup],
       lockState.lockedRows,
-      requests
+      requests,
+      undefined,
+      monthlyDutyHours
     );
     const compliantAssignments = repairScheduleBeforeWarnings({
       assignments: staffingResult.assignments,
@@ -208,6 +211,7 @@ export async function runOptimizerFacade(
       requests,
       targetJobGroups: [jobGroup],
       lockedRows: lockState.lockedRows,
+      monthlyDutyHours,
     }).assignments;
 
     // Step 6: Verify coverage and leaders
@@ -219,7 +223,8 @@ export async function runOptimizerFacade(
       settings,
       holidays,
       firstDayOfWeek,
-      requests
+      requests,
+      monthlyDutyHours
     );
 
     // Step 7: Build new schedule
@@ -296,7 +301,8 @@ export async function applyManualShiftChangeFacade(
     settings: SystemSettings,
     holidays: Readonly<Record<number, string>>,
     firstDayOfWeek: number | undefined,
-    requests: ReadonlyArray<ShiftRequest>
+    requests: ReadonlyArray<ShiftRequest>,
+    monthlyDutyHours?: { overtime?: number } | null
   ) => { shiftLeaders: Record<number, ShiftLeaderRecord>; warnings: string[] },
   persistence: SchedulePersistence,
   departmentId: string
@@ -316,6 +322,7 @@ export async function applyManualShiftChangeFacade(
     lockState,
     dismissedWarnings = currentSchedule.dismissedWarnings ?? [],
     protectedCells: protectedCellsInput,
+    monthlyDutyHours,
   } = input;
 
   const lockedRows = lockState?.lockedRows ?? [];
@@ -325,8 +332,12 @@ export async function applyManualShiftChangeFacade(
   // اجرا شوند؛ وگرنه فراخوانی مستقیم facade می‌تواند گروهِ ثبت‌نهایی‌شده یا
   // ردیف قفل‌شده را بازنویسی کند. از همان گزارهٔ خالص UI (canEditShiftCell)
   // استفاده می‌شود تا سیاست تکراری ساخته نشود.
-  // (سمنتیک person.locked عمداً اینجا تصمیم‌گیری نمی‌شود — policy-pending.)
   const guardedPerson = personnel.find(p => p.id === personnelId);
+
+  // The lock is a MONTHLY concept (lockState.lockedRows, enforced by
+  // canEditShiftCell below). The global `person.locked` field is not a manual-
+  // edit lock: a person flagged locked in one month must not be rejected in an
+  // unrelated month.
   if (guardedPerson && lockState) {
     const finalizedMonthsForGroup =
       guardedPerson.jobGroup === 'nurse'
@@ -390,7 +401,8 @@ export async function applyManualShiftChangeFacade(
         targetJobGroups,
         lockedRows, // ← شیفت نفرات قفل‌شده هرگز تغییر نمی‌کند
         requests,
-        protectedSet // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
+        protectedSet, // ← سلول‌های ویرایش‌دستی سرپرستار هرگز دست‌نخورده می‌مانند
+        monthlyDutyHours
       );
       reconciledAssignments = staffingResult.assignments;
 
@@ -409,7 +421,8 @@ export async function applyManualShiftChangeFacade(
       settings,
       holidays,
       firstDayOfWeek,
-      requests
+      requests,
+      monthlyDutyHours
     );
 
     // Step 4: Retire alerts that this edit actually resolved.

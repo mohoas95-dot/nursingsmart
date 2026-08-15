@@ -12,13 +12,17 @@
  */
 
 import type { JobGroup, Personnel, ShiftRequest, ShiftType, SystemSettings } from '../../lib/types';
-import { isDayInRequestScope } from '../requests/request-scope-matcher';
+import { isDayInRequestScope, patternStepForDay } from '../requests/request-scope-matcher';
 import {
   COVERAGE_FILL_HARD_RULES,
   VERIFICATION_HARD_RULES,
   evaluateHardConstraintLegality,
   evaluateHardConstraintViolations,
 } from './hard-constraints';
+import {
+  effectiveOvertimeCap,
+  wouldExceedOvertimeCap,
+} from './overtime-cap';
 import {
   WORKLOAD_PERIODS,
   findConsecutiveCapViolations,
@@ -75,6 +79,13 @@ export interface RepairBeforeWarningInput {
   protectedCells?: ReadonlySet<string>;
   /** Bounded by default so a malformed external schedule cannot loop forever. */
   maxPasses?: number;
+  /**
+   * Monthly overtime-cap override (approved monthly config). When present it is
+   * the authoritative cap for candidate selection here; otherwise the configured
+   * department value applies. Threaded through so repair shares the same effective
+   * cap as the normal solver and reconciliation.
+   */
+  monthlyDutyHours?: { overtime?: number } | null;
 }
 
 export interface RepairBeforeWarningResult {
@@ -127,9 +138,9 @@ function explicitRequestedShiftsForDay(
       requested.push(request.preferredShift);
     }
 
-    // Pattern application currently follows its step cadence for the month.
+    // A pattern only contributes an explicit instruction inside its scope.
     if (request.requestType === 'pattern' && request.patternSteps?.length) {
-      const step = request.patternSteps[(day - 1) % request.patternSteps.length];
+      const step = patternStepForDay(request, day, dayOfWeek);
       if (step) requested.push(step);
     }
   }
@@ -170,10 +181,10 @@ function isExplicitComponentRequested(
       }
     }
 
-    // Pattern application currently follows its step cadence for the month.
+    // A pattern only contributes an explicit component inside its scope.
     if (request.requestType === 'pattern' && request.patternSteps?.length) {
-      const step = request.patternSteps[(day - 1) % request.patternSteps.length];
-      if (shiftContainsComponent(step, period)) return true;
+      const step = patternStepForDay(request, day, dayOfWeek);
+      if (step && shiftContainsComponent(step, period)) return true;
     }
   }
   return false;
@@ -254,7 +265,7 @@ function isSourceMutable(
   lockedRows: ReadonlySet<string>,
   protectedCells: ReadonlySet<string>
 ): boolean {
-  if (!personnel || personnel.locked || lockedRows.has(personnelId)) return false;
+  if (!personnel || lockedRows.has(personnelId)) return false;
   if (protectedCells.has(cellKey(personnelId, day))) return false;
   const shift = assignments[personnelId]?.[day];
   return !!shift && !isLeaveShift(shift) && !isUnknownShift(shift) && shift !== 'OFF';
@@ -368,7 +379,7 @@ function isRecipientAvailable(
   lockedRows: ReadonlySet<string>,
   protectedCells: ReadonlySet<string>
 ): boolean {
-  if (!person.active || person.locked || lockedRows.has(person.id)) return false;
+  if (!person.active || lockedRows.has(person.id)) return false;
   if (protectedCells.has(cellKey(person.id, day))) return false;
   const shift = assignments[person.id]?.[day] || 'OFF';
   // An unknown string is itself a verifier-visible hard problem. It must never
@@ -385,7 +396,8 @@ function relocateRemovedPeriods(
   targetJobGroups: ReadonlySet<JobGroup>,
   lockedRows: ReadonlySet<string>,
   protectedCells: ReadonlySet<string>,
-  totalDays: number
+  totalDays: number,
+  overtimeCap: number
 ): void {
   const source = personnelList.find(person => person.id === action.personnelId);
   const calendarDay = calendarByDay.get(action.day);
@@ -411,6 +423,10 @@ function relocateRemovedPeriods(
         calendarDay.dayOfWeek ?? -1,
         candidateShift
       )) {
+        return false;
+      }
+      // سقف اضافه‌کار: گیرنده‌ای که سقف را رد کند پذیرفته نمی‌شود.
+      if (wouldExceedOvertimeCap(assignments, person, action.day, candidateShift, totalDays, overtimeCap)) {
         return false;
       }
       return evaluateHardConstraintLegality(
@@ -732,7 +748,8 @@ export function repairScheduleBeforeWarnings(
       targetJobGroupList,
       input.lockedRows ?? [],
       input.requests,
-      reconcileProtected
+      reconcileProtected,
+      input.monthlyDutyHours
     ).unresolvedGaps;
 
     const action = repairOneViolation(
@@ -759,7 +776,8 @@ export function repairScheduleBeforeWarnings(
       targetJobGroups,
       lockedRows,
       protectedCells,
-      totalDays
+      totalDays,
+      effectiveOvertimeCap({ settings: input.settings, monthlyDutyHours: input.monthlyDutyHours })
     );
 
     const reconciled = reconcileStaffingCoverage(
@@ -770,7 +788,8 @@ export function repairScheduleBeforeWarnings(
       targetJobGroupList,
       input.lockedRows ?? [],
       input.requests,
-      reconcileProtected
+      reconcileProtected,
+      input.monthlyDutyHours
     );
     const afterAssignments = reconciled.assignments;
     const afterViolations = collectRepairableViolations(

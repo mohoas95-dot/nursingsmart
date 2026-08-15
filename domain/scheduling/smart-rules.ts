@@ -9,6 +9,7 @@
 import type { Personnel, ShiftType, WorkRoutineTag } from '../../lib/types';
 import {
   isWorkShift as workloadIsWorkShift,
+  shiftComponents as workloadShiftComponents,
   shiftContainsComponent as workloadShiftContainsComponent,
   type AssignmentMap,
 } from './workload';
@@ -82,6 +83,21 @@ export function shiftMatchesRoutine(
 ): boolean {
   if (!routine || !shift) return false;
   return (ROUTINE_PREFERRED_SHIFTS[routine] as readonly ShiftType[]).includes(shift);
+}
+
+/**
+ * Does a worked shift violate a work-routine tag? A shift is routine-compatible
+ * when every component it covers belongs to the routine's allowed periods
+ * (`ROUTINE_PERIOD_ACCESS`). This is a preference, not a hard legality rule.
+ */
+export function shiftViolatesRoutine(
+  shift: ShiftType | undefined,
+  routine: WorkRoutineTag | undefined
+): boolean {
+  if (!routine || !shift) return false;
+  if (!workloadIsWorkShift(shift)) return false;
+  const allowed = ROUTINE_PERIOD_ACCESS[routine] as readonly string[];
+  return workloadShiftComponents(shift).some(component => !allowed.includes(component));
 }
 
 const SINGLE_COMPONENT_SHIFTS: ReadonlySet<string> = new Set(['M', 'E', 'N']);
