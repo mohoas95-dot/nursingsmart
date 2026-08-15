@@ -117,21 +117,15 @@ export function mergeOptimizerAssignments(
     ? { ...baseAssignments }
     : normalizeScheduleAssignments(optimizedAssignments, personnel);
 
-  // Only update personnel who are targets (correct job group + not locked)
+  // Only update personnel who are targets (correct job group + not locked in
+  // this month). The lock is monthly: `lockedRows` is the source of truth, not
+  // the global `person.locked` field.
   const targetPersonnel = personnel.filter((p) =>
-    !p.locked && isPersonnelOptimizationTarget(p.jobGroup, targetJobGroup, p.id, lockedRows)
+    isPersonnelOptimizationTarget(p.jobGroup, targetJobGroup, p.id, lockedRows)
   );
 
   for (const person of targetPersonnel) {
     mergedAssignments[person.id] = { ...(optimizedAssignments[person.id] || {}) };
-  }
-
-  // `person.locked` is also honored by the normal solver. It is not merged with
-  // the separate lockedRows model here; it simply prevents optimizer mutation.
-  for (const person of personnel) {
-    if (person.locked) {
-      mergedAssignments[person.id] = { ...(currentAssignments?.[person.id] || {}) };
-    }
   }
 
   return mergedAssignments;

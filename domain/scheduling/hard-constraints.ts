@@ -24,7 +24,7 @@
  */
 
 import type { Personnel, ShiftRequest, ShiftType } from '../../lib/types';
-import { isDayInRequestScope } from '../requests/request-scope-matcher';
+import { isDayInRequestScope, patternStepForDay } from '../requests/request-scope-matcher';
 import {
   MAX_CONSECUTIVE_NIGHTS as WORKLOAD_MAX_CONSECUTIVE_NIGHTS,
   isKnownWorkShift,
@@ -194,8 +194,8 @@ export function hasExplicitPlanForPeriod(
     }
 
     if (request.requestType === 'pattern' && request.patternSteps && request.patternSteps.length > 0) {
-      const step = request.patternSteps[(day - 1) % request.patternSteps.length];
-      if (shiftContainsComponent(step, period)) return true;
+      const step = patternStepForDay(request, day, dayOfWeek);
+      if (step && shiftContainsComponent(step, period)) return true;
     }
   }
   return false;
@@ -445,7 +445,9 @@ export function evaluateHardConstraintViolations(
   };
 
   if (rules.knownShift && isUnknownShift(candidateShift)) add('UNKNOWN_SHIFT');
-  if (rules.lockedRow && (person.locked || lockedRowIds?.has(person.id))) add('LOCKED_ROW');
+  // The lock is a MONTHLY concept: only the month's locked-row ids apply.
+  // The global `person.locked` field is not a scheduling lock (monthly policy).
+  if (rules.lockedRow && lockedRowIds?.has(person.id)) add('LOCKED_ROW');
   if (rules.protectedCell && protectedCells?.has(`${person.id}:${day}`)) add('PROTECTED_CELL');
   if (rules.leaveCell && isLeaveCell(assignments[person.id]?.[day])) add('LEAVE_CELL');
   if (rules.hardOff && violatesHardOff(requests, person.id, day, dayOfWeek)) add('HARD_OFF');

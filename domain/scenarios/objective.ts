@@ -338,6 +338,12 @@ export interface ObjectiveRankable {
   nonCriticalWarningCount: number;
   /** درصد رعایت درخواست‌های پرسنل در پس‌زمینه (اولویت ۳، نزولی). */
   requestSatisfactionPercent: number;
+  /**
+   * تعداد سلول‌های کاریِ ناسازگار با تگ روتین پرسنل (اولویت ۴، صعودی) — فقط
+   * tiebreaker پایانی: در برابریِ کامل سایر معیارها، سناریوی روتین‌سازگارتر
+   * برنده است.
+   */
+  routineMismatchCount?: number;
 }
 
 /**
@@ -352,7 +358,12 @@ export function compareByObjective(left: ObjectiveRankable, right: ObjectiveRank
   if (left.nonCriticalWarningCount !== right.nonCriticalWarningCount) {
     return left.nonCriticalWarningCount - right.nonCriticalWarningCount;
   }
-  return right.requestSatisfactionPercent - left.requestSatisfactionPercent;
+  if (left.requestSatisfactionPercent !== right.requestSatisfactionPercent) {
+    return right.requestSatisfactionPercent - left.requestSatisfactionPercent;
+  }
+  const leftRoutine = left.routineMismatchCount ?? 0;
+  const rightRoutine = right.routineMismatchCount ?? 0;
+  return leftRoutine - rightRoutine;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import {
 } from './types';
 import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
 import { shiftSatisfiesRequestedShift } from '../domain/scheduling/workload';
+import { shiftViolatesRoutine } from '../domain/scheduling/smart-rules';
 import { generatePersonnelReports } from './solver';
 import {
   isCriticalWarningCode,
@@ -405,6 +406,29 @@ export function calculateRequestSatisfactionPercent(
   return calculateRequestScore(
     schedule, personnelList, requests, year, month, customHolidays, firstDayOfWeekIndex, targetJobGroup
   ).requestScore;
+}
+
+/**
+ * تعداد سلول‌های کاری‌ای که با تگ روتین پرسنل هدف ناسازگارند. فقط پرسنل دارای
+ * `workRoutine` شمارش می‌شوند؛ شیفت‌های OFF/مرخصی هرگز ناسازگاری روتین نیستند.
+ */
+export function countRoutineMismatches(
+  schedule: MonthlySchedule,
+  personnelList: readonly Personnel[],
+  targetJobGroup?: JobGroup,
+  totalDays?: number
+): number {
+  const relevant = targetGroupPersonnel(personnelList, targetJobGroup);
+  let count = 0;
+  for (const person of relevant) {
+    if (!person.workRoutine) continue;
+    const row = schedule.assignments[person.id] || {};
+    const days = totalDays ?? Math.max(0, ...Object.keys(row).map(Number));
+    for (let day = 1; day <= days; day++) {
+      if (shiftViolatesRoutine(row[day], person.workRoutine)) count += 1;
+    }
+  }
+  return count;
 }
 
 function calculateFairnessScore(

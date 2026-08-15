@@ -44,6 +44,7 @@ import {
 } from './types';
 import {
   calculateRequestSatisfactionPercent,
+  countRoutineMismatches,
   countScoringDefectWarnings,
   evaluateScenarioSchedule,
   filterStructuredWarningsForScenarioGroup,
@@ -204,7 +205,9 @@ function verifyScenarioSchedule(
     calendarDays,
     context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
     context.lockedRows,
-    context.requests
+    context.requests,
+    undefined,
+    context.monthlyDutyHours
   ).assignments;
   const reconciled = repairScheduleBeforeWarnings({
     assignments: coverageReconciled,
@@ -214,11 +217,12 @@ function verifyScenarioSchedule(
     requests: context.requests,
     targetJobGroups: context.targetJobGroup ? [context.targetJobGroup] : ['nurse', 'assistant'],
     lockedRows: context.lockedRows,
+    monthlyDutyHours: context.monthlyDutyHours,
   }).assignments;
 
   const verification = verifyCoverageAndLeaders(
     context.year, context.month, context.personnelList, reconciled, context.settings,
-    context.customHolidays, context.firstDayOfWeekIndex, context.requests
+    context.customHolidays, context.firstDayOfWeekIndex, context.requests, context.monthlyDutyHours
   );
 
   // همان معیار فیلترِ تاریخی، اما روی نمای ساخت‌یافته تا فراداده حفظ شود و
@@ -278,7 +282,6 @@ function buildScenarioContext(options: ScenarioGenerationOptions): ScenarioConte
   const lockedIdSet = new Set(lockedRows);
   const targetPersonnel = personnelList.filter(person =>
     person.active
-    && !person.locked
     && !lockedIdSet.has(person.id)
     && (!targetJobGroup || person.jobGroup === targetJobGroup));
   return {
@@ -638,13 +641,23 @@ function scoreCandidate(
   // واقعی در این معیارِ رتبه‌بندی شمرده می‌شوند.
   const defectWarningCount = countScoringDefectWarnings(schedule.warnings);
   const nonCriticalWarningCount = Math.max(0, defectWarningCount - objective.criticalWarningCount);
+  // روتین یک ترجیح است: در برابریِ کامل سایر معیارها، سناریوی روتین‌سازگارتر
+  // (کمترین سلول کاریِ ناسازگار با تگ روتین) برنده می‌شود.
+  const routineMismatchCount = countRoutineMismatches(
+    plainSchedule, context.personnelList, context.targetJobGroup, context.totalDays
+  );
   scored.baselineSimilarityPercent = objective.similarityPercent;
   scored.baselineDifferencePercent = objective.baselineDifferencePercent;
   scored.criticalWarningCount = objective.criticalWarningCount;
   scored.totalScore = objective.similarityPercent;
   return {
     schedule, scored, objective,
-    rankable: { similarityPercent: objective.similarityPercent, nonCriticalWarningCount, requestSatisfactionPercent },
+    rankable: {
+      similarityPercent: objective.similarityPercent,
+      nonCriticalWarningCount,
+      requestSatisfactionPercent,
+      routineMismatchCount,
+    },
   };
 }
 

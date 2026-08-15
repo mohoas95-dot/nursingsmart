@@ -3,7 +3,7 @@
 import { Personnel, SystemSettings, ShiftRequest, MonthlySchedule, ShiftType, JalaliDateInfo, PersonnelReportResult, OptimizationResult, AggregatedAlert, JobGroup } from './types';
 import { generateJalaliMonthCalendar, getJalaliMonthDays, getJalaliWeekday } from './jalali';
 import { reconcileStaffingCoverage, shiftCoversPeriod, type CoverageShift } from '../domain/scheduling/staffing-coverage';
-import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
+import { isDayInRequestScope, patternStepForDay } from '../domain/requests/request-scope-matcher';
 import {
   HOLIDAY_LEAVE_HOURS,
   HOLIDAY_LEAVE_SHIFT,
@@ -48,45 +48,20 @@ import {
   evaluateHardConstraints,
   resolveLegalShiftForRequest,
 } from '../domain/scheduling/hard-constraints';
+import {
+  effectiveOvertimeCap,
+  overtimeHoursForPerson,
+  wouldExceedOvertimeCap,
+} from '../domain/scheduling/overtime-cap';
 
-// Shift durations in hours
-export const SHIFT_HOURS: { [key in ShiftType]: number } = {
-  M: 6.5,
-  E: 6.5,
-  N: 12.5,
-  ME: 13.0,
-  EN: 19.0,
-  MN: 19.0,
-  MEN: 25.5,
-  OFF: 0.0,
-  L1: 7.0,
-  L2: 7.0,
-  L3: 7.0,
-  L4: 7.0,
-  L5: 7.0
-};
-
-// Get dynamic shift hours considering personnel's employment type for leaves
-export function getShiftHours(shift: string, employmentType: string): number {
-  // قانون مرخصی روز تعطیل: دقیقاً ۷ ساعت اعتبار برای تمام انواع استخدام
-  if (shift === HOLIDAY_LEAVE_SHIFT) {
-    return HOLIDAY_LEAVE_HOURS;
-  }
-  if (shift.startsWith('L')) {
-    return getLeaveHours(employmentType);
-  }
-  return SHIFT_HOURS[shift] || 0.0;
-}
-
-// Leave hours by employment type
-export function getLeaveHours(employmentType: string): number {
-  switch (employmentType) {
-    case 'official': return 7.0;
-    case 'contract': return 7.5;
-    case 'conscript': return 7.666;
-    default: return 0;
-  }
-}
+// Shift durations in hours (single source of truth moved to the domain layer;
+// re-exported here for backwards compatibility with existing importers).
+import {
+  SHIFT_HOURS,
+  getShiftHours,
+  getLeaveHours,
+} from '../domain/scheduling/shift-hours';
+export { SHIFT_HOURS, getShiftHours, getLeaveHours };
 
 // Experience years "سنوات" calculation (not for conscript)
 export function getSeniorityHours(personnel: Personnel): number {
@@ -218,11 +193,13 @@ export function solveWithPriority(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  monthlyDutyHours?: any,
+  lockedPersonIds: readonly string[] = []
 ): OptimizationResult {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
-  const activePersonnel = personnelList.filter(p => p.active && !p.locked);
+  const lockedIdSet = new Set(lockedPersonIds);
+  const activePersonnel = personnelList.filter(p => p.active && !lockedIdSet.has(p.id));
 
   // نفراتی که درخواست شیفت یا الگوی کاری ثبت کرده‌اند؛ سایر نفراتِ دارای تگ روتین،
   // صرفاً بر اساس همان تگ در دوره‌های سازگار چیده می‌شوند.
@@ -235,7 +212,7 @@ export function solveWithPriority(
 
   const baseResult = solveNursingSchedule(
     year, month, personnelList, requests, settings,
-    customHolidays, firstDayOfWeekIndex, monthlyDutyHours
+    customHolidays, firstDayOfWeekIndex, monthlyDutyHours, lockedPersonIds
   );
 
   // Deep-copy day maps. The priority pass must not mutate the base solver result.
@@ -498,12 +475,20 @@ export function solveNursingSchedule(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  monthlyDutyHours?: any
+  monthlyDutyHours?: any,
+  lockedPersonIds: readonly string[] = []
 ): MonthlySchedule {
   
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
-  const activePersonnel = personnelList.filter(p => p.active);
+  // A person is excluded from the normal solver only when they are locked for
+  // THIS month (lockedPersonIds). The global `person.locked` field is not a
+  // scheduling lock (see the monthly-lock policy).
+  const lockedIdSet = new Set(lockedPersonIds);
+  const activePersonnel = personnelList.filter(p => p.active && !lockedIdSet.has(p.id));
+  // سقف اضافه‌کارِ مؤثر (تصویب‌شدهٔ ماهانه مقدم بر تنظیمات بخش؛ پیکربندی‌نشده
+  // مثل گذشته به ۲۴۰ برمی‌گردد) — در تمام مسیرهای انتخاب نامزد این تابع مشترک است.
+  const effectiveOvertimeCapValue = effectiveOvertimeCap({ settings, monthlyDutyHours });
   
   // Initialize empty assignments
   const assignments: { [pId: string]: { [day: number]: ShiftType } } = {};
@@ -529,9 +514,9 @@ export function solveNursingSchedule(
       }
       
       const pReq = requests.find(r => r.personnelId === pId && r.requestType === 'pattern');
-      if (pReq && pReq.patternSteps && pReq.patternSteps.length > 0) {
-        const stepIndex = (day - 1) % pReq.patternSteps.length;
-        if (pReq.patternSteps[stepIndex] === s) {
+      if (pReq) {
+        const step = patternStepForDay(pReq, day, calendar[day - 1].dayOfWeek);
+        if (step && step === s) {
           continue;
         }
       }
@@ -650,9 +635,9 @@ export function solveNursingSchedule(
         if (!shiftSatisfiesRequestedShift(candidateShift, request.preferredShift)) return false;
       }
 
-      // Pattern application is intentionally all-month elsewhere in this solver.
+      // A pattern only constrains coverage writers inside its configured scope.
       if (request.requestType === 'pattern' && request.patternSteps?.length) {
-        const step = request.patternSteps[(day - 1) % request.patternSteps.length];
+        const step = patternStepForDay(request, day, calendar[day - 1].dayOfWeek);
         if (!step) continue;
         const matchesPatternStep = step.startsWith('L')
           ? candidateShift.startsWith('L')
@@ -789,16 +774,16 @@ export function solveNursingSchedule(
   };
 
   // 2. Apply pattern requests through the same hard evaluator as explicit shifts.
-  // Existing leave cells remain immutable. Pattern scope remains all-month to avoid
-  // changing unrelated legacy request semantics in this session.
+  // Existing leave cells remain immutable. A pattern applies only inside its
+  // configured scope; out-of-scope days are left to the greedy coverage fill.
   activePersonnel.forEach(p => {
     const pattern = requests.find(request => request.personnelId === p.id && request.requestType === 'pattern');
-    const steps = pattern?.patternSteps ?? [];
-    if (steps.length === 0) return;
+    if (!pattern) return;
 
     for (let d = 1; d <= totalDays; d++) {
       if (assignments[p.id][d].startsWith('L')) continue;
-      const step = steps[(d - 1) % steps.length] as ShiftType;
+      const step = patternStepForDay(pattern, d, calendar[d - 1].dayOfWeek) as ShiftType | undefined;
+      if (!step) continue;
       if (step === 'OFF') {
         assignments[p.id][d] = 'OFF';
         continue;
@@ -1047,25 +1032,15 @@ export function solveNursingSchedule(
           }
         }
 
-        if (p.employmentType === 'overtime') {
-          let hrs = 0;
-          for (let day = 1; day <= totalDays; day++) {
-            hrs += getShiftHours(assignments[p.id][day], p.employmentType);
-          }
-          // سقف اضافه‌کار از تنظیمات خوانده می‌شود (settings.dutyHours.overtime —
-          // همان مقداری که UI به‌عنوان «سقف اضافه‌کار» نشان می‌دهد؛ مقدار
-          // تصویب‌شدهٔ ماهانه مقدم است). مقدار پیکربندی‌نشده (صفر/نامعتبر) مثل
-          // گذشته به سقف تاریخی ۲۴۰ برمی‌گردد تا رفتار قبلی حفظ شود.
-          const configuredOvertimeCap = Number(
-            monthlyDutyHours?.overtime ?? settings.dutyHours.overtime
-          );
-          const effectiveOvertimeCap =
-            Number.isFinite(configuredOvertimeCap) && configuredOvertimeCap > 0
-              ? configuredOvertimeCap
-              : 240.0;
-          if (hrs + getShiftHours(shiftChar, p.employmentType) > effectiveOvertimeCap) {
-            return false;
-          }
+        if (wouldExceedOvertimeCap(
+          assignments,
+          p,
+          d,
+          prospectiveShift,
+          totalDays,
+          effectiveOvertimeCapValue
+        )) {
+          return false;
         }
 
         const hasRoutine = requests.some(r => r.personnelId === p.id && (r.requestType === 'shift' || r.requestType === 'pattern'));
@@ -1076,11 +1051,13 @@ export function solveNursingSchedule(
               return shiftContainsComponent(pref, shiftChar);
             }
             const pReq = requests.find(r => r.personnelId === p.id && r.requestType === 'pattern');
-            if (pReq && pReq.patternSteps && pReq.patternSteps.length > 0) {
-              const stepVal = pReq.patternSteps[(d - 1) % pReq.patternSteps.length];
-              return (shiftChar === 'M' && (stepVal === 'M' || stepVal === 'ME' || stepVal === 'MN' || stepVal === 'MEN')) ||
-                     (shiftChar === 'E' && (stepVal === 'E' || stepVal === 'ME' || stepVal === 'EN' || stepVal === 'MEN')) ||
-                     (shiftChar === 'N' && (stepVal === 'N' || stepVal === 'EN' || stepVal === 'MN' || stepVal === 'MEN'));
+            if (pReq) {
+              const stepVal = patternStepForDay(pReq, d, calendar[d - 1].dayOfWeek);
+              if (stepVal) {
+                return (shiftChar === 'M' && (stepVal === 'M' || stepVal === 'ME' || stepVal === 'MN' || stepVal === 'MEN')) ||
+                       (shiftChar === 'E' && (stepVal === 'E' || stepVal === 'ME' || stepVal === 'EN' || stepVal === 'MEN')) ||
+                       (shiftChar === 'N' && (stepVal === 'N' || stepVal === 'EN' || stepVal === 'MN' || stepVal === 'MEN'));
+              }
             }
             return false;
           })();
@@ -1333,6 +1310,19 @@ export function solveNursingSchedule(
           );
           if (emergencyViolation) return false;
 
+          // سقف اضافه‌کار حتی در مسیر اضطراری رعایت می‌شود (کاندیدای دیگر ترجیح داده
+          // می‌شود؛ مازاد واقعی پوشش گزارش می‌شود و به‌عنوان نقض سقف ساخته نمی‌شود).
+          if (wouldExceedOvertimeCap(
+            assignments,
+            p,
+            d,
+            prospectiveShift,
+            totalDays,
+            effectiveOvertimeCapValue
+          )) {
+            return false;
+          }
+
           return true;
         });
 
@@ -1454,7 +1444,7 @@ export function solveNursingSchedule(
       if (!isIsolatedSingleShiftAt(assignments, p.id, d, totalDays)) continue;
 
       const replacementCandidates = activePersonnel.filter(q => {
-        if (q.id === p.id || q.jobGroup !== p.jobGroup || q.locked) return false;
+        if (q.id === p.id || q.jobGroup !== p.jobGroup || lockedIdSet.has(q.id)) return false;
         if (assignments[q.id]?.[d] !== 'OFF') return false;
         const qReq = dailyRequests[q.id]?.[d];
         if (qReq && (qReq.requestType === 'OFF' || qReq.requestType === 'leave')) return false;
@@ -1649,9 +1639,11 @@ export function solveNursingSchedule(
 
   for (let d = 1; d <= totalDays; d++) {
     const isHolidayDay = calendar[d - 1].isHoliday;
+    const dayDemand = isHolidayDay ? settings.demand.holiday : settings.demand.weekday;
 
-    // شیفت صبح: فقط روزهای تعطیل سرشیفت دارد (روز کاری = بدون سرشیفت)
-    if (isHolidayDay) {
+    // شیفت صبح: فقط روزهای تعطیل سرشیفت دارد (روز کاری = بدون سرشیفت)، و فقط
+    // وقتی تقاضای صبح مثبت است.
+    if (isHolidayDay && dayDemand.morningNurse > 0) {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'M', d)).sort(byOrder);
       if (candidates.length > 0) {
         shiftLeaders[d].morning = candidates[0].id;
@@ -1667,8 +1659,8 @@ export function solveNursingSchedule(
       }
     }
 
-    // شیفت عصر: همیشه سرشیفت مستقل دارد (هم روز کاری و هم تعطیل)
-    {
+    // شیفت عصر: سرشیفت مستقل وقتی تقاضای عصر مثبت است
+    if (dayDemand.afternoonNurse > 0) {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'E', d)).sort(byOrder);
       if (candidates.length > 0) {
         shiftLeaders[d].afternoon = candidates[0].id;
@@ -1684,8 +1676,8 @@ export function solveNursingSchedule(
       }
     }
 
-    // شیفت شب: همیشه سرشیفت مستقل دارد (بدون shortcut از عصر)
-    {
+    // شیفت شب: سرشیفت مستقل وقتی تقاضای شب مثبت است (بدون shortcut از عصر)
+    if (dayDemand.nightNurse > 0) {
       const candidates = activePersonnel.filter(p => eligibleForLeader(p, 'N', d)).sort(byOrder);
       if (candidates.length > 0) {
         shiftLeaders[d].night = candidates[0].id;
@@ -1719,7 +1711,9 @@ export function solveNursingSchedule(
     staffingCalendarDays,
     ['nurse', 'assistant'],
     [],
-    requests
+    requests,
+    undefined,
+    monthlyDutyHours
   ).assignments;
 
   let finalAssignments = reconcileFinalAssignments(assignments);
@@ -1729,6 +1723,7 @@ export function solveNursingSchedule(
     settings,
     calendarDays: staffingCalendarDays,
     requests,
+    monthlyDutyHours,
   });
   finalAssignments = repaired.assignments;
 
@@ -1763,6 +1758,7 @@ export function solveNursingSchedule(
       settings,
       calendarDays: staffingCalendarDays,
       requests,
+      monthlyDutyHours,
     });
     finalAssignments = repaired.assignments;
   }
@@ -1814,7 +1810,8 @@ export function solveNursingSchedule(
     settings,
     customHolidays,
     firstDayOfWeekIndex,
-    requests
+    requests,
+    monthlyDutyHours
   );
   // Coverage and leader messages emitted before final reconciliation/repair may
   // be stale. The final verifier is the single source of truth for unresolved
@@ -1886,7 +1883,8 @@ export function verifyCoverageAndLeaders(
   settings: SystemSettings,
   customHolidays: Readonly<Record<number, string>> = {},
   firstDayOfWeekIndex?: number,
-  requests: readonly ShiftRequest[] = []
+  requests: readonly ShiftRequest[] = [],
+  monthlyDutyHours?: { overtime?: number } | null
 ): { warnings: string[], structuredWarnings: ScheduleWarning[], shiftLeaders: { [day: number]: { morning?: string; afternoon?: string; night?: string } } } {
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
   const totalDays = calendar.length;
@@ -2018,7 +2016,9 @@ export function verifyCoverageAndLeaders(
     }
 
     // انتخاب سرشیفت — منطق جدید:
-    // صبح فقط روزهای تعطیل؛ عصر و شب همیشه؛ هر شیفت M/E/N کاملاً مستقل
+    // صبح فقط روزهای تعطیل؛ عصر و شب همیشه؛ هر شیفت M/E/N کاملاً مستقل.
+    // الزامِ سرشیفت به «نیازمند بودنِ واقعیِ شیفت» گره خورده است: وقتی تقاضای
+    // پرستارِ آن نوبت صفر است، هیچ الزام/هشدارِ سرشیفتی ساخته نمی‌شود.
     const eligibleForLeaderVerify = (p: Personnel, shiftGroup: 'M' | 'E' | 'N') => {
       if (p.jobGroup !== 'nurse') return false;
       const s = assignments[p.id]?.[d];
@@ -2028,8 +2028,8 @@ export function verifyCoverageAndLeaders(
       return p.position === 'general' && p.canBeShiftLeader;
     };
 
-    // صبح — فقط روزهای تعطیل
-    if (isHoliday) {
+    // صبح — فقط روزهای تعطیل، و فقط وقتی تقاضای صبح مثبت است
+    if (isHoliday && demand.morningNurse > 0) {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'M'));
       if (candidates.length > 0) shiftLeaders[d].morning = candidates[0].id;
       else warnings.push(createScheduleWarning({
@@ -2041,8 +2041,8 @@ export function verifyCoverageAndLeaders(
         metadata: { period: 'صبح', isHoliday: true },
       }));
     }
-    // عصر — همیشه سرشیفت مستقل
-    {
+    // عصر — سرشیفت مستقل وقتی تقاضای عصر مثبت است
+    if (demand.afternoonNurse > 0) {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'E'));
       if (candidates.length > 0) shiftLeaders[d].afternoon = candidates[0].id;
       else warnings.push(createScheduleWarning({
@@ -2054,8 +2054,8 @@ export function verifyCoverageAndLeaders(
         metadata: { period: 'عصر', isHoliday },
       }));
     }
-    // شب — همیشه سرشیفت مستقل (بدون shortcut از عصر)
-    {
+    // شب — سرشیفت مستقل وقتی تقاضای شب مثبت است (بدون shortcut از عصر)
+    if (demand.nightNurse > 0) {
       const candidates = activePersonnelSorted.filter(p => eligibleForLeaderVerify(p, 'N'));
       if (candidates.length > 0) shiftLeaders[d].night = candidates[0].id;
       else warnings.push(createScheduleWarning({
@@ -2069,6 +2069,25 @@ export function verifyCoverageAndLeaders(
     }
   }
 
+  // سقف اضافه‌کار: مسیرهای خودکار سقف را می‌سازند/رعایت می‌کنند، اما ویرایش دستی
+  // ممکن است تخلف ایجاد کند؛ بازرسی نهایی باید آن را تشخیص و گزارش دهد. همان سقف
+  // مؤثرِ مسیرهای زمان‌بندی (override ماهانه مقدم) اینجا نیز استفاده می‌شود.
+  {
+    const overtimeCap = effectiveOvertimeCap({ settings, monthlyDutyHours });
+    for (const person of activePersonnel) {
+      if (person.employmentType !== 'overtime') continue;
+      const hours = overtimeHoursForPerson(assignments, person, totalDays);
+      if (hours > overtimeCap) {
+        warnings.push(createScheduleWarning({
+          code: 'OVERTIME_CAP_EXCEEDED',
+          message: `Overtime Cap Exceeded: مجموع ساعت اضافه‌کار ${person.firstName} ${person.lastName} (${hours.toFixed(2)} ساعت) از سقف ${overtimeCap} ساعت فراتر رفته است`,
+          personnelId: person.id,
+          metadata: { hours, cap: overtimeCap },
+        }));
+      }
+    }
+  }
+
   if (requests && requests.length > 0) {
     activePersonnel.forEach(p => {
       for (let d = 1; d <= totalDays; d++) {
@@ -2078,11 +2097,11 @@ export function verifyCoverageAndLeaders(
         const personRequests = requests.filter(r => r.personnelId === p.id);
         
         personRequests.forEach(req => {
-          // Pattern application intentionally follows its established all-month
-          // cadence. Verification mirrors that current behavior without changing
-          // pattern scope or priority semantics.
+          // A pattern is verified only inside its configured scope; out-of-scope
+          // days carry no pattern instruction and therefore no mismatch.
           if (req.requestType === 'pattern' && req.patternSteps?.length) {
-            const expected = req.patternSteps[(d - 1) % req.patternSteps.length];
+            const expected = patternStepForDay(req, d, dateInfo.dayOfWeek);
+            if (!expected) return;
             const matchesPattern = expected.startsWith('L')
               ? assigned.startsWith('L')
               : shiftSatisfiesRequestedShift(assigned, expected);

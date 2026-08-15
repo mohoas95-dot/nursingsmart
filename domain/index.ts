@@ -77,7 +77,11 @@ export {
 // Requests
 // ============================================================================
 
-export { isDayInRequestScope } from './requests/request-scope-matcher';
+export {
+  isDayInRequestScope,
+  patternStepForDay,
+} from './requests/request-scope-matcher';
+export type { PatternScopeRequest } from './requests/request-scope-matcher';
 
 // ============================================================================
 // Schedule Operations
@@ -162,6 +166,7 @@ export {
   resolveLeaveShiftAssignment,
   routineAllowsPeriodAdd,
   shiftMatchesRoutine,
+  shiftViolatesRoutine,
   wouldCreateIsolatedShift,
 } from './scheduling/smart-rules';
 
@@ -201,6 +206,24 @@ export {
 export {
   repairScheduleBeforeWarnings,
 } from './scheduling/repair-orchestrator';
+
+// ============================================================================
+// Shift Hours + Overtime Cap — ساعت هر شیفت و سقف اضافه‌کار
+// ============================================================================
+
+export {
+  SHIFT_HOURS,
+  getLeaveHours,
+  getShiftHours,
+} from './scheduling/shift-hours';
+
+export {
+  OVERTIME_CAP_FALLBACK,
+  effectiveOvertimeCap,
+  overtimeHoursForPerson,
+  wouldExceedOvertimeCap,
+} from './scheduling/overtime-cap';
+export type { OvertimeCapSource } from './scheduling/overtime-cap';
 
 export type {
   DetectedRepairViolation,

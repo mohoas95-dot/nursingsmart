@@ -21,11 +21,22 @@ export interface OptimizerInput {
   settings: SystemSettings;
   holidays: Readonly<Record<number, string>>;
   firstDayOfWeek: number | undefined;
-  monthlyDutyHours: { official: number; contract: number } | null;
+  monthlyDutyHours: { official?: number; contract?: number; conscript?: number; overtime?: number } | null;
   currentSchedule: MonthlySchedule | null;
   lockState: ScheduleLockState;
   dismissedWarnings: ReadonlyArray<string>;
 }
+
+/**
+ * The approved monthly duty-hours override (including the overtime cap). The
+ * solver uses this for both duty-hours arithmetic and the overtime cap.
+ */
+export type MonthlyDutyHoursOverride = {
+  official?: number;
+  contract?: number;
+  conscript?: number;
+  overtime?: number;
+} | null;
 
 /**
  * Configuration for the optimizer facade runtime behavior.
@@ -69,6 +80,11 @@ export interface ManualShiftChangeInput {
    * این سلول‌ها هرگز توسط reconcileStaffingCoverage تغییر داده نمی‌شوند.
    */
   protectedCells?: ReadonlyArray<string>;
+  /**
+   * مقدار تصویب‌شدهٔ ماهانهٔ سقف اضافه‌کار (در صورت وجود) — برای آن‌که بازرسی نهایی
+   * همان سقفِ مسیر زمان‌بندی را ارزیابی کند.
+   */
+  monthlyDutyHours?: { overtime?: number } | null;
 }
 
 export interface ManualShiftChangeResult {
