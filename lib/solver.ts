@@ -2166,9 +2166,9 @@ export function verifyCoverageAndLeaders(
     };
     for (let d = 1; d <= totalDays; d++) {
       const assigned = assignments[p.id]?.[d] || 'OFF';
-      // هر روزی که شیفت کاری عادی ندارد (OFF، مرخصی، یا خالی) جزء زنجیرهٔ عدم حضور حساب می‌شود
-      const isAbsence = assigned === 'OFF' || assigned.startsWith('L');
-      if (isAbsence) {
+      // این هشدار فقط زنجیرهٔ OFF واقعی را می‌سنجد؛ مرخصی تأییدشده (L1..Ln/LH)
+      // یک روز OFF نیست و زنجیره را می‌شکند.
+      if (assigned === 'OFF') {
         consecutiveOffDays.push(d);
       } else {
         if (consecutiveOffDays.length >= 4) {
