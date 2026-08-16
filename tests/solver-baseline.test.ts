@@ -96,7 +96,7 @@ test('leave: approved leave is numbered L1..Ln and preserved', () => {
   assert.equal(s.assignments.long?.[12], 'L3');
 });
 
-test('[CURRENT-BEHAVIOR] leave: a 4-day leave is reported as a "Consecutive OFFs" violation', () => {
+test('leave: a 4-day approved leave does not count as consecutive OFF', () => {
   const personnel = [
     makePerson('sup', { position: 'supervisor' }),
     makePerson('stf', { position: 'staff' }),
@@ -106,9 +106,10 @@ test('[CURRENT-BEHAVIOR] leave: a 4-day leave is reported as a "Consecutive OFFs
   ];
   const requests = [makeRequest('g1', { id: 'l', requestType: 'leave', isEssential: true, scope: 'custom_days', selectedDays: [3, 4, 5, 6] })];
   const s = solved(personnel, requests, makeSettings());
-  assert.ok(
+  assert.equal(
     s.warnings.some(w => w.startsWith('Consecutive OFFs:') && w.includes('g1 T')),
-    'expected a Consecutive OFFs warning for the 4-day leave'
+    false,
+    'approved leave must not produce a Consecutive OFFs warning'
   );
 });
 
