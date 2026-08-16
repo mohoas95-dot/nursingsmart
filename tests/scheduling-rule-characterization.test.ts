@@ -1079,16 +1079,28 @@ test('characterizes_normal_solver_as_routine_compatible_but_scenario_row_swaps_a
   );
   assert.ok(generated.top3.length > 0);
 
-  for (const routine of ['morning', 'long', 'evening_night'] as const) {
+  // Routine compatibility is a *preference*, never a hard restriction (Phase 2
+  // policy, unchanged): coverage-preserving row swaps are routine-agnostic and
+  // may legally produce out-of-routine work cells.
+  //
+  // [PHASE-5 OBJECTIVE POLICY] Which routines actually end up mismatched in the
+  // three displayed scenarios is a consequence of the ranking, not a policy.
+  // Before Phase 5 similarity dominated, so routine compatibility barely
+  // influenced selection; now routine mismatch is a late preference ranked above
+  // similarity, so the engine prefers the routine-cleaner of two otherwise equal
+  // candidates. The invariant under test is therefore asserted as "mismatches
+  // remain possible" rather than "every routine must be mismatched".
+  const mismatchedRoutines = (['morning', 'long', 'evening_night'] as const).filter(routine => {
     const worker = personnel.find(item => item.workRoutine === routine)!;
-    assert.ok(
-      generated.top3.some(scenario =>
-        Object.values(scenario.schedule.assignments[worker.id] || {})
-          .some(shift => routineMismatch(shift, routine))
-      ),
-      `current scenario row swaps should be able to introduce a ${routine} mismatch`
+    return generated.top3.some(scenario =>
+      Object.values(scenario.schedule.assignments[worker.id] || {})
+        .some(shift => routineMismatch(shift, routine))
     );
-  }
+  });
+  assert.ok(
+    mismatchedRoutines.length > 0,
+    'scenario row swaps must remain routine-agnostic (routine is not a hard restriction)'
+  );
 });
 
 test('characterizes_reconciliation_as_treating_all_routines_as_preferences_not_hard_restrictions', () => {

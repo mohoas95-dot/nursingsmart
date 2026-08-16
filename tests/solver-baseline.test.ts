@@ -19,6 +19,12 @@ import {
 import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
 import { mergeOptimizerAssignments } from '../domain/scheduling/schedule-operations';
 import { generateAndScoreScenarios } from '../lib/scenarioGenerator';
+import {
+  compareByObjective,
+  isScenarioAcceptable,
+  SCENARIO_OBJECTIVE_VERSION,
+} from '../domain/scenarios/objective';
+import { evaluateScenarioQuality } from '../domain/scenarios/scenario-quality';
 import type { Personnel, ShiftRequest, SystemSettings } from '../lib/types';
 import {
   makePerson,
@@ -454,7 +460,11 @@ test('verifyCoverageAndLeaders is read-only (does not mutate assignments)', () =
 // ---------------------------------------------------------------------------
 // 12. Scenario generation / baseline similarity
 // ---------------------------------------------------------------------------
-test('[CURRENT-BEHAVIOR] scenario ranking: totalScore is exactly the baseline similarity percent', () => {
+// [PHASE-5 OBJECTIVE POLICY] Replaces the pre-Phase-5 characterization
+// "totalScore === baselineSimilarityPercent". That equality encoded the semantic
+// split this phase removes: freshly generated scenarios reported similarity as
+// totalScore while re-evaluated ones reported metrics.weightedTotal.
+test('scenario ranking: totalScore has one meaning and the structured objective is the ranking authority', () => {
   const p = scenarioFeasible();
   const baseline = solved(p.personnel, p.requests, p.settings);
   const result = generateAndScoreScenarios(
@@ -464,8 +474,65 @@ test('[CURRENT-BEHAVIOR] scenario ranking: totalScore is exactly the baseline si
   assert.ok(result.top3.length >= 1, 'expected at least one scenario');
   for (const scenario of result.top3) {
     assert.equal(scenario.criticalWarningCount, 0, 'scenario must be warning-free');
-    assert.equal(scenario.totalScore, scenario.baselineSimilarityPercent, 'totalScore mirrors baseline similarity');
+    // totalScore is a documented compatibility/display field with exactly one
+    // meaning in every code path.
+    assert.equal(scenario.totalScore, scenario.metrics.weightedTotal);
+    // The ranking authority is the structured objective, carried on the scenario.
+    assert.equal(scenario.objectiveVersion, SCENARIO_OBJECTIVE_VERSION);
+    assert.ok(scenario.objective, 'generated scenarios carry the canonical objective');
+    assert.equal(isScenarioAcceptable(scenario.objective!.gates), true);
+    assert.equal(scenario.objective!.quality.baselineSimilarityPercent, scenario.baselineSimilarityPercent);
   }
+
+  // The displayed order must be exactly the canonical objective's order.
+  const qualities = result.top3.map(scenario => scenario.objective!.quality);
+  const sorted = [...qualities].sort(compareByObjective);
+  assert.deepEqual(qualities, sorted, 'displayed order equals the canonical objective order');
+});
+
+test('generated and re-evaluated scenarios share the same canonical objective semantics', () => {
+  const p = scenarioFeasible();
+  const baseline = solved(p.personnel, p.requests, p.settings);
+  const result = generateAndScoreScenarios(
+    CAL_YEAR, CAL_MONTH, p.personnel, p.requests, p.settings, {}, undefined, null,
+    'nurse', baseline.assignments as any, []
+  );
+  assert.ok(result.top3.length >= 1);
+  const targetIds = p.personnel.filter(person => person.active && person.jobGroup === 'nurse').map(person => person.id);
+
+  for (const generated of result.top3) {
+    const reevaluated = evaluateScenarioQuality({
+      id: generated.id,
+      type: generated.type,
+      schedule: generated.schedule,
+      baseline,
+      personnelList: p.personnel,
+      requests: p.requests,
+      settings: p.settings,
+      year: CAL_YEAR,
+      month: CAL_MONTH,
+      customHolidays: {},
+      firstDayOfWeekIndex: undefined,
+      monthlyDutyHours: null,
+      targetJobGroup: 'nurse',
+      targetPersonnelIds: targetIds,
+      totalDays: daysInMonth(),
+      lockedRows: [],
+    });
+    assert.equal(reevaluated.totalScore, generated.totalScore, 'totalScore does not change meaning on re-evaluation');
+    assert.deepEqual(reevaluated.objective!.quality, generated.objective!.quality);
+    assert.equal(reevaluated.objectiveVersion, generated.objectiveVersion);
+  }
+});
+
+test('the canonical objective is deterministic across repeated generation runs', () => {
+  const p = scenarioFeasible();
+  const baseline = solved(p.personnel, p.requests, p.settings);
+  const run = () => generateAndScoreScenarios(
+    CAL_YEAR, CAL_MONTH, p.personnel, p.requests, p.settings, {}, undefined, null,
+    'nurse', baseline.assignments as any, []
+  ).top3.map(scenario => scenario.objective!.quality);
+  assert.deepEqual(run(), run());
 });
 
 // ---------------------------------------------------------------------------

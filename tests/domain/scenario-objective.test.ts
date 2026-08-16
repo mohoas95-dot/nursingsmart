@@ -6,15 +6,39 @@ import {
   areScenariosDistinctEnough,
   calculateBaselineDifferencePercent,
   calculateBaselineSimilarityPercent,
-  compareByBaselineSimilarity,
   compareByObjective,
   computeBaselineCellDiffs,
   countCriticalWarnings,
+  buildScenarioObjective,
   evaluateBaselineObjective,
   hasCriticalWarning,
   isCriticalWarning,
+  isScenarioAcceptable,
+  SCENARIO_OBJECTIVE_VERSION,
+  type ScenarioObjectiveGates,
+  type ScenarioObjectiveQuality,
 } from '../../domain/scenarios/objective';
+import {
+  MAX_BASELINE_DIFFERENCE_PERCENT,
+  MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
+} from '../../domain/scenarios/scenario-quality';
 import type { MonthlySchedule } from '../../lib/types';
+
+/**
+ * A neutral, fully-tied quality vector. Each test overrides only the tier under
+ * examination, so the assertion isolates exactly one ranking dimension.
+ */
+function quality(overrides: Partial<ScenarioObjectiveQuality>): ScenarioObjectiveQuality {
+  return {
+    requestSatisfactionPercent: 80,
+    operationalEfficiencyScore: 80,
+    fairnessScore: 80,
+    warningDefectCount: 0,
+    routineMismatchCount: 0,
+    baselineSimilarityPercent: 80,
+    ...overrides,
+  };
+}
 
 function schedule(assignments: Record<string, Record<number, string>>): MonthlySchedule {
   return {
@@ -104,17 +128,14 @@ test('evaluateBaselineObjective reports critical-resolution, locks and similarit
   assert.equal(dirtyObjective.criticalWarningCount, 2);
 });
 
-test('compareByBaselineSimilarity ranks already-clean scenarios by closeness to baseline', () => {
-  // هر دو سناریو پاک‌اند (فیلتر کیفیت رد شده‌اند)؛ رتبه‌بندی فقط بر اساس شباهت است.
-  const closer = { baselineSimilarityPercent: 95, requestSatisfactionPercent: 40 };
-  const farther = { baselineSimilarityPercent: 80, requestSatisfactionPercent: 99 };
-  assert.ok(compareByBaselineSimilarity(closer, farther) < 0); // closer first
-  assert.ok(compareByBaselineSimilarity(farther, closer) > 0);
-  // در برابری شباهت، رضایت درخواست (پس‌زمینه) تعیین‌کننده است.
-  assert.ok(compareByBaselineSimilarity(
-    { baselineSimilarityPercent: 90, requestSatisfactionPercent: 80 },
-    { baselineSimilarityPercent: 90, requestSatisfactionPercent: 60 }
-  ) < 0);
+// [PHASE-5 OBJECTIVE POLICY] The similarity-first comparator was removed. Baseline
+// similarity is now the *final* preference, so a materially better request result
+// outranks a slightly more similar candidate.
+test('a materially better request result outranks a more baseline-similar candidate', () => {
+  const closerButWorseRequests = quality({ baselineSimilarityPercent: 95, requestSatisfactionPercent: 40 });
+  const fartherButBetterRequests = quality({ baselineSimilarityPercent: 80, requestSatisfactionPercent: 99 });
+  assert.ok(compareByObjective(fartherButBetterRequests, closerButWorseRequests) < 0);
+  assert.ok(compareByObjective(closerButWorseRequests, fartherButBetterRequests) > 0);
 });
 
 test('areLocksPreserved detects any change on a locked row', () => {
@@ -131,14 +152,115 @@ test('areLocksPreserved detects any change on a locked row', () => {
   assert.equal(areLocksPreserved(baseline, violated, ['n1']), false);
 });
 
-test('compareByObjective ranks by similarity, then fewer warnings, then more requests', () => {
-  const a = { similarityPercent: 95, nonCriticalWarningCount: 2, requestSatisfactionPercent: 60 };
-  const b = { similarityPercent: 95, nonCriticalWarningCount: 1, requestSatisfactionPercent: 60 };
-  const c = { similarityPercent: 95, nonCriticalWarningCount: 1, requestSatisfactionPercent: 80 };
-  const d = { similarityPercent: 90, nonCriticalWarningCount: 0, requestSatisfactionPercent: 99 };
-  assert.ok(compareByObjective(a, d) < 0); // similarity dominates
-  assert.ok(compareByObjective(b, a) < 0); // tie similarity → fewer warnings
-  assert.ok(compareByObjective(c, b) < 0); // tie similarity+warnings → more requests
+test('compareByObjective applies the canonical tiers in order: requests → productivity → fairness → defects → routine → similarity', () => {
+  const base = quality({});
+
+  // Tier 3 — requests beat everything below them.
+  assert.ok(compareByObjective(
+    quality({ requestSatisfactionPercent: 90, operationalEfficiencyScore: 10, fairnessScore: 10, warningDefectCount: 9, baselineSimilarityPercent: 10 }),
+    quality({ requestSatisfactionPercent: 80, operationalEfficiencyScore: 99, fairnessScore: 99, warningDefectCount: 0, baselineSimilarityPercent: 99 })
+  ) < 0);
+
+  // Tier 4 — productivity decides when requests tie.
+  assert.ok(compareByObjective(
+    quality({ operationalEfficiencyScore: 90, fairnessScore: 10, baselineSimilarityPercent: 10 }),
+    quality({ operationalEfficiencyScore: 80, fairnessScore: 99, baselineSimilarityPercent: 99 })
+  ) < 0);
+
+  // Tier 5 — fairness decides when requests and productivity tie.
+  assert.ok(compareByObjective(
+    quality({ fairnessScore: 90, warningDefectCount: 3, baselineSimilarityPercent: 10 }),
+    quality({ fairnessScore: 80, warningDefectCount: 0, baselineSimilarityPercent: 99 })
+  ) < 0);
+
+  // Tier 6 — fewer noncritical defects, then fewer routine mismatches.
+  assert.ok(compareByObjective(
+    quality({ warningDefectCount: 1, baselineSimilarityPercent: 10 }),
+    quality({ warningDefectCount: 2, baselineSimilarityPercent: 99 })
+  ) < 0);
+  assert.ok(compareByObjective(
+    quality({ routineMismatchCount: 0, baselineSimilarityPercent: 10 }),
+    quality({ routineMismatchCount: 3, baselineSimilarityPercent: 99 })
+  ) < 0);
+
+  // Tier 7 — similarity only breaks an otherwise perfect tie.
+  assert.ok(compareByObjective(quality({ baselineSimilarityPercent: 95 }), quality({ baselineSimilarityPercent: 80 })) < 0);
+  assert.equal(compareByObjective(base, quality({})), 0);
+});
+
+test('the objective is deterministic and is a total order over a fixed candidate set', () => {
+  const candidates = [
+    quality({ requestSatisfactionPercent: 80, fairnessScore: 70, baselineSimilarityPercent: 99 }),
+    quality({ requestSatisfactionPercent: 95, fairnessScore: 50, baselineSimilarityPercent: 70 }),
+    quality({ requestSatisfactionPercent: 80, fairnessScore: 90, baselineSimilarityPercent: 60 }),
+  ];
+  const first = [...candidates].sort(compareByObjective).map(c => c.baselineSimilarityPercent);
+  const second = [...candidates].reverse().sort(compareByObjective).map(c => c.baselineSimilarityPercent);
+  assert.deepEqual(first, second);
+  assert.deepEqual(first, [70, 60, 99]);
+});
+
+test('sub-rounding differences do not let a lower tier be jumped by numeric noise', () => {
+  // All percentage metrics are produced with toFixed(2); a 0.01 wobble must not
+  // outrank a real improvement in the next tier down.
+  const noisyButWorseDefects = quality({ fairnessScore: 90.01, warningDefectCount: 5 });
+  const cleanDefects = quality({ fairnessScore: 90, warningDefectCount: 0 });
+  assert.ok(compareByObjective(cleanDefects, noisyButWorseDefects) < 0);
+});
+
+test('hard gates are evaluated separately from ranking and cannot be offset by quality', () => {
+  const perfectQualityButCritical: ScenarioObjectiveGates = {
+    criticalResolved: false, criticalWarningCount: 2, locksPreserved: true,
+    withinMaxBaselineDifference: true, meetsMinBaselineDifference: true,
+  };
+  assert.equal(isScenarioAcceptable(perfectQualityButCritical), false);
+
+  const lockViolation: ScenarioObjectiveGates = {
+    criticalResolved: true, criticalWarningCount: 0, locksPreserved: false,
+    withinMaxBaselineDifference: true, meetsMinBaselineDifference: true,
+  };
+  assert.equal(isScenarioAcceptable(lockViolation), false);
+
+  const tooFar: ScenarioObjectiveGates = {
+    criticalResolved: true, criticalWarningCount: 0, locksPreserved: true,
+    withinMaxBaselineDifference: false, meetsMinBaselineDifference: true,
+  };
+  assert.equal(isScenarioAcceptable(tooFar), false);
+
+  const tooClose: ScenarioObjectiveGates = {
+    criticalResolved: true, criticalWarningCount: 0, locksPreserved: true,
+    withinMaxBaselineDifference: true, meetsMinBaselineDifference: false,
+  };
+  assert.equal(isScenarioAcceptable(tooClose), false);
+
+  assert.equal(isScenarioAcceptable({ ...tooClose, meetsMinBaselineDifference: true }), true);
+});
+
+test('buildScenarioObjective derives the hard gates from the unchanged acceptance thresholds', () => {
+  const build = (differencePercent: number) => buildScenarioObjective({
+    baselineComponents: {
+      criticalResolved: true,
+      criticalWarningCount: 0,
+      locksPreserved: true,
+      similarityPercent: Number((100 - differencePercent).toFixed(2)),
+      baselineDifferencePercent: differencePercent,
+      requestSatisfactionPercent: 100,
+    },
+    maxBaselineDifferencePercent: MAX_BASELINE_DIFFERENCE_PERCENT,
+    minBaselineDifferencePercent: MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
+    requestSatisfactionPercent: 100,
+    operationalEfficiencyScore: 100,
+    fairnessScore: 100,
+    warningDefectCount: 0,
+    routineMismatchCount: 0,
+  });
+
+  assert.equal(MAX_BASELINE_DIFFERENCE_PERCENT, 35, 'max baseline difference threshold is unchanged');
+  assert.equal(MIN_DIFFERENCE_FROM_BASELINE_PERCENT, 3, 'min baseline difference threshold is unchanged');
+  assert.equal(isScenarioAcceptable(build(10).gates), true);
+  assert.equal(build(2).gates.meetsMinBaselineDifference, false);
+  assert.equal(build(36).gates.withinMaxBaselineDifference, false);
+  assert.equal(build(10).version, SCENARIO_OBJECTIVE_VERSION);
 });
 
 test('areScenariosDistinctEnough honours the minimum difference threshold', () => {

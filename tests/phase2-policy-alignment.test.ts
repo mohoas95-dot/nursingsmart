@@ -484,10 +484,13 @@ test('routine: scenario scoring prefers the routine-compatible candidate when eq
 });
 
 test('routine: ranking tiebreaker selects the routine-compatible scenario when all else is equal', () => {
+  // Routine compatibility stays a late, non-hard preference (Phase 2 policy).
   const base = {
-    similarityPercent: 90,
-    nonCriticalWarningCount: 0,
     requestSatisfactionPercent: 100,
+    operationalEfficiencyScore: 90,
+    fairnessScore: 90,
+    warningDefectCount: 0,
+    baselineSimilarityPercent: 90,
   };
   const compatible = { ...base, routineMismatchCount: 0 };
   const incompatible = { ...base, routineMismatchCount: 3 };
