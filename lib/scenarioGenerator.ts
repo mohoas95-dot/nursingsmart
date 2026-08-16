@@ -43,10 +43,6 @@ import {
   SystemSettings,
 } from './types';
 import {
-  calculateRequestSatisfactionPercent,
-  countRoutineMismatches,
-  countScoringDefectWarnings,
-  evaluateScenarioSchedule,
   filterStructuredWarningsForScenarioGroup,
   SCENARIO_KEYS,
   SCENARIO_TITLES,
@@ -55,12 +51,19 @@ import {
 } from './scoring';
 import {
   areScenariosDistinctEnough,
-  calculateBaselineDifferencePercent,
   compareByObjective,
+  compareRepairQuality,
   countCriticalWarnings,
-  evaluateBaselineObjective,
+  isScenarioAcceptable,
   type ObjectiveRankable,
+  type ScenarioObjective,
 } from '../domain/scenarios/objective';
+import {
+  evaluateScenarioQuality,
+  MAX_BASELINE_DIFFERENCE_PERCENT,
+  MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
+  MIN_DISTINCT_DIFFERENCE_PERCENT,
+} from '../domain/scenarios/scenario-quality';
 import {
   countCriticalScheduleWarnings,
   warningMessages,
@@ -118,13 +121,16 @@ export interface ScenarioGenerationOptions {
 export const MAX_SCENARIO_CANDIDATES = 500;
 const DEFAULT_CANDIDATE_BUDGET = 36;
 const MAX_CRITICAL_REPAIR_STEPS = 24;
-/** بیشترین فاصلهٔ مجاز از مبنا برای قبول در فیلتر کیفیت (٪). */
-const MAX_BASELINE_DIFFERENCE_PERCENT = 35;
-/** کمترین فاصلهٔ لازم تا سناریو «بدیلِ واقعی» محسوب شود (نه کپیِ مبنا) (٪). */
-const MIN_DIFFERENCE_FROM_BASELINE_PERCENT = 3;
-/** کمترین فاصلهٔ لازم میان دو سناریوی منتخب (٪). */
-const MIN_DISTINCT_DIFFERENCE_PERCENT = 3;
 const MAX_DISPLAYED_SCENARIOS = 3;
+
+// آستانه‌های پذیرش (سقف/کف فاصله از مبنا و کمینهٔ تمایز) در فاز ۵ تغییر نکرده‌اند؛
+// فقط به domain/scenarios/scenario-quality منتقل شده‌اند تا همان اعدادی که
+// دروازه‌های تابع هدف کانونی را می‌سازند اینجا هم مصرف شوند (مرجع یکتا).
+export {
+  MAX_BASELINE_DIFFERENCE_PERCENT,
+  MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
+  MIN_DISTINCT_DIFFERENCE_PERCENT,
+};
 
 interface ScenarioContext {
   year: number;
@@ -263,15 +269,31 @@ function applyCellEdit(
   return next;
 }
 
+/**
+ * ارزیابی کانونی یک سناریو — تنها مسیر امتیازدهیِ مولد.
+ *
+ * پیش از فاز ۵، مولد ابتدا `evaluateScenarioSchedule` را صدا می‌زد و سپس چند فیلد
+ * (از جمله `totalScore`) را با اعداد شباهت‌محور بازنویسی می‌کرد. اکنون هر دو مسیر
+ * تولید و ارزیابی مجدد از `evaluateScenarioQuality` عبور می‌کنند و هیچ بازنویسی‌ای
+ * در کار نیست.
+ */
 function evaluateScenario(
-  schedule: MonthlySchedule, scenarioType: ScenarioType, id: number, context: ScenarioContext
+  schedule: MonthlySchedule,
+  scenarioType: ScenarioType,
+  id: number,
+  baseline: MonthlySchedule,
+  context: ScenarioContext,
+  structuredWarnings?: ReadonlyArray<ScheduleWarning>
 ): ScoredSchedule {
-  return evaluateScenarioSchedule({
-    id, type: scenarioType, schedule,
+  return evaluateScenarioQuality({
+    id, type: scenarioType, schedule, baseline, structuredWarnings,
     personnelList: context.personnelList, requests: context.requests, settings: context.settings,
     year: context.year, month: context.month, customHolidays: context.customHolidays,
     firstDayOfWeekIndex: context.firstDayOfWeekIndex, monthlyDutyHours: context.monthlyDutyHours,
     targetJobGroup: context.targetJobGroup,
+    targetPersonnelIds: context.targetPersonnelIds,
+    totalDays: context.totalDays,
+    lockedRows: context.lockedRows,
   });
 }
 
@@ -593,14 +615,26 @@ function repairCriticalAlerts(candidate: VerifiedSchedule, baseline: MonthlySche
     if (edits.length === 0) break;
     let best: VerifiedSchedule | null = null;
     let bestCritical = criticalCount;
-    let bestDiff = Number.POSITIVE_INFINITY;
+    let bestQuality: ObjectiveRankable | null = null;
     for (const edit of edits) {
       const tried = verifyScenarioSchedule(applyCellEdit(current.assignments, edit), context);
       const triedCritical = countCriticalScheduleWarnings(tried.structuredWarnings);
       if (triedCritical > bestCritical) continue;
-      const triedDiff = calculateBaselineDifferencePercent(baseline, tried, context.targetPersonnelIds, context.totalDays);
-      const better = triedCritical < bestCritical || (triedCritical === bestCritical && triedDiff < bestDiff);
-      if (better) { best = tried; bestCritical = triedCritical; bestDiff = triedDiff; }
+      if (triedCritical < bestCritical) {
+        // کاهش هشدار بحرانی همیشه مقدم است — دروازهٔ سخت با کیفیت نرم معامله نمی‌شود.
+        best = tried;
+        bestCritical = triedCritical;
+        bestQuality = scoreCandidate(tried, 'MIXED', 0, baseline, context).rankable;
+        continue;
+      }
+      // تساوی در تعداد هشدار بحرانی: تا فاز ۴ «کمترین فاصله از مبنا» برنده بود و
+      // همین، تعمیر را شباهت‌محور می‌کرد. اکنون ترجیح ثانویه دقیقاً تابع هدف
+      // کانونی است (شباهت فقط در آخرین لایهٔ آن اثر دارد).
+      const triedQuality = scoreCandidate(tried, 'MIXED', 0, baseline, context).rankable;
+      if (bestQuality === null || compareRepairQuality(triedQuality, bestQuality) < 0) {
+        best = tried;
+        bestQuality = triedQuality;
+      }
     }
     if (!best || bestCritical >= criticalCount) break;
     current = best;
@@ -616,49 +650,30 @@ function repairCriticalAlerts(candidate: VerifiedSchedule, baseline: MonthlySche
 interface ScoredCandidate {
   schedule: VerifiedSchedule;
   scored: ScoredSchedule;
-  objective: ReturnType<typeof evaluateBaselineObjective>;
+  objective: ScenarioObjective;
   rankable: ObjectiveRankable;
 }
 
+/**
+ * امتیازدهی نامزد بر اساس تابع هدف کانونی.
+ *
+ * تفاوت با فاز ۴:
+ *   • دیگر `scored.totalScore` با درصد شباهت بازنویسی نمی‌شود (رفع تناقض معنایی).
+ *   • شمارش نقص هشداری از `metrics.nonCriticalWarningDefectCount` می‌آید و دیگر
+ *     یک نسخهٔ خصوصی و موازی در همین فایل محاسبه نمی‌شود.
+ *   • دروازه‌های سخت (شامل حفظ قفل‌ها) صریحاً در `objective.gates` ثبت می‌شوند.
+ */
 function scoreCandidate(
   schedule: VerifiedSchedule, scenarioType: ScenarioType, id: number, baseline: MonthlySchedule, context: ScenarioContext
 ): ScoredCandidate {
   // نمایِ MonthlySchedule خالص برای ارزیابی/ذخیره‌سازی — فرادادهٔ ساخت‌یافته
   // فقط درون خط‌لولهٔ موتور می‌ماند و در ScoredSchedule (قابل‌ذخیره) نمی‌نشیند.
   const plainSchedule = toMonthlySchedule(schedule);
-  const scored = evaluateScenario(plainSchedule, scenarioType, id, context);
-  const requestSatisfactionPercent = calculateRequestSatisfactionPercent(
-    plainSchedule, context.personnelList, context.requests, context.year, context.month,
-    context.customHolidays, context.firstDayOfWeekIndex, context.targetJobGroup);
-  const objective = evaluateBaselineObjective({
-    baseline, candidate: plainSchedule, warnings: plainSchedule.warnings,
-    structuredWarnings: schedule.structuredWarnings,
-    targetPersonnelIds: context.targetPersonnelIds, totalDays: context.totalDays,
-    lockedRows: context.lockedRows, requestSatisfactionPercent,
-  });
-  // اطلاع‌رسانی‌های خودکار solver (OFF_REMOVED / ISOLATED_SHIFT_FIXED) تخلف
-  // نیستند و نباید رتبهٔ بهینه‌سازی را پایین بیاورند؛ فقط تخلف‌های غیربحرانیِ
-  // واقعی در این معیارِ رتبه‌بندی شمرده می‌شوند.
-  const defectWarningCount = countScoringDefectWarnings(schedule.warnings);
-  const nonCriticalWarningCount = Math.max(0, defectWarningCount - objective.criticalWarningCount);
-  // روتین یک ترجیح است: در برابریِ کامل سایر معیارها، سناریوی روتین‌سازگارتر
-  // (کمترین سلول کاریِ ناسازگار با تگ روتین) برنده می‌شود.
-  const routineMismatchCount = countRoutineMismatches(
-    plainSchedule, context.personnelList, context.targetJobGroup, context.totalDays
+  const scored = evaluateScenario(
+    plainSchedule, scenarioType, id, baseline, context, schedule.structuredWarnings
   );
-  scored.baselineSimilarityPercent = objective.similarityPercent;
-  scored.baselineDifferencePercent = objective.baselineDifferencePercent;
-  scored.criticalWarningCount = objective.criticalWarningCount;
-  scored.totalScore = objective.similarityPercent;
-  return {
-    schedule, scored, objective,
-    rankable: {
-      similarityPercent: objective.similarityPercent,
-      nonCriticalWarningCount,
-      requestSatisfactionPercent,
-      routineMismatchCount,
-    },
-  };
+  const objective = scored.objective!;
+  return { schedule, scored, objective, rankable: objective.quality };
 }
 
 // ---------------------------------------------------------------------------
@@ -672,16 +687,36 @@ function applyQualityFilter(
   let droppedForCritical = 0;
   let droppedForDistance = 0;
   let droppedIdentical = 0;
+  let droppedForLocks = 0;
   for (const candidate of candidates) {
-    if (!candidate.objective.criticalResolved) { droppedForCritical += 1; continue; }
-    const difference = calculateBaselineDifferencePercent(baseline, candidate.schedule, context.targetPersonnelIds, context.totalDays);
-    if (difference > MAX_BASELINE_DIFFERENCE_PERCENT) { droppedForDistance += 1; continue; }
+    const gates = candidate.objective.gates;
+    // Tier 0 — دروازه‌های سخت. هیچ امتیاز نرمی این‌ها را جبران نمی‌کند.
+    if (!gates.criticalResolved) { droppedForCritical += 1; continue; }
+    // حفظ قفل‌ها: تا فاز ۴ محاسبه می‌شد اما هرگز به‌عنوان دروازه بررسی نمی‌شد.
+    // ساختِ نامزدها (mergePreservedAssignments) آن را تضمین می‌کند؛ این بررسی
+    // همان تضمین را به یک ناوردای صریح و قابل‌حسابرسی تبدیل می‌کند.
+    if (!gates.locksPreserved) { droppedForLocks += 1; continue; }
+    if (!gates.withinMaxBaselineDifference) { droppedForDistance += 1; continue; }
     // سناریو باید «بدیلِ واقعی» باشد: حداقل فاصلهٔ مشخصی از مبنا داشته باشد.
-    if (difference < MIN_DIFFERENCE_FROM_BASELINE_PERCENT) { droppedIdentical += 1; continue; }
+    if (!gates.meetsMinBaselineDifference) { droppedIdentical += 1; continue; }
+    // ناوردای مضاعف: پرچم‌های بالا باید با گزارهٔ پذیرش کانونی یکی باشند.
+    if (!isScenarioAcceptable(gates)) { droppedForCritical += 1; continue; }
     survivors.push(candidate);
   }
-  return { survivors, droppedForCritical, droppedForDistance, droppedIdentical };
+  return { survivors, droppedForCritical, droppedForDistance, droppedIdentical, droppedForLocks };
 }
+
+interface FilterStats {
+  survivors: ScoredCandidate[];
+  droppedForCritical: number;
+  droppedForDistance: number;
+  droppedIdentical: number;
+  droppedForLocks: number;
+}
+
+const EMPTY_FILTER_STATS: FilterStats = {
+  survivors: [], droppedForCritical: 0, droppedForDistance: 0, droppedIdentical: 0, droppedForLocks: 0,
+};
 
 function selectTopScenarios(survivors: ReadonlyArray<ScoredCandidate>, context: ScenarioContext): ScoredCandidate[] {
   const ranked = [...survivors].sort((left, right) => compareByObjective(left.rankable, right.rankable));
@@ -699,23 +734,39 @@ function selectTopScenarios(survivors: ReadonlyArray<ScoredCandidate>, context: 
 // صورت‌بندی نتیجه
 // ---------------------------------------------------------------------------
 
+/**
+ * برچسب‌های نمایشیِ سناریو (نه اجراهای بهینه‌سازی مستقل).
+ *
+ * همان رفتار فاز ۴: هر سه سناریو با یک تابع هدف واحد رتبه‌بندی می‌شوند و این
+ * نام‌ها فقط پس از رتبه‌بندی و بر اساس جایگاه اختصاص می‌یابند. فاز ۵ این معنا را
+ * تغییر نمی‌دهد و سه بهینه‌ساز جداگانه نمی‌سازد.
+ */
 const SCENARIO_TYPE_BY_RANK: ScenarioType[] = ['REQUESTS', 'FAIRNESS', 'MIXED'];
 
 function rankableObject(c: ScoredCandidate): ObjectiveRankable { return c.rankable; }
 
 function finalizeScenarioResult(
   selected: ReadonlyArray<ScoredCandidate>, baseline: MonthlySchedule,
-  filterStats: { survivors: ScoredCandidate[]; droppedForCritical: number; droppedForDistance: number; droppedIdentical: number },
+  filterStats: FilterStats,
   candidateCount: number, generationLog: string[], context: ScenarioContext, startedAt: number
 ): ScenarioGenerationResult {
   const ranked = [...selected].sort((left, right) => compareByObjective(rankableObject(left), rankableObject(right)));
   const top3: ScoredSchedule[] = ranked.map((candidate, index) => {
     const type = SCENARIO_TYPE_BY_RANK[index] ?? 'MIXED';
     const labels = SCENARIO_TITLES[type];
+    // برچسب سناریو پس از رتبه‌بندی اختصاص می‌یابد، و مؤلفه‌های سازگاریِ
+    // وابسته‌به‌برچسب (`weights` و `metrics.weightedTotal` و در نتیجه `totalScore`)
+    // با همان برچسب نهایی بازمحاسبه می‌شوند. پیش از فاز ۵ این کار انجام نمی‌شد و
+    // یک سناریو با وزن‌های MIXED امتیاز می‌گرفت اما با برچسب REQUESTS نمایش داده
+    // می‌شد؛ در نتیجه ارزیابی مجددِ همان سناریو عدد دیگری می‌داد.
+    //
+    // لایه‌های تابع هدف کانونی (درخواست/بهره‌وری/عدالت/نقص/روتین/شباهت) به برچسب
+    // وابسته نیستند، پس این بازمحاسبه هیچ رتبه‌ای را جابه‌جا نمی‌کند.
+    const relabeled = scoreCandidate(candidate.schedule, type, index + 1, baseline, context).scored;
     return {
-      ...candidate.scored, id: index + 1, type, scenarioKey: SCENARIO_KEYS[type],
+      ...relabeled, id: index + 1, type, scenarioKey: SCENARIO_KEYS[type],
       title: labels.title, shortTitle: labels.shortTitle,
-      pairwiseDifference: { مبنا: candidate.objective.baselineDifferencePercent },
+      pairwiseDifference: { مبنا: relabeled.baselineDifferencePercent ?? 0 },
     };
   });
 
@@ -753,11 +804,11 @@ function runBaselineOrientedEngine(
 
   if (!context.currentAssignments || Object.keys(context.currentAssignments).length === 0) {
     generationLog.push('برنامهٔ مبنا (Working Roster) هنوز تهیه نشده است؛ بدون مبنا، سناریوی بدیل قابل تولید نیست.');
-    return { result: finalizeScenarioResult([], { year: context.year, month: context.month, assignments: {}, shiftLeaders: {}, warnings: [] }, { survivors: [], droppedForCritical: 0, droppedForDistance: 0, droppedIdentical: 0 }, 0, generationLog, context, startedAt) };
+    return { result: finalizeScenarioResult([], { year: context.year, month: context.month, assignments: {}, shiftLeaders: {}, warnings: [] }, EMPTY_FILTER_STATS, 0, generationLog, context, startedAt) };
   }
   if (context.freeTargetIds.length < 2) {
     generationLog.push(`تنها ${context.freeTargetIds.length} پرسنل آزادِ گروه هدف وجود دارد؛ برای تولید سناریوی بدیل حداقل ۲ نفر لازم است.`);
-    return { result: finalizeScenarioResult([], buildBaselineSchedule(context), { survivors: [], droppedForCritical: 0, droppedForDistance: 0, droppedIdentical: 0 }, 0, generationLog, context, startedAt) };
+    return { result: finalizeScenarioResult([], buildBaselineSchedule(context), EMPTY_FILTER_STATS, 0, generationLog, context, startedAt) };
   }
 
   const baseline = buildBaselineSchedule(context);
@@ -785,7 +836,8 @@ function runBaselineOrientedEngine(
   generationLog.push(`فیلتر کیفیت: ${filterStats.survivors.length} نامزد بدیلِ بدون‌هشدار پذیرفته شد` +
     `${filterStats.droppedForCritical ? `، ${filterStats.droppedForCritical} به‌خاطر هشدار سطح A` : ''}` +
     `${filterStats.droppedIdentical ? `، ${filterStats.droppedIdentical} چون با مبنا یکی بودند` : ''}` +
-    `${filterStats.droppedForDistance ? `، ${filterStats.droppedForDistance} به‌خاطر فاصلهٔ زیاد` : ''}.`);
+    `${filterStats.droppedForDistance ? `، ${filterStats.droppedForDistance} به‌خاطر فاصلهٔ زیاد` : ''}` +
+    `${filterStats.droppedForLocks ? `، ${filterStats.droppedForLocks} به‌خاطر نقض حفظ قفل‌ها` : ''}.`);
 
   const selected = selectTopScenarios(filterStats.survivors, context);
   return { result: finalizeScenarioResult(selected, baseline, filterStats, candidates.length, generationLog, context, startedAt) };

@@ -5,6 +5,7 @@ import type { JobGroup, MonthlySchedule, Personnel } from '../../../lib/types';
 import type { ScoredSchedule } from '../../../lib/scoring';
 import { getShiftLabel, toPersianDigits } from '../../../lib/persian-vocabulary';
 import { computeBaselineCellDiffs } from '../../../domain/scenarios/objective';
+import { buildObjectiveRankMap } from '../../../domain/scenarios/scenario-quality';
 import {
   Activity,
   BarChart3,
@@ -330,13 +331,22 @@ function ManagePanel(props: ManagePanelProps) {
     return liveSimilarityById.get(key) ?? (options.find(o => o.key === key)?.scenario?.baselineSimilarityPercent ?? 0);
   };
 
-  const ranking = React.useMemo(() => {
-    const ranked = [...options].filter(o => !o.isBaseline).sort((a, b) => similarityOf(b.key) - similarityOf(a.key));
-    const map = new Map<string, number>();
-    ranked.forEach((o, i) => map.set(o.key, i + 1));
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, liveSimilarityById]);
+  /**
+   * رتبهٔ نمایشی = ترتیبِ تابع هدف کانونی (همان مرجعی که موتور با آن انتخاب کرد).
+   *
+   * پیش از این، اینجا یک مرتب‌سازیِ مستقل بر اساس «شباهت به مبنا» انجام می‌شد و
+   * عملاً یک مرجع دومِ رتبه‌بندی می‌ساخت: ممکن بود سناریوی رتبهٔ ۱ موتور (کیفیت
+   * بهتر در لایه‌های بالاتر) در رابط کاربری رتبهٔ ۳ نمایش داده شود، صرفاً چون
+   * شباهت کمتری داشت. شباهت همچنان به‌عنوان یک «آمار» نمایش داده می‌شود، اما
+   * دیگر رتبه را تعیین نمی‌کند.
+   */
+  const ranking = React.useMemo(
+    () => buildObjectiveRankMap(
+      options.filter(option => !option.isBaseline && option.scenario).map(option => option.scenario!),
+      scenario => String(scenario.id)
+    ),
+    [options]
+  );
 
   if (!activeOption) return null;
 

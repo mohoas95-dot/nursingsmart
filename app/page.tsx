@@ -74,10 +74,11 @@ import { generateAndScoreScenariosWithProgress } from '../lib/scenarioGenerator'
 import {
   calculateScenarioDifferencePercent,
   countHardConstraintWarnings,
-  evaluateScenarioSchedule,
   filterWarningsForScenarioGroup,
   type ScoredSchedule,
 } from '../lib/scoring';
+import { evaluateScenarioQuality } from '../domain/scenarios/scenario-quality';
+import { LEGACY_SCENARIO_OBJECTIVE_VERSION } from '../domain/scenarios/objective';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
 import {
   DEFAULT_CUSTOM_HOLIDAY_TITLE,
@@ -761,6 +762,17 @@ export default function Home() {
     };
   }, [schedule, lockedRows]);
 
+  /**
+   * پرسنل هدفِ یک گروه (فعال، غیرقفل) — دامنهٔ سنجش شباهت به مبنا و تابع هدف.
+   * از refها استفاده نمی‌کند تا در مسیر هیدراسیون با state جاری هم‌گام بماند.
+   */
+  const targetPersonnelIdsForGroup = React.useCallback((group: JobGroup, lockedIds: readonly string[]) => {
+    const locked = new Set(lockedIds);
+    return personnel
+      .filter(person => person.active && person.jobGroup === group && !locked.has(person.id))
+      .map(person => person.id);
+  }, [personnel]);
+
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
     const rawSchedule: MonthlySchedule = rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] };
     const scenarioSchedule = preserveLockedRowsInScenarioSchedule(rawSchedule);
@@ -772,8 +784,14 @@ export default function Home() {
     const activeWarnings = filterActiveWarnings(filteredGroup, combinedDismissed);
 
     if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
+      // سناریوهای ذخیره‌شده بازنویسی نمی‌شوند (بدون بازنویسی تاریخیِ امتیازها).
+      // فقط نسخهٔ تابع هدفشان صریح می‌شود: اگر پیش از فاز ۵ ذخیره شده‌اند،
+      // `objective` ندارند و با نسخهٔ legacy برچسب می‌خورند تا امتیازشان با
+      // معنای کانونی فاز ۵ اشتباه گرفته نشود.
       return {
         ...rawScenario,
+        objectiveVersion: rawScenario?.objectiveVersion
+          ?? (rawScenario?.objective ? undefined : LEGACY_SCENARIO_OBJECTIVE_VERSION),
         warnings: activeWarnings,
         relevantWarningCount: activeWarnings.length,
         relevantHardWarningCount: countHardConstraintWarnings(activeWarnings),
@@ -784,14 +802,18 @@ export default function Home() {
         },
       } as ScoredSchedule;
     }
-    return evaluateScenarioSchedule({
+    const hydratedSchedule = {
+      ...scenarioSchedule,
+      warnings: activeWarnings,
+      dismissedWarnings: scenarioDismissed,
+    };
+    // مسیر ارزیابی مجدد از همان ارزیاب کانونی مولد عبور می‌کند تا سناریوی
+    // ذخیره‌شده صرفاً به‌دلیل قدیمی‌بودنِ مسیر تولید، معنای کیفیت متفاوتی نگیرد.
+    return evaluateScenarioQuality({
       id: rawScenario?.id ?? index + 1,
       type: rawScenario?.type || (index === 0 ? 'REQUESTS' : index === 1 ? 'FAIRNESS' : 'MIXED'),
-      schedule: {
-        ...scenarioSchedule,
-        warnings: activeWarnings,
-        dismissedWarnings: scenarioDismissed,
-      },
+      schedule: hydratedSchedule,
+      baseline: schedule || hydratedSchedule,
       personnelList: personnel,
       requests,
       settings: normalizeSettings(settings),
@@ -801,8 +823,11 @@ export default function Home() {
       firstDayOfWeekIndex,
       monthlyDutyHours,
       targetJobGroup: group,
+      targetPersonnelIds: targetPersonnelIdsForGroup(group, lockedRows),
+      totalDays: getJalaliMonthDays(currentYear, currentMonth),
+      lockedRows,
     });
-  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, lockedRows, monthlyDutyHours, personnel, preserveLockedRowsInScenarioSchedule, requests, settings]);
+  }, [currentMonth, currentYear, customHolidays, dismissedWarnings, firstDayOfWeekIndex, lockedRows, monthlyDutyHours, personnel, preserveLockedRowsInScenarioSchedule, requests, schedule, settings, targetPersonnelIdsForGroup]);
 
   const rawActiveScenariosForMonth = deptData?.activeScenarios?.[monthKey] as any;
   const normalizedActiveScenarios = React.useMemo<{ nurse: ScenarioWorkflowGroup | null; assistant: ScenarioWorkflowGroup | null }>(() => {
@@ -3134,10 +3159,18 @@ export default function Home() {
       ...baseSchedule,
       warnings: activeWarnings,
     };
-    return evaluateScenarioSchedule({
+    // ارزیابی مجدد و تولید تازه از یک ارزیاب واحد (تابع هدف کانونی) استفاده
+    // می‌کنند؛ هیچ سناریویی صرفاً به‌خاطر عبور از این مسیر معنای امتیاز متفاوتی
+    // پیدا نمی‌کند. مبنا = برنامهٔ کاری جاری (همان مبنایی که مولد استفاده می‌کند).
+    const lockedIds = lockedRowsRef.current;
+    const targetIds = personnelRef.current
+      .filter(person => person.active && person.jobGroup === group && !lockedIds.includes(person.id))
+      .map(person => person.id);
+    return evaluateScenarioQuality({
       id: scenario.id,
       type: scenario.type,
       schedule: normalizedSchedule,
+      baseline: scheduleRef.current || normalizedSchedule,
       personnelList: personnelRef.current,
       requests: requestsRef.current,
       settings: normalizeSettings(settingsRef.current),
@@ -3147,6 +3180,9 @@ export default function Home() {
       firstDayOfWeekIndex: firstDayRef.current === -1 ? undefined : firstDayRef.current,
       monthlyDutyHours: monthlyDutyHoursRef.current,
       targetJobGroup: group,
+      targetPersonnelIds: targetIds,
+      totalDays: getJalaliMonthDays(currentYear, currentMonth),
+      lockedRows: lockedIds,
     });
   }, [currentMonth, currentYear, preserveLockedRowsInScenarioSchedule]);
 

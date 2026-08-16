@@ -16,6 +16,7 @@ import {
   isInformationalWarningCode,
   type ScheduleWarning,
 } from '../domain/warnings/schedule-warning';
+import type { ScenarioObjective } from '../domain/scenarios/objective';
 
 export type ScenarioType = 'FAIRNESS' | 'REQUESTS' | 'MIXED';
 export type ScenarioKey = 'A' | 'B' | 'C';
@@ -30,7 +31,37 @@ export interface ScenarioMetrics {
   requestScore: number;
   fairnessScore: number;
   satisfactionScore: number;
+  /**
+   * LEGACY COMPONENT METRIC — `0.65*warningScore + 0.35*efficiencyScore`.
+   *
+   * این عدد «جریمهٔ هشدار» و «بهره‌وری» را با هم مخلوط می‌کند و به همین دلیل از
+   * فاز ۵ دیگر در تابع هدف کانونی مصرف نمی‌شود. برای سازگاری نمایشی/گزارشی و
+   * تست‌های مؤلفه‌ای حفظ شده است. رتبه‌بندی از `operationalEfficiencyScore`
+   * (بهره‌وری خالص) و `nonCriticalWarningDefectCount` (نقص هشداری) استفاده می‌کند.
+   */
   optimizationScore: number;
+  /**
+   * Tier 4 تابع هدف کانونی: کیفیت عملیاتی خالص — فقط نزدیکی ساعات کارکرد به
+   * ساعت موظفی. هیچ جریمهٔ هشداری در آن نیست.
+   */
+  operationalEfficiencyScore: number;
+  /**
+   * سهم «پاکیزگی هشدار» در `optimizationScore` (فقط برای شفافیت و سازگاری).
+   * در رتبه‌بندی مصرف نمی‌شود؛ لایهٔ هشدار با `nonCriticalWarningDefectCount`
+   * شمرده می‌شود تا دو جریمهٔ رقیب وجود نداشته باشد.
+   */
+  warningQualityScore: number;
+  /**
+   * مرجع یکتای «نقص هشداریِ غیربحرانی»:
+   * `warningCount (بدون اطلاع‌رسانی‌ها) − hardWarningCount (بحرانی‌ها)`.
+   * هشدارهای بحرانی دروازهٔ سخت‌اند و نباید دوباره در رتبه‌بندی جریمه شوند.
+   */
+  nonCriticalWarningDefectCount: number;
+  /**
+   * LEGACY COMPATIBILITY FIELD — بلندِ وزن‌دارِ وابسته به برچسب سناریو
+   * (`SCENARIO_WEIGHTS[type]`). از فاز ۵ هیچ تصمیم انتخاب/رتبه‌بندی‌ای بر پایهٔ آن
+   * گرفته نمی‌شود؛ فقط برای گزارش‌های تاریخی و سازگاری نگه داشته شده است.
+   */
   weightedTotal: number;
   requestSatisfiedWeight: number;
   requestTotalWeight: number;
@@ -54,6 +85,23 @@ export interface ScoredSchedule {
   scoreA: number;
   scoreB: number;
   scoreC: number;
+  /**
+   * ⚠️ COMPATIBILITY / DISPLAY FIELD — **مرجع رتبه‌بندی نیست.**
+   *
+   * قرارداد فاز ۵ (تصمیم مستند):
+   *   تابع هدف کانونی واژه‌نگاشتی (lexicographic) است و هیچ نرخ تبدیل مستندی میان
+   *   «درصد رضایت درخواست»، «بهره‌وری»، «عدالت»، «شمارش نقص» و «شباهت به مبنا»
+   *   در سیاست‌های تأییدشدهٔ فازهای ۱–۴ وجود ندارد. ساختن یک اسکالر یعنی اختراع
+   *   وزنِ دلبخواه؛ پس ساخته نمی‌شود.
+   *
+   *   در نتیجه `totalScore` فقط «نمایهٔ نمایشیِ کیفیت» است و معنایش در هر دو مسیر
+   *   (تولید تازه و ارزیابی مجدد) **یکسان** است: همان `metrics.weightedTotal`.
+   *   پیش از فاز ۵، مسیر تولید تازه این فیلد را با «درصد شباهت به مبنا» بازنویسی
+   *   می‌کرد و همین باعث تناقض معنایی می‌شد؛ آن بازنویسی حذف شده است.
+   *
+   *   مرجع رتبه‌بندی: `domain/scenarios/objective#compareByObjective` روی
+   *   `objective.quality` (فیلد `objective` در همین ساختار).
+   */
   totalScore: number;
   strengths: string[];
   weaknesses: string[];
@@ -63,14 +111,28 @@ export interface ScoredSchedule {
   relevantHardWarningCount: number;
   pairwiseDifference?: Record<string, number>;
   /**
-   * درصد شباهت به برنامهٔ مبنا (Working Roster). معیار اصلی رتبه‌بندی سناریوها
-   * در معماری مبنامحور (۰ تا ۱۰۰). فقط روی پرسنل هدف سنجیده می‌شود.
+   * درصد شباهت به برنامهٔ مبنا (Working Roster) روی پرسنل هدف (۰ تا ۱۰۰).
+   * از فاز ۵ این عدد «ترجیح پایانی» تابع هدف است، نه معیار نخست رتبه‌بندی.
    */
   baselineSimilarityPercent?: number;
-  /** درصد فاصله از برنامهٔ مبنا (مکمل شباهت). */
+  /** درصد فاصله از برنامهٔ مبنا (مکمل شباهت) — مرزهای پذیرش روی همین عدد اعمال می‌شوند. */
   baselineDifferencePercent?: number;
   /** تعداد هشدارهای سطح A (بحرانی) — همان relevantHardWarningCount با نام صریح. */
   criticalWarningCount?: number;
+  /**
+   * تابع هدف کانونیِ فاز ۵ — **تنها مرجع رتبه‌بندی و پذیرش**.
+   *
+   * روی سناریوهای تولیدشده همیشه پر می‌شود. روی سناریوهای ذخیره‌شدهٔ پیش از فاز ۵
+   * وجود ندارد (undefined) و همین، نشانهٔ نسخهٔ قدیمی است؛ `objectiveVersion`
+   * این تفکیک را صریح می‌کند.
+   */
+  objective?: ScenarioObjective;
+  /**
+   * شناسهٔ نسخهٔ تابع هدفی که این سناریو با آن ساخته/رتبه‌بندی شده است.
+   * سناریوهای قدیمیِ ذخیره‌شده بازنویسی نمی‌شوند؛ هنگام هیدراسیون فقط با نسخهٔ
+   * legacy برچسب می‌خورند تا معنای امتیازشان با فاز ۵ اشتباه گرفته نشود.
+   */
+  objectiveVersion?: string;
 }
 
 // «Mandatory Rest:» دیگر پیشوند سطح A نیست: مدل بار کاری فقط زنجیرهٔ وزنیِ
@@ -520,7 +582,15 @@ function calculateOptimizationScore(
   firstDayOfWeekIndex: number | undefined,
   monthlyDutyHours: any,
   targetJobGroup?: JobGroup
-): Pick<ScenarioMetrics, 'optimizationScore' | 'warningCount' | 'hardWarningCount'> {
+): Pick<
+  ScenarioMetrics,
+  | 'optimizationScore'
+  | 'operationalEfficiencyScore'
+  | 'warningQualityScore'
+  | 'nonCriticalWarningDefectCount'
+  | 'warningCount'
+  | 'hardWarningCount'
+> {
   const reports = generatePersonnelReports(
     year,
     month,
@@ -543,10 +613,17 @@ function calculateOptimizationScore(
   const hardWarningCount = countHardConstraintWarnings(schedule.warnings);
   const warningScore = clamp(100 - ((warningCount * 6) + (hardWarningCount * 18)), 0, 100);
   const efficiencyScore = clamp(100 * (1 - clamp(meanDeviation / 28, 0, 1)), 0, 100);
+  // LEGACY: ترکیب جریمهٔ هشدار و بهره‌وری. فرمول عیناً حفظ شده تا مقادیر تاریخی و
+  // گزارش‌ها تغییر نکنند، اما تابع هدف کانونی فاز ۵ آن را مصرف نمی‌کند.
   const optimizationScore = Number(((warningScore * 0.65) + (efficiencyScore * 0.35)).toFixed(2));
 
   return {
     optimizationScore,
+    // Tier 4 کانونی: بهره‌وری خالص، جدا شده از جریمهٔ هشدار.
+    operationalEfficiencyScore: Number(efficiencyScore.toFixed(2)),
+    warningQualityScore: Number(warningScore.toFixed(2)),
+    // مرجع یکتای نقص هشداری غیربحرانی: نه اطلاع‌رسانی‌ها، نه بحرانی‌ها.
+    nonCriticalWarningDefectCount: Math.max(0, warningCount - hardWarningCount),
     warningCount,
     hardWarningCount,
   };
@@ -683,6 +760,9 @@ export function evaluateScenarioSchedule(options: EvaluateScenarioOptions): Scor
       fairnessScore: fairnessMetrics.fairnessScore,
       satisfactionScore,
       optimizationScore: optimizationMetrics.optimizationScore,
+      operationalEfficiencyScore: optimizationMetrics.operationalEfficiencyScore,
+      warningQualityScore: optimizationMetrics.warningQualityScore,
+      nonCriticalWarningDefectCount: optimizationMetrics.nonCriticalWarningDefectCount,
       weightedTotal,
       requestSatisfiedWeight: requestMetrics.requestSatisfiedWeight,
       requestTotalWeight: requestMetrics.requestTotalWeight,

@@ -164,15 +164,12 @@ export function computeBaselineCellDiffs(
 // ---------------------------------------------------------------------------
 
 /**
- * ارزیابی یک سناریو بر اساس تابع هدفِ اولویت‌دارِ بازطراحی‌شده.
+ * COMPONENT METRIC (فاز ۵) — نه مرجع رتبه‌بندی.
  *
- * اولویت‌ها (به‌ترتیب) — دقیقاً مطابق «تابع هدف» در پرامپت:
- *   ۱. رفع کامل تمام هشدارهای سطح A        → criticalResolved (hard gate)
- *   ۲. حفظ کامل قفل‌ها                       → locksPreserved (تضمین ساختاری)
- *   ۳. بیشترین شباهت ممکن به برنامهٔ مبنا   → similarityPercent (معیار رتبه‌بندی)
- *   ۴. رعایت درخواست‌های پرسنل (فقط پس‌زمینه) → requestSatisfactionPercent (tiebreaker)
- *
- * عدالت دیگر معیار انتخاب یا رتبه‌بندی نیست و در اینجا محاسبه نمی‌شود.
+ * این ساختار «مؤلفه‌های مبنامحور» را محاسبه می‌کند: تعداد هشدار بحرانی، حفظ
+ * قفل‌ها، و شباهت/فاصله از مبنا. تا فاز ۴ همین ساختار عملاً مرجع رتبه‌بندی هم بود
+ * (شباهت در صدر). از فاز ۵، مرجع رتبه‌بندی `ScenarioObjective` است و این تابع
+ * فقط مؤلفه‌های Tier 0 و Tier 7 را تأمین می‌کند.
  */
 export interface BaselineObjective {
   /** اولویت ۱: آیا هیچ هشدار سطح A باقی نمانده؟ */
@@ -240,6 +237,59 @@ export function evaluateBaselineObjective(input: BaselineObjectiveInput): Baseli
 }
 
 /**
+ * ورودی ساختِ تابع هدف کانونی (فاز ۵).
+ *
+ * هیچ معیاری اینجا از نو اختراع نمی‌شود: تمام اعداد از سازوکارهای موجود می‌آیند
+ * (`calculateRequestSatisfactionPercent`، امتیاز عدالت و بهره‌وریِ lib/scoring،
+ * شمارش نقص هشداری، `countRoutineMismatches`، و شباهت مبنا در همین ماژول).
+ */
+export interface ScenarioObjectiveInput {
+  /** مؤلفه‌های مبنامحور (بحرانی/قفل/شباهت). */
+  baselineComponents: BaselineObjective;
+  /** سقف مجاز فاصله از مبنا (٪) — همان آستانهٔ پذیرش موجود. */
+  maxBaselineDifferencePercent: number;
+  /** حداقل فاصلهٔ لازم از مبنا (٪) — همان آستانهٔ پذیرش موجود. */
+  minBaselineDifferencePercent: number;
+  /** Tier 3 — درصد رضایت درخواست‌ها. */
+  requestSatisfactionPercent: number;
+  /** Tier 4 — بهره‌وری عملیاتی خالص (بدون جریمهٔ هشدار). */
+  operationalEfficiencyScore: number;
+  /** Tier 5 — امتیاز عدالت. */
+  fairnessScore: number;
+  /** Tier 6 — تعداد نقص هشداری غیربحرانی (مرجع یکتا). */
+  warningDefectCount: number;
+  /** Tier 6 — ناسازگاری روتین. */
+  routineMismatchCount: number;
+}
+
+/**
+ * ساخت تابع هدف کانونیِ یک سناریو: دروازه‌های سخت + لایه‌های کیفیت.
+ *
+ * @pure
+ */
+export function buildScenarioObjective(input: ScenarioObjectiveInput): ScenarioObjective {
+  const difference = input.baselineComponents.baselineDifferencePercent;
+  return {
+    version: SCENARIO_OBJECTIVE_VERSION,
+    gates: {
+      criticalResolved: input.baselineComponents.criticalResolved,
+      criticalWarningCount: input.baselineComponents.criticalWarningCount,
+      locksPreserved: input.baselineComponents.locksPreserved,
+      withinMaxBaselineDifference: difference <= input.maxBaselineDifferencePercent,
+      meetsMinBaselineDifference: difference >= input.minBaselineDifferencePercent,
+    },
+    quality: {
+      requestSatisfactionPercent: input.requestSatisfactionPercent,
+      operationalEfficiencyScore: input.operationalEfficiencyScore,
+      fairnessScore: input.fairnessScore,
+      warningDefectCount: input.warningDefectCount,
+      routineMismatchCount: input.routineMismatchCount,
+      baselineSimilarityPercent: input.baselineComponents.similarityPercent,
+    },
+  };
+}
+
+/**
  * آیا همهٔ ردیف‌های قفل‌شده در سناریو دقیقاً مانند برنامهٔ مبنا مانده‌اند؟
  *
  * این یک «تضمین ساختاری» است: مولد سناریو هرگز سلول‌های قفل‌شده را تغییر
@@ -272,30 +322,17 @@ export function areLocksPreserved(
 // رتبه‌بندی و انتخاب بر اساس شباهت به مبنا
 // ---------------------------------------------------------------------------
 
+/**
+ * LEGACY / COMPATIBILITY SHAPE — no longer a ranking authority.
+ *
+ * تا فاز ۴، رتبه‌بندی سناریوها با یک مقایسه‌کنندهٔ «شباهت‌محور» انجام می‌شد که
+ * ورودی‌اش همین شکل بود. از فاز ۵ تنها مرجع رتبه‌بندی `compareByObjective` روی
+ * `ScenarioObjective` است. این نوع فقط برای مصرف‌کننده‌های نمایشی که هنوز
+ * «درصد شباهت» را در دست دارند نگه داشته شده و هیچ مقایسه‌کننده‌ای ندارد.
+ */
 export interface RankableScenario {
   baselineSimilarityPercent: number;
-  /** tiebreaker پس‌زمینه: رضایت درخواست‌ها. */
   requestSatisfactionPercent?: number;
-}
-
-/**
- * مقایسه‌کنندهٔ رتبه‌بندی سناریوها بر اساس «نزدیک‌بودن به برنامهٔ مبنا».
- *
- * نه بر اساس عدالت. نه بر اساس تعداد درخواست‌های رعایت‌شده.
- * ترتیب: شباهتِ بیشتر اول؛ در برابری، رضایت درخواستِ بیشتر (پس‌زمینه) اول.
- *
- * @pure
- */
-export function compareByBaselineSimilarity(
-  left: RankableScenario,
-  right: RankableScenario
-): number {
-  if (left.baselineSimilarityPercent !== right.baselineSimilarityPercent) {
-    return right.baselineSimilarityPercent - left.baselineSimilarityPercent;
-  }
-  const leftReq = left.requestSatisfactionPercent ?? 0;
-  const rightReq = right.requestSatisfactionPercent ?? 0;
-  return rightReq - leftReq;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,49 +359,232 @@ export function areScenariosDistinctEnough(
   );
 }
 
-// ---------------------------------------------------------------------------
-// مقایسه‌کنندهٔ تابع هدف کامل (شباهت ← هشدار ← درخواست)
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// فاز ۵ — تابع هدف کانونیِ کیفیت سناریو (تنها مرجع رتبه‌بندی)
+// ===========================================================================
 //
-// در میان سناریوهای پاکِ سطح A، رتبه‌بندی نهایی بر اساس اولویت‌های کاربر است:
-//   ۱) شبیه‌تر به مبنا (نزدیک‌تر اول)
-//   ۲) کمتر هشدار غیربحرانی (کمتر اول)
-//   ۳) بیشتر رعایت درخواست پرسنل (بیشتر اول)
-
-export interface ObjectiveRankable {
-  /** درصد شباهت به برنامهٔ مبنا (اولویت ۱، نزولی). */
-  similarityPercent: number;
-  /** تعداد هشدارهای غیربحرانیِ باقیمانده (اولویت ۲، صعودی). */
-  nonCriticalWarningCount: number;
-  /** درصد رعایت درخواست‌های پرسنل در پس‌زمینه (اولویت ۳، نزولی). */
-  requestSatisfactionPercent: number;
-  /**
-   * تعداد سلول‌های کاریِ ناسازگار با تگ روتین پرسنل (اولویت ۴، صعودی) — فقط
-   * tiebreaker پایانی: در برابریِ کامل سایر معیارها، سناریوی روتین‌سازگارتر
-   * برنده است.
-   */
-  routineMismatchCount?: number;
-}
+// ‼️ THE SINGLE AUTHORITY FOR SCENARIO QUALITY ‼️
+//
+// پیش از فاز ۵ سه مرجع موازی وجود داشت:
+//   • مولد تازه:    totalScore = درصد شباهت به مبنا
+//   • مسیر legacy:  totalScore = metrics.weightedTotal (وابسته به برچسب سناریو)
+//   • تعمیر بحرانی: ترجیح ثانویه = کمترین فاصله از مبنا
+// این‌ها می‌توانستند دربارهٔ «کیفیت یک سناریو» با هم اختلاف داشته باشند.
+//
+// از فاز ۵، «کیفیت سناریو» دقیقاً و فقط با همین ماژول تعریف می‌شود:
+//
+//   ۱) دروازه‌های سخت (Tier 0)  → `ScenarioObjectiveGates` / `isScenarioAcceptable`
+//   ۲) رتبه‌بندی واژه‌نگاشتی    → `ScenarioObjectiveQuality` / `compareByObjective`
+//
+// چرا واژه‌نگاشتی (lexicographic) و نه وزن‌دار؟
+//   معیارهای موجود (درصد رضایت درخواست، درصد بهره‌وری، درصد عدالت، شمارش نقص،
+//   درصد شباهت) واحدِ مشترک ندارند و هیچ نرخ تبدیلِ مستندی میان آن‌ها در سیاست‌های
+//   تأییدشدهٔ فازهای ۱ تا ۴ وجود ندارد. ساختن وزن برای رسیدن به یک عدد اسکالر،
+//   «اختراع سیاست محصول» بود؛ پس ترتیب اولویت صریح پیاده شده است.
 
 /**
- * مقایسهٔ دو سناریوی پاک بر اساس تابع هدفِ اولویت‌دار.
+ * شناسهٔ نسخهٔ تابع هدف — روی هر سناریوی تولیدشده ثبت می‌شود تا سناریوهای
+ * ذخیره‌شدهٔ قدیمی (که با مرجع شباهت‌محور رتبه گرفته‌اند) از سناریوهای فاز ۵
+ * قابل تفکیک باشند. هیچ تغییری در schema لازم نیست (payload سناریو در
+ * lib/storageSchemas به‌صورت `z.any()` ذخیره می‌شود).
+ */
+export const SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/2';
+
+/** نسخهٔ ضمنیِ سناریوهای ذخیره‌شدهٔ پیش از فاز ۵ (شباهت‌محور). */
+export const LEGACY_SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/1-similarity-first';
+
+/**
+ * آستانهٔ «معناداری» برای مقایسهٔ لایه‌های درصدیِ پیوسته (درخواست/بهره‌وری/عدالت).
+ *
+ * این یک وزن نیست و هیچ معیاری را به معیار دیگر تبدیل نمی‌کند؛ فقط تعیین می‌کند
+ * که یک اختلافِ درصدی چه زمانی «واقعی» است و چه زمانی نوسانِ گردکردن (همهٔ این
+ * معیارها با `toFixed(2)` تولید می‌شوند). بدون آن، اختلاف ۰٫۰۱ درصدیِ عدالت بر
+ * هر معیار پایین‌دستی غلبه می‌کرد.
+ */
+export const OBJECTIVE_MATERIAL_DIFFERENCE = 0.5;
+
+/**
+ * سطلِ (bucket) معناداریِ یک معیار درصدی.
+ *
+ * چرا سطل‌بندی و نه مقایسهٔ اپسیلونیِ دوتایی؟
+ *   نسخهٔ نخستِ فاز ۵ از «|a − b| < ε» استفاده می‌کرد. برابریِ اپسیلونی **متعدی
+ *   (transitive) نیست**: با ε = ۰٫۵ داریم ۹۰٫۰ ≈ ۹۰٫۴ و ۹۰٫۴ ≈ ۹۰٫۸، اما
+ *   ۹۰٫۰ ≉ ۹۰٫۸. در نتیجه مقایسه‌کننده می‌توانست A > B و B > C و C > A بدهد و
+ *   ترتیب نهایی به ترتیبِ ورودیِ آرایه وابسته می‌شد (نقض قطعیت، و رفتار
+ *   تعریف‌نشده برای Array.prototype.sort).
+ *
+ *   سطل‌بندی همان «تحملِ ۰٫۵ درصدی» را حفظ می‌کند اما چون هر مقدار **یک‌بار و
+ *   مستقل از طرفِ مقابل** به یک عدد صحیح نگاشته می‌شود، رابطهٔ برابری متعدی و
+ *   ترتیب کاملاً قطعی می‌شود.
+ *
+ * این نه یک وزن است و نه معنای هیچ معیاری را عوض می‌کند؛ فقط دقتِ مقایسه را به
+ * پلهٔ مستندشدهٔ ۰٫۵ محدود می‌کند (همهٔ این درصدها با `toFixed(2)` تولید می‌شوند).
  *
  * @pure
  */
-export function compareByObjective(left: ObjectiveRankable, right: ObjectiveRankable): number {
-  if (left.similarityPercent !== right.similarityPercent) {
-    return right.similarityPercent - left.similarityPercent;
-  }
-  if (left.nonCriticalWarningCount !== right.nonCriticalWarningCount) {
-    return left.nonCriticalWarningCount - right.nonCriticalWarningCount;
-  }
-  if (left.requestSatisfactionPercent !== right.requestSatisfactionPercent) {
-    return right.requestSatisfactionPercent - left.requestSatisfactionPercent;
-  }
-  const leftRoutine = left.routineMismatchCount ?? 0;
-  const rightRoutine = right.routineMismatchCount ?? 0;
-  return leftRoutine - rightRoutine;
+export function materialBucket(value: number): number {
+  return Math.round(value / OBJECTIVE_MATERIAL_DIFFERENCE);
 }
+
+/**
+ * آیا دو درصد در همان سطلِ معناداری قرار می‌گیرند؟
+ *
+ * برخلاف نسخهٔ اپسیلونیِ پیشین، این رابطه متعدی است: `bucket(a) === bucket(b)`
+ * و `bucket(b) === bucket(c)` ⇒ `bucket(a) === bucket(c)`.
+ *
+ * @pure
+ */
+export function isMateriallyEqual(left: number, right: number): boolean {
+  return materialBucket(left) === materialBucket(right);
+}
+
+/**
+ * Tier 0 — دروازه‌های سختِ پذیرش. اگر هر کدام نقض شود سناریو «غیرقابل‌قبول» است و
+ * هیچ امتیاز نرمی نمی‌تواند آن را جبران کند.
+ *
+ * سیاست هیچ‌کدام از این دروازه‌ها در فاز ۵ تغییر نکرده است؛ فقط در یک‌جا و به‌صورت
+ * صریح جمع شده‌اند (پیش‌تر `locksPreserved` محاسبه می‌شد اما هرگز به‌عنوان دروازه
+ * بررسی نمی‌شد).
+ */
+export interface ScenarioObjectiveGates {
+  /** هیچ هشدار سطح A (بحرانی) پس از تعمیر باقی نمانده باشد. */
+  criticalResolved: boolean;
+  /** تعداد هشدارهای سطح A (مرجع یکتا). */
+  criticalWarningCount: number;
+  /** تمام ردیف‌های قفل‌شده عیناً مانند مبنا مانده باشند. */
+  locksPreserved: boolean;
+  /** فاصله از مبنا از سقف مجاز بیشتر نباشد. */
+  withinMaxBaselineDifference: boolean;
+  /** فاصله از مبنا از حداقلِ «بدیل واقعی بودن» کمتر نباشد. */
+  meetsMinBaselineDifference: boolean;
+}
+
+/** آیا سناریو تمام دروازه‌های سخت را رد کرده است؟ @pure */
+export function isScenarioAcceptable(gates: ScenarioObjectiveGates): boolean {
+  return (
+    gates.criticalResolved
+    && gates.locksPreserved
+    && gates.withinMaxBaselineDifference
+    && gates.meetsMinBaselineDifference
+  );
+}
+
+/**
+ * لایه‌های کیفیتِ رتبه‌بندی (فقط میان نامزدهای پذیرفته‌شده).
+ *
+ * ترتیب اولویت — دقیقاً همان ترتیب مقایسه در `compareByObjective`:
+ *
+ *   Tier 1 — کیفیت پوشش:
+ *       دروازهٔ سخت است، نه معیار رتبه‌بندی. موتور فعلی هر کمبود را
+ *       `COVERAGE_SHORTAGE` و هر مازاد را `OVERSTAFFING` می‌داند و هر دو بحرانی‌اند؛
+ *       بنابراین هر سناریوی پذیرفته‌شده دقیقاً «پوشش برابر تقاضا» دارد و هیچ
+ *       دادهٔ موجودی «مازادِ معقول» را از «مازادِ غیرضروری» تفکیک نمی‌کند. ساختن
+ *       چنین طیفی یعنی اختراع سیاست بالینی؛ پس عمداً امتیاز پوششِ ساختگی نمی‌سازیم.
+ *
+ *   Tier 2 — کیفیت استراحت/بار کاری:
+ *       نیز دروازهٔ سخت است (MAX_CONSECUTIVE، NIGHT_REST، ارزیاب مشترک محدودیت
+ *       سخت، سقف اضافه‌کار). تنها سیگنال غیرسختِ باقیمانده (`MANDATORY_REST`)
+ *       دقیقاً یک بار و فقط در `warningDefectCount` شمرده می‌شود تا دو جریمهٔ
+ *       رقیب برای یک پدیده وجود نداشته باشد. سیاست فاز ۴ (`CONSECUTIVE_OFFS`)
+ *       دست‌نخورده است.
+ *
+ *   Tier 3 — رضایت درخواست‌ها (نزولی)
+ *   Tier 4 — بهره‌وری/کیفیت عملیاتی (نزولی)
+ *   Tier 5 — عدالت (نزولی)
+ *   Tier 6 — نقص‌های هشداری غیربحرانی (صعودی) + ناسازگاری روتین (صعودی)
+ *   Tier 7 — شباهت به مبنا (نزولی) — ترجیح پایانی، نه معیار نخست
+ */
+export interface ScenarioObjectiveQuality {
+  /** Tier 3: درصد رعایت درخواست‌های پرسنل (سازوکار موجودِ ارزیابی درخواست). */
+  requestSatisfactionPercent: number;
+  /**
+   * Tier 4: کیفیت عملیاتی خالص — فقط انحراف از ساعت موظفی، بدون جریمهٔ هشدار.
+   * (تا فاز ۴، `optimizationScore` این دو را با هم مخلوط می‌کرد.)
+   */
+  operationalEfficiencyScore: number;
+  /** Tier 5: امتیاز عدالت موجود (ساعت/شیفت/تعطیلات/انحراف موظفی). */
+  fairnessScore: number;
+  /**
+   * Tier 6: تعداد نقص‌های هشداریِ غیربحرانی — مرجع یکتا.
+   * هشدارهای صرفاً اطلاع‌رسانی هرگز در آن شمرده نمی‌شوند و هشدارهای بحرانی هم
+   * نه (آن‌ها دروازهٔ سخت‌اند و نباید دوبار جریمه شوند).
+   */
+  warningDefectCount: number;
+  /** Tier 6: سلول‌های کاریِ ناسازگار با تگ روتین (ترجیح، نه قاعدهٔ سخت). */
+  routineMismatchCount: number;
+  /** Tier 7: درصد شباهت به مبنا — ترجیح پایانی. */
+  baselineSimilarityPercent: number;
+}
+
+/**
+ * نمایِ کاملِ تابع هدف کانونی: دروازه‌های سخت + لایه‌های کیفیت.
+ * این ساختار (نه هیچ عدد اسکالری) مرجع رتبه‌بندی است.
+ */
+export interface ScenarioObjective {
+  version: typeof SCENARIO_OBJECTIVE_VERSION;
+  gates: ScenarioObjectiveGates;
+  quality: ScenarioObjectiveQuality;
+}
+
+/**
+ * نامِ سازگارِ ورودی مقایسه‌کننده. از فاز ۵ دقیقاً همان `ScenarioObjectiveQuality`
+ * است تا هیچ نمایش موازی‌ای از «کیفیت» باقی نماند.
+ */
+export type ObjectiveRankable = ScenarioObjectiveQuality;
+
+/**
+ * مقایسهٔ واژه‌نگاشتیِ دو نامزدِ پذیرفته‌شده بر اساس تابع هدف کانونی.
+ *
+ * خروجی منفی ⇒ `left` بهتر است. کاملاً قطعی (deterministic) و بدون تصادف.
+ *
+ * @pure
+ */
+export function compareByObjective(
+  left: ScenarioObjectiveQuality,
+  right: ScenarioObjectiveQuality
+): number {
+  // لایه‌های درصدیِ پیوسته با «سطل معناداری» مقایسه می‌شوند تا هم تحملِ ۰٫۵
+  // درصدی حفظ شود و هم مقایسه‌کننده متعدی و قطعی بماند (نه اپسیلونِ دوتایی).
+
+  // Tier 3 — رضایت درخواست‌ها
+  const requestBucket = materialBucket(right.requestSatisfactionPercent)
+    - materialBucket(left.requestSatisfactionPercent);
+  if (requestBucket !== 0) return requestBucket;
+
+  // Tier 4 — بهره‌وری عملیاتی
+  const efficiencyBucket = materialBucket(right.operationalEfficiencyScore)
+    - materialBucket(left.operationalEfficiencyScore);
+  if (efficiencyBucket !== 0) return efficiencyBucket;
+
+  // Tier 5 — عدالت
+  const fairnessBucket = materialBucket(right.fairnessScore) - materialBucket(left.fairnessScore);
+  if (fairnessBucket !== 0) return fairnessBucket;
+
+  // Tier 6 — نقص‌های هشداری غیربحرانی، سپس ناسازگاری روتین
+  // (شمارش‌های صحیح‌اند؛ تحملِ درصدی برایشان بی‌معناست.)
+  if (left.warningDefectCount !== right.warningDefectCount) {
+    return left.warningDefectCount - right.warningDefectCount;
+  }
+  if (left.routineMismatchCount !== right.routineMismatchCount) {
+    return left.routineMismatchCount - right.routineMismatchCount;
+  }
+  // Tier 7 — شباهت به مبنا (ترجیح پایانی)
+  if (left.baselineSimilarityPercent !== right.baselineSimilarityPercent) {
+    return right.baselineSimilarityPercent - left.baselineSimilarityPercent;
+  }
+  return 0;
+}
+
+/**
+ * مقایسهٔ کیفیتِ غیرسختِ دو نامزد در حین «تعمیر هشدار بحرانی».
+ *
+ * تا فاز ۴، وقتی دو تعمیر تعداد هشدار بحرانی یکسانی داشتند، «کمترین فاصله از
+ * مبنا» برنده می‌شد؛ یعنی خودِ تعمیر هم سوگیریِ شباهت‌محور داشت. اکنون ترتیب
+ * همان تابع هدف کانونی است و شباهت فقط در آخرین لایه اثر می‌گذارد.
+ *
+ * @pure
+ */
+export const compareRepairQuality = compareByObjective;
 
 // ---------------------------------------------------------------------------
 // انواع کمکی
