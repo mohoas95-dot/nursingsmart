@@ -7,13 +7,17 @@ import {
   ShiftType,
   SystemSettings,
 } from './types';
-import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
-import { shiftSatisfiesRequestedShift } from '../domain/scheduling/workload';
 import { shiftViolatesRoutine } from '../domain/scheduling/smart-rules';
+import { canonicalizeRequestDaysForMonth } from '../domain/requests/request-canonicalizer';
+import { buildRequestOutcomeLedger } from '../domain/requests/request-outcome-ledger';
+import { buildRequestQualityFromLedger } from '../domain/requests/request-quality';
+import { buildRequestSetFingerprint } from '../domain/requests/request-set-fingerprint';
+import { replaceRequestWarningsFromLedger } from '../domain/requests/request-warning-projection';
 import { generatePersonnelReports } from './solver';
 import {
   isCriticalWarningCode,
   isInformationalWarningCode,
+  warningMessages,
   type ScheduleWarning,
 } from '../domain/warnings/schedule-warning';
 import type { ScenarioObjective } from '../domain/scenarios/objective';
@@ -41,7 +45,7 @@ export interface ScenarioMetrics {
    */
   optimizationScore: number;
   /**
-   * Tier 4 تابع هدف کانونی: کیفیت عملیاتی خالص — فقط نزدیکی ساعات کارکرد به
+   * Tier 3 تابع هدف کانونی: کیفیت عملیاتی خالص — فقط نزدیکی ساعات کارکرد به
    * ساعت موظفی. هیچ جریمهٔ هشداری در آن نیست.
    */
   operationalEfficiencyScore: number;
@@ -133,6 +137,8 @@ export interface ScoredSchedule {
    * legacy برچسب می‌خورند تا معنای امتیازشان با فاز ۵ اشتباه گرفته نشود.
    */
   objectiveVersion?: string;
+  /** Freshness of persisted RequestQuality against the current request fingerprint. */
+  requestQualityStatus?: 'CURRENT' | 'STALE' | 'LEGACY' | 'INVALID';
 }
 
 // «Mandatory Rest:» دیگر پیشوند سطح A نیست: مدل بار کاری فقط زنجیرهٔ وزنیِ
@@ -292,8 +298,17 @@ export function filterStructuredWarningsForScenarioGroup(
   lockedRows?: ReadonlyArray<string> | ReadonlySet<string>
 ): ScheduleWarning[] {
   return warnings.filter(warning => {
-    if (warningTargetsLockedPersonnel(warning.message, personnelList, lockedRows)) return false;
+    const locked = lockedRows
+      ? ('has' in lockedRows
+          ? (warning.personnelId ? lockedRows.has(warning.personnelId) : false)
+          : (warning.personnelId ? lockedRows.includes(warning.personnelId) : false))
+      : false;
+    if (locked || warningTargetsLockedPersonnel(warning.message, personnelList, lockedRows)) return false;
     if (!targetJobGroup) return true;
+    if (warning.jobGroup) return warning.jobGroup === targetJobGroup;
+    if (warning.personnelId) {
+      return personnelList.find(person => person.id === warning.personnelId)?.jobGroup === targetJobGroup;
+    }
     return warningTargetsGroup(warning.message, personnelList, targetJobGroup);
   });
 }
@@ -364,87 +379,20 @@ export function isHardWarningCountAcceptable(hardWarningCount: number): boolean 
   return hardWarningCount <= MAX_ALLOWED_HARD_WARNINGS_PER_SCENARIO;
 }
 
-function shiftSatisfiesPreferred(assigned: ShiftType, preferred: string): boolean {
-  return shiftSatisfiesRequestedShift(assigned, preferred);
-}
-
-function shiftViolatesAvoidRule(assigned: ShiftType, preferred: string): boolean {
-  return shiftSatisfiesPreferred(assigned, preferred);
-}
-
-function requestDayWeight(request: ShiftRequest): number {
-  let weight = request.isEssential ? 1.25 : 1;
-  if (request.requestType === 'OFF' && request.offHardness === 'hard') weight += 0.15;
-  if (request.requestType === 'leave' && request.isEssential) weight += 0.1;
-  return weight;
-}
-
-function requestSatisfiedForDay(request: ShiftRequest, assigned: ShiftType, patternExpected?: string): boolean {
-  if (request.requestType === 'OFF') {
-    return assigned === 'OFF' || assigned.startsWith('L');
-  }
-  if (request.requestType === 'leave') {
-    return assigned.startsWith('L');
-  }
-  if (request.requestType === 'shift') {
-    return !!request.preferredShift && shiftSatisfiesPreferred(assigned, request.preferredShift);
-  }
-  if (request.requestType === 'avoid_shift') {
-    return !request.preferredShift || !shiftViolatesAvoidRule(assigned, request.preferredShift);
-  }
-  if (request.requestType === 'pattern') {
-    if (!patternExpected) return true;
-    if (patternExpected === 'OFF') return assigned === 'OFF';
-    if (patternExpected.startsWith('L')) return assigned.startsWith('L');
-    return shiftSatisfiesPreferred(assigned, patternExpected);
-  }
-  return true;
-}
-
 function calculateRequestScore(
-  schedule: MonthlySchedule,
-  personnelList: readonly Personnel[],
-  requests: readonly ShiftRequest[],
-  year: number,
-  month: number,
-  customHolidays: Readonly<Record<number, string>>,
-  firstDayOfWeekIndex: number | undefined,
-  targetJobGroup?: JobGroup
+  schedule: MonthlySchedule
 ): Pick<ScenarioMetrics, 'requestScore' | 'requestSatisfiedWeight' | 'requestTotalWeight'> {
-  const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
-  const eligiblePersonnelIds = new Set(targetGroupPersonnel(personnelList, targetJobGroup).map(person => person.id));
-
-  let totalWeight = 0;
-  let satisfiedWeight = 0;
-
-  for (const request of requests) {
-    if (!eligiblePersonnelIds.has(request.personnelId)) continue;
-    const assignments = schedule.assignments[request.personnelId] || {};
-
-    for (let day = 1; day <= calendar.length; day++) {
-      if (!isDayInRequestScope(day, calendar[day - 1].dayOfWeek, request)) continue;
-
-      const weight = requestDayWeight(request);
-      const assigned = assignments[day] || 'OFF';
-      const patternExpected = request.requestType === 'pattern' && request.patternSteps && request.patternSteps.length > 0
-        ? request.patternSteps[(day - 1) % request.patternSteps.length]
-        : undefined;
-
-      totalWeight += weight;
-      if (requestSatisfiedForDay(request, assigned, patternExpected)) {
-        satisfiedWeight += weight;
-      }
-    }
+  // The ledger is the sole current authority. Missing artifacts mean
+  // "not evaluated", never permission to reinterpret raw requests here.
+  if (!schedule.requestQuality || !schedule.requestOutcomeLedger) {
+    return { requestScore: 0, requestSatisfiedWeight: 0, requestTotalWeight: 0 };
   }
-
-  if (totalWeight === 0) {
-    return { requestScore: 100, requestSatisfiedWeight: 0, requestTotalWeight: 0 };
-  }
-
+  const total = schedule.requestOutcomeLedger.outcomes.length;
+  const requestScore = schedule.requestQuality.requestSatisfactionPercent;
   return {
-    requestScore: Number(((satisfiedWeight / totalWeight) * 100).toFixed(2)),
-    requestSatisfiedWeight: Number(satisfiedWeight.toFixed(2)),
-    requestTotalWeight: Number(totalWeight.toFixed(2)),
+    requestScore,
+    requestSatisfiedWeight: Number(((requestScore / 100) * total).toFixed(2)),
+    requestTotalWeight: total,
   };
 }
 
@@ -465,9 +413,16 @@ export function calculateRequestSatisfactionPercent(
   firstDayOfWeekIndex: number | undefined,
   targetJobGroup?: JobGroup
 ): number {
-  return calculateRequestScore(
-    schedule, personnelList, requests, year, month, customHolidays, firstDayOfWeekIndex, targetJobGroup
-  ).requestScore;
+  // Parameters are retained for API compatibility only; raw request structures
+  // are intentionally not interpreted at this boundary.
+  void personnelList;
+  void requests;
+  void year;
+  void month;
+  void customHolidays;
+  void firstDayOfWeekIndex;
+  void targetJobGroup;
+  return calculateRequestScore(schedule).requestScore;
 }
 
 /**
@@ -619,7 +574,7 @@ function calculateOptimizationScore(
 
   return {
     optimizationScore,
-    // Tier 4 کانونی: بهره‌وری خالص، جدا شده از جریمهٔ هشدار.
+    // Tier 3 کانونی: بهره‌وری خالص، جدا شده از جریمهٔ هشدار.
     operationalEfficiencyScore: Number(efficiencyScore.toFixed(2)),
     warningQualityScore: Number(warningScore.toFixed(2)),
     // مرجع یکتای نقص هشداری غیربحرانی: نه اطلاع‌رسانی‌ها، نه بحرانی‌ها.
@@ -695,19 +650,40 @@ export function evaluateScenarioSchedule(options: EvaluateScenarioOptions): Scor
     targetJobGroup,
   } = options;
 
-  const weights = SCENARIO_WEIGHTS[type];
-  const requestMetrics = calculateRequestScore(
-    schedule,
-    personnelList,
-    requests,
+  const canonicalMonth = canonicalizeRequestDaysForMonth(requests, {
     year,
     month,
-    customHolidays,
-    firstDayOfWeekIndex,
-    targetJobGroup
+    calendarDays: generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex),
+    personnel: personnelList,
+  });
+  const requestSetFingerprint = buildRequestSetFingerprint(canonicalMonth);
+  const requestOutcomeLedger = buildRequestOutcomeLedger({
+    canonicalMonth,
+    assignments: schedule.assignments,
+    provenance: schedule.requestResolutionProvenance,
+    requestSetFingerprint,
+  });
+  const requestQuality = buildRequestQualityFromLedger(requestOutcomeLedger);
+  const requestWarnings = replaceRequestWarningsFromLedger(
+    [],
+    requestOutcomeLedger,
+    new Map(personnelList.map(person => [person.id, `${person.firstName} ${person.lastName}`]))
   );
+  const qualitySchedule: MonthlySchedule = {
+    ...schedule,
+    warnings: [
+      ...schedule.warnings.filter(message => !message.startsWith('Mismatched Request:')),
+      ...warningMessages(requestWarnings),
+    ],
+    requestOutcomeLedger,
+    requestQuality,
+    requestSetFingerprint,
+  };
+
+  const weights = SCENARIO_WEIGHTS[type];
+  const requestMetrics = calculateRequestScore(qualitySchedule);
   const fairnessMetrics = calculateFairnessScore(
-    schedule,
+    qualitySchedule,
     personnelList,
     settings,
     year,
@@ -718,7 +694,7 @@ export function evaluateScenarioSchedule(options: EvaluateScenarioOptions): Scor
     targetJobGroup
   );
   const optimizationMetrics = calculateOptimizationScore(
-    schedule,
+    qualitySchedule,
     personnelList,
     settings,
     year,
@@ -753,7 +729,7 @@ export function evaluateScenarioSchedule(options: EvaluateScenarioOptions): Scor
     type,
     title: labels.title,
     shortTitle: labels.shortTitle,
-    schedule,
+    schedule: qualitySchedule,
     weights,
     metrics: {
       requestScore: requestMetrics.requestScore,

@@ -28,15 +28,23 @@ import type { MonthlySchedule } from '../../lib/types';
  * A neutral, fully-tied quality vector. Each test overrides only the tier under
  * examination, so the assertion isolates exactly one ranking dimension.
  */
-function quality(overrides: Partial<ScenarioObjectiveQuality>): ScenarioObjectiveQuality {
+function quality(
+  overrides: Partial<ScenarioObjectiveQuality> & { requestSatisfactionPercent?: number }
+): ScenarioObjectiveQuality {
+  const { requestSatisfactionPercent = 80, ...remaining } = overrides;
   return {
-    requestSatisfactionPercent: 80,
+    requestQuality: {
+      version: 'request-quality/1',
+      essentialFulfillment: { numerator: BigInt(requestSatisfactionPercent), denominator: BigInt(100) },
+      normalFulfillment: { numerator: BigInt(requestSatisfactionPercent), denominator: BigInt(100) },
+      requestSatisfactionPercent,
+    },
     operationalEfficiencyScore: 80,
     fairnessScore: 80,
     warningDefectCount: 0,
     routineMismatchCount: 0,
     baselineSimilarityPercent: 80,
-    ...overrides,
+    ...remaining,
   };
 }
 
@@ -248,7 +256,8 @@ test('buildScenarioObjective derives the hard gates from the unchanged acceptanc
     },
     maxBaselineDifferencePercent: MAX_BASELINE_DIFFERENCE_PERCENT,
     minBaselineDifferencePercent: MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
-    requestSatisfactionPercent: 100,
+    requestQuality: quality({ requestSatisfactionPercent: 100 }).requestQuality,
+    requestSetFingerprint: 'sha256:test',
     operationalEfficiencyScore: 100,
     fairnessScore: 100,
     warningDefectCount: 0,

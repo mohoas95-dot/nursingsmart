@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { solveNursingSchedule, solveWithPriority } from '../lib/solver';
+import { RequestGenerationBlockedError } from '../domain/requests/solver-request-adapter';
 import { reconcileStaffingCoverage } from '../domain/scheduling/staffing-coverage';
 import {
   MAX_CONSECUTIVE_NIGHTS,
@@ -568,7 +569,7 @@ test('B5: a legal explicit shift request is still honored verbatim', () => {
   );
 });
 
-test('B5: an explicit shift request cannot overwrite a hard OFF — the hard OFF wins', () => {
+test('B5: an OFF + shift positive collision is blocked before hard precedence', () => {
   const personnel = [
     makePerson('sup', { position: 'supervisor' }),
     makePerson('stf', { position: 'staff' }),
@@ -578,11 +579,13 @@ test('B5: an explicit shift request cannot overwrite a hard OFF — the hard OFF
     makeRequest('g1', { id: 'off', requestType: 'OFF', isEssential: false, offHardness: 'hard', scope: 'custom_days', selectedDays: [4] }),
     makeRequest('g1', { id: 'shift', requestType: 'shift', preferredShift: 'M', isEssential: false, scope: 'custom_days', selectedDays: [4] }),
   ];
-  const s = solved(personnel, requests, makeSettings());
-  assert.equal(s.assignments.g1?.[4], 'OFF', 'the hard OFF must win over the shift request');
+  assert.throws(
+    () => solved(personnel, requests, makeSettings()),
+    RequestGenerationBlockedError
+  );
 });
 
-test('B5: an explicit shift request cannot overwrite essential leave — the leave wins', () => {
+test('B5: a leave + shift positive collision is blocked; Essential leave does not win', () => {
   const personnel = [
     makePerson('sup', { position: 'supervisor' }),
     makePerson('stf', { position: 'staff' }),
@@ -592,9 +595,10 @@ test('B5: an explicit shift request cannot overwrite essential leave — the lea
     makeRequest('g1', { id: 'leave', requestType: 'leave', isEssential: true, scope: 'custom_days', selectedDays: [4, 5] }),
     makeRequest('g1', { id: 'shift', requestType: 'shift', preferredShift: 'N', isEssential: false, scope: 'custom_days', selectedDays: [4] }),
   ];
-  const s = solved(personnel, requests, makeSettings());
-  const shift = s.assignments.g1?.[4];
-  assert.ok(shift && String(shift).startsWith('L'), `the leave must win (got ${shift})`);
+  assert.throws(
+    () => solved(personnel, requests, makeSettings()),
+    RequestGenerationBlockedError
+  );
 });
 
 test('B5: an explicit request cannot create a forbidden third consecutive night', () => {
@@ -657,7 +661,7 @@ test('B5: the conflict warning uses the Session 2 structured model, not string a
   assert.equal(warning.metadata?.blockedBy, 'HARD_OFF');
 });
 
-test('B5: conflicts never silently override — the hard constraint wins and is reported', () => {
+test('B5: nonconflicting hard OFF and shift requests both retain their legality', () => {
   const personnel = [
     makePerson('sup', { position: 'supervisor' }),
     makePerson('stf', { position: 'staff' }),
@@ -665,10 +669,11 @@ test('B5: conflicts never silently override — the hard constraint wins and is 
   ];
   const requests = [
     makeRequest('g1', { id: 'off', requestType: 'OFF', isEssential: false, offHardness: 'hard', scope: 'custom_days', selectedDays: [4] }),
-    makeRequest('g1', { id: 'shift', requestType: 'shift', preferredShift: 'M', isEssential: false, scope: 'custom_days', selectedDays: [4] }),
+    makeRequest('g1', { id: 'shift', requestType: 'shift', preferredShift: 'M', isEssential: false, scope: 'custom_days', selectedDays: [5] }),
   ];
   const s = solved(personnel, requests, makeSettings());
-  assert.equal(s.assignments.g1?.[4], 'OFF', 'the hard OFF wins the conflict');
+  assert.equal(s.assignments.g1?.[4], 'OFF');
+  assert.equal(s.assignments.g1?.[5], 'M');
   assert.ok(
     !s.warnings.some(w => w.startsWith('Mismatched Request:') && w.includes('درخواست OFF')),
     'the hard OFF must not be reported as violated — it was honored'

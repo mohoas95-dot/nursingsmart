@@ -131,7 +131,7 @@ test('pattern scope: range applies only inside the range', () => {
   const nurse = makePerson('range-worker');
   const pattern = makeRequest('range-worker', {
     id: 'p1', requestType: 'pattern', patternSteps: ['M'], isEssential: false,
-    scope: 'range', startDate: `${YEAR}/${MONTH}/03`, endDate: `${YEAR}/${MONTH}/05`,
+    scope: 'range', startDate: `${YEAR}/${String(MONTH).padStart(2, '0')}/03`, endDate: `${YEAR}/${String(MONTH).padStart(2, '0')}/05`,
   });
   const solved = solveNursingSchedule(YEAR, MONTH, [nurse], [pattern], settingsWithDemand(), {}, undefined, null);
   assert.equal(solved.assignments[nurse.id][3], 'M');
@@ -486,7 +486,12 @@ test('routine: scenario scoring prefers the routine-compatible candidate when eq
 test('routine: ranking tiebreaker selects the routine-compatible scenario when all else is equal', () => {
   // Routine compatibility stays a late, non-hard preference (Phase 2 policy).
   const base = {
-    requestSatisfactionPercent: 100,
+    requestQuality: {
+      version: 'request-quality/1' as const,
+      essentialFulfillment: { numerator: BigInt(1), denominator: BigInt(1) },
+      normalFulfillment: { numerator: BigInt(1), denominator: BigInt(1) },
+      requestSatisfactionPercent: 100,
+    },
     operationalEfficiencyScore: 90,
     fairnessScore: 90,
     warningDefectCount: 0,

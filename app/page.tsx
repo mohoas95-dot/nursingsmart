@@ -78,6 +78,20 @@ import {
   type ScoredSchedule,
 } from '../lib/scoring';
 import { evaluateScenarioQuality } from '../domain/scenarios/scenario-quality';
+import { canonicalizeRequestDaysForMonth } from '../domain/requests/request-canonicalizer';
+import { buildRequestSetFingerprint } from '../domain/requests/request-set-fingerprint';
+import { buildRequestOutcomeLedger } from '../domain/requests/request-outcome-ledger';
+import { buildRequestQualityFromLedger } from '../domain/requests/request-quality';
+import { replaceRequestWarningsFromLedger } from '../domain/requests/request-warning-projection';
+import { warningMessages } from '../domain/warnings/schedule-warning';
+import {
+  deserializeMonthlyRequestArtifacts,
+  serializeMonthlyRequestArtifacts,
+} from '../domain/requests/request-persistence';
+import {
+  hydrateScenarioObjective,
+  serializeCurrentScenarioForPersistence,
+} from '../domain/scenarios/objective-persistence';
 import { LEGACY_SCENARIO_OBJECTIVE_VERSION } from '../domain/scenarios/objective';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
 import {
@@ -784,19 +798,48 @@ export default function Home() {
     const activeWarnings = filterActiveWarnings(filteredGroup, combinedDismissed);
 
     if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
-      // سناریوهای ذخیره‌شده بازنویسی نمی‌شوند (بدون بازنویسی تاریخیِ امتیازها).
-      // فقط نسخهٔ تابع هدفشان صریح می‌شود: اگر پیش از فاز ۵ ذخیره شده‌اند،
-      // `objective` ندارند و با نسخهٔ legacy برچسب می‌خورند تا امتیازشان با
-      // معنای کانونی فاز ۵ اشتباه گرفته نشود.
+      const canonicalMonth = canonicalizeRequestDaysForMonth(requests, {
+        year: currentYear,
+        month: currentMonth,
+        calendarDays: generateJalaliMonthCalendar(
+          currentYear,
+          currentMonth,
+          customHolidays,
+          firstDayOfWeekIndex
+        ),
+        personnel,
+      });
+      const expectedFingerprint = buildRequestSetFingerprint(canonicalMonth);
+      const objectiveHydration = hydrateScenarioObjective(
+        rawScenario.objective,
+        rawScenario.objectiveVersion,
+        expectedFingerprint
+      );
+      let requestArtifacts: ReturnType<typeof deserializeMonthlyRequestArtifacts> = {};
+      if (objectiveHydration.status === 'CURRENT' || objectiveHydration.status === 'STALE') {
+        try {
+          requestArtifacts = deserializeMonthlyRequestArtifacts(rawSchedule as any);
+        } catch {
+          requestArtifacts = {};
+        }
+      }
+
+      // Versions 1/2 retain their historical payload and order. Version 3 is
+      // hydrated exactly; a fingerprint mismatch is marked STALE, never rescored.
       return {
         ...rawScenario,
-        objectiveVersion: rawScenario?.objectiveVersion
-          ?? (rawScenario?.objective ? undefined : LEGACY_SCENARIO_OBJECTIVE_VERSION),
+        objective: objectiveHydration.objective ?? rawScenario.objective,
+        objectiveVersion: objectiveHydration.objective?.version
+          ?? objectiveHydration.historicalVersion
+          ?? rawScenario.objectiveVersion
+          ?? LEGACY_SCENARIO_OBJECTIVE_VERSION,
+        requestQualityStatus: objectiveHydration.status,
         warnings: activeWarnings,
         relevantWarningCount: activeWarnings.length,
         relevantHardWarningCount: countHardConstraintWarnings(activeWarnings),
         schedule: {
           ...scenarioSchedule,
+          ...requestArtifacts,
           warnings: activeWarnings,
           dismissedWarnings: scenarioDismissed,
         },
@@ -1366,7 +1409,19 @@ export default function Home() {
     const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
     setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
 
-    const sched = deptInfo.schedules?.[hKey] || null;
+    const storedSchedule = deptInfo.schedules?.[hKey] || null;
+    let sched: MonthlySchedule | null = storedSchedule as MonthlySchedule | null;
+    if (storedSchedule?.requestQuality || storedSchedule?.requestOutcomeLedger) {
+      try {
+        sched = {
+          ...storedSchedule,
+          ...deserializeMonthlyRequestArtifacts(storedSchedule),
+        } as MonthlySchedule;
+      } catch {
+        // Malformed legacy/current artifacts remain readable but never become authority.
+        sched = { ...storedSchedule, requestQuality: undefined, requestOutcomeLedger: undefined } as MonthlySchedule;
+      }
+    }
     setSchedule(sched);
     if (sched) {
       // هشدارهای رفع‌شده نباید در حالتِ «نادیده‌گرفته‌شده» باقی بمانند؛ در غیر این‌صورت
@@ -1493,20 +1548,37 @@ export default function Home() {
     return next;
   };
 
+  const serializeScheduleArtifactsInDb = (source: AppDatabaseState): AppDatabaseState => ({
+    ...source,
+    deptData: Object.fromEntries(Object.entries(source.deptData).map(([departmentId, department]) => [
+      departmentId,
+      {
+        ...department,
+        schedules: Object.fromEntries(Object.entries(department.schedules || {}).map(([key, stored]) => [
+          key,
+          stored?.requestQuality && typeof stored.requestQuality.essentialFulfillment?.numerator === 'bigint'
+            ? { ...stored, ...serializeMonthlyRequestArtifacts(stored as any) }
+            : stored,
+        ])),
+      },
+    ])) as AppDatabaseState['deptData'],
+  });
+
   const saveDbState = async (
     updatedDb: AppDatabaseState,
     options: { showBusyOverlay?: boolean } = {}
   ) => {
     const { showBusyOverlay = true } = options;
+    const persistableDb = serializeScheduleArtifactsInDb(updatedDb);
     const baseDb = optimisticDbRef.current;
     if (!baseDb || storageWriteBlockedRef.current || storageLoadCountRef.current > 0) {
       throw new Error('ذخیره‌سازی هنگام بارگذاری یا پس از خطای هم‌زمانی متوقف است؛ صفحه را تازه‌سازی کنید.');
     }
 
-    const mutations = buildStorageMutations(baseDb, updatedDb);
-    optimisticDbRef.current = updatedDb;
-    setFullDbState(updatedDb);
-    syncLocalStateFromDb(updatedDb);
+    const mutations = buildStorageMutations(baseDb, persistableDb);
+    optimisticDbRef.current = persistableDb;
+    setFullDbState(persistableDb);
+    syncLocalStateFromDb(persistableDb);
 
     // پیشرفت واقعی ذخیره‌سازی = نسبت منابع نوشته‌شده به کل منابع تغییر‌یافته.
     const totalMutations = Math.max(1, mutations.length);
@@ -2460,7 +2532,31 @@ export default function Home() {
       monthlyDutyHoursRef.current
     );
 
-    const freshWarnings = verification.warnings;
+    const canonicalRequestMonth = canonicalizeRequestDaysForMonth(currentRequests, {
+      year: currentYear,
+      month: currentMonth,
+      calendarDays: generateJalaliMonthCalendar(
+        currentYear,
+        currentMonth,
+        currentHolidays,
+        currentFirstDay === -1 ? undefined : currentFirstDay
+      ),
+      personnel: currentPersonnel,
+    });
+    const requestSetFingerprint = buildRequestSetFingerprint(canonicalRequestMonth);
+    const requestOutcomeLedger = buildRequestOutcomeLedger({
+      canonicalMonth: canonicalRequestMonth,
+      assignments: effectiveAssignments,
+      provenance: schedule.requestResolutionProvenance,
+      requestSetFingerprint,
+    });
+    const requestQuality = buildRequestQualityFromLedger(requestOutcomeLedger);
+    const projectedWarnings = replaceRequestWarningsFromLedger(
+      verification.structuredWarnings,
+      requestOutcomeLedger,
+      new Map(currentPersonnel.map(person => [person.id, `${person.firstName} ${person.lastName}`]))
+    );
+    const freshWarnings = warningMessages(projectedWarnings);
     const currentWarnings = schedule.warnings || [];
 
     const freshKey = [...freshWarnings].sort().join('|||');
@@ -2469,13 +2565,18 @@ export default function Home() {
 
     const assignmentsActuallyChanged = reconciledAssignmentsKey !== JSON.stringify(schedule.assignments);
     const warningsActuallyChanged = freshKey !== currentKey;
+    const requestArtifactsActuallyChanged = JSON.stringify(serializeMonthlyRequestArtifacts({
+      requestOutcomeLedger,
+      requestQuality,
+      requestSetFingerprint,
+    })) !== JSON.stringify(serializeMonthlyRequestArtifacts(schedule));
 
-    if (!assignmentsActuallyChanged && !warningsActuallyChanged) {
+    if (!assignmentsActuallyChanged && !warningsActuallyChanged && !requestArtifactsActuallyChanged) {
       previousWarningsKeyRef.current = freshKey;
       return;
     }
 
-    if (!assignmentsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
+    if (!assignmentsActuallyChanged && !requestArtifactsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
     previousWarningsKeyRef.current = freshKey;
 
     isReevaluatingRef.current = true;
@@ -2485,6 +2586,9 @@ export default function Home() {
       assignments: effectiveAssignments,
       warnings: freshWarnings,
       shiftLeaders: verification.shiftLeaders,
+      requestOutcomeLedger,
+      requestQuality,
+      requestSetFingerprint,
       dismissedWarnings: pruneDismissedWarnings(freshWarnings, schedule.dismissedWarnings || []),
     };
 
@@ -2504,8 +2608,9 @@ export default function Home() {
           ...oldDept.schedules,
           [key]: {
             ...updatedSchedule,
+            ...serializeMonthlyRequestArtifacts(updatedSchedule),
             lockedRows: currentLocked,
-          },
+          } as any,
         },
       };
       void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
@@ -3218,8 +3323,16 @@ export default function Home() {
 
     const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
     const nextGroup = updater((monthScenarios[group] || null) as ScenarioWorkflowGroup | null);
+    const persistedNextGroup = nextGroup
+      ? {
+          ...nextGroup,
+          scenarios: nextGroup.scenarios.map(scenario =>
+            serializeCurrentScenarioForPersistence(scenario as any)
+          ),
+        }
+      : null;
     const updatedMonthScenarios = { ...monthScenarios } as any;
-    if (nextGroup) updatedMonthScenarios[group] = nextGroup;
+    if (persistedNextGroup) updatedMonthScenarios[group] = persistedNextGroup;
     else delete updatedMonthScenarios[group];
 
     const rawVotesMonth = (oldDept.scenarioVotes || {})[monthKey] as any;
@@ -3352,6 +3465,8 @@ export default function Home() {
         targetJobGroup: jobGroup,
         currentAssignments: currentAssignmentsForMerge as any,
         lockedRows: lockedRowsRef.current,
+        requestResolutionProvenance: schedule?.requestResolutionProvenance,
+
         // هر مرحلهٔ واقعی موتور، مرحلهٔ متناظر نوار پیشرفت را فعال می‌کند تا درصد
         // نمایش‌داده‌شده هرگز از پردازش واقعی جلو یا عقب نیفتد.
         // beginPhase خودش در برابر فراخوانی تکراری برای همان مرحله ایمن است

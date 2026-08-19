@@ -31,15 +31,20 @@
  * PURE: بدون وابستگی به React، Next.js یا I/O.
  */
 
+import { generateJalaliMonthCalendar } from '../../lib/jalali';
 import type { JobGroup, MonthlySchedule, Personnel, ShiftRequest, SystemSettings } from '../../lib/types';
 import {
-  calculateRequestSatisfactionPercent,
   countRoutineMismatches,
   evaluateScenarioSchedule,
   type ScenarioType,
   type ScoredSchedule,
 } from '../../lib/scoring';
-import type { ScheduleWarning } from '../warnings/schedule-warning';
+import { canonicalizeRequestDaysForMonth } from '../requests/request-canonicalizer';
+import { buildRequestOutcomeLedger } from '../requests/request-outcome-ledger';
+import { buildRequestQualityFromLedger } from '../requests/request-quality';
+import { buildRequestSetFingerprint } from '../requests/request-set-fingerprint';
+import { replaceRequestWarningsFromLedger } from '../requests/request-warning-projection';
+import { warningMessages, type ScheduleWarning } from '../warnings/schedule-warning';
 import {
   buildScenarioObjective,
   compareByObjective,
@@ -105,10 +110,54 @@ export interface CanonicalScenarioEvaluationInput {
 export function evaluateScenarioQuality(
   input: CanonicalScenarioEvaluationInput
 ): ScoredSchedule {
+  const canonicalMonth = canonicalizeRequestDaysForMonth(input.requests, {
+    year: input.year,
+    month: input.month,
+    calendarDays: generateJalaliMonthCalendar(
+      input.year,
+      input.month,
+      input.customHolidays,
+      input.firstDayOfWeekIndex
+    ),
+    personnel: input.personnelList,
+  });
+  const requestSetFingerprint = buildRequestSetFingerprint(canonicalMonth);
+  const requestOutcomeLedger = buildRequestOutcomeLedger({
+    canonicalMonth,
+    assignments: input.schedule.assignments,
+    provenance: input.schedule.requestResolutionProvenance,
+    requestSetFingerprint,
+  });
+  const requestQuality = buildRequestQualityFromLedger(requestOutcomeLedger);
+  const personnelNameById = new Map(
+    input.personnelList.map(person => [person.id, `${person.firstName} ${person.lastName}`])
+  );
+  const projectedStructuredWarnings = input.structuredWarnings
+    ? replaceRequestWarningsFromLedger(
+        input.structuredWarnings,
+        requestOutcomeLedger,
+        personnelNameById
+      )
+    : undefined;
+  // Legacy schedules persist only messages. Prefix filtering here removes the old
+  // presentation record; no semantic fact is reconstructed from its text.
+  const nonRequestMessages = input.structuredWarnings
+    ? warningMessages(projectedStructuredWarnings!.filter(warning => warning.code !== 'MISMATCHED_REQUEST'))
+    : input.schedule.warnings.filter(message => !message.startsWith('Mismatched Request:'));
+  const projectedRequestMessages = warningMessages(
+    replaceRequestWarningsFromLedger([], requestOutcomeLedger, personnelNameById)
+  );
+  const scheduleWithRequestQuality: MonthlySchedule = {
+    ...input.schedule,
+    warnings: [...nonRequestMessages, ...projectedRequestMessages],
+    requestOutcomeLedger,
+    requestQuality,
+    requestSetFingerprint: requestOutcomeLedger.requestSetFingerprint,
+  };
   const scored = evaluateScenarioSchedule({
     id: input.id,
     type: input.type,
-    schedule: input.schedule,
+    schedule: scheduleWithRequestQuality,
     personnelList: input.personnelList,
     requests: input.requests,
     settings: input.settings,
@@ -120,22 +169,13 @@ export function evaluateScenarioQuality(
     targetJobGroup: input.targetJobGroup,
   });
 
-  const requestSatisfactionPercent = calculateRequestSatisfactionPercent(
-    input.schedule,
-    input.personnelList,
-    input.requests,
-    input.year,
-    input.month,
-    input.customHolidays,
-    input.firstDayOfWeekIndex,
-    input.targetJobGroup
-  );
+  const requestSatisfactionPercent = requestQuality.requestSatisfactionPercent;
 
   const baselineComponents = evaluateBaselineObjective({
     baseline: input.baseline,
-    candidate: input.schedule,
-    warnings: input.schedule.warnings,
-    structuredWarnings: input.structuredWarnings,
+    candidate: scheduleWithRequestQuality,
+    warnings: scheduleWithRequestQuality.warnings,
+    structuredWarnings: projectedStructuredWarnings,
     targetPersonnelIds: input.targetPersonnelIds,
     totalDays: input.totalDays,
     lockedRows: input.lockedRows,
@@ -148,7 +188,8 @@ export function evaluateScenarioQuality(
       input.maxBaselineDifferencePercent ?? MAX_BASELINE_DIFFERENCE_PERCENT,
     minBaselineDifferencePercent:
       input.minBaselineDifferencePercent ?? MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
-    requestSatisfactionPercent,
+    requestQuality,
+    requestSetFingerprint,
     operationalEfficiencyScore: scored.metrics.operationalEfficiencyScore,
     fairnessScore: scored.metrics.fairnessScore,
     // مرجع یکتای نقص هشداری: از lib/scoring می‌آید، نه از یک شمارش موازی.
@@ -168,6 +209,7 @@ export function evaluateScenarioQuality(
     criticalWarningCount: baselineComponents.criticalWarningCount,
     objective,
     objectiveVersion: SCENARIO_OBJECTIVE_VERSION,
+    requestQualityStatus: 'CURRENT',
   };
 }
 
@@ -181,7 +223,7 @@ export function evaluateScenarioQuality(
  * چرا اینجا و نه داخل کامپوننت؟
  *   تا پیش از این، `ScenarioWorkspace` سناریوها را مستقلاً و بر اساس «درصد
  *   شباهت به مبنا» مرتب می‌کرد و رتبهٔ نمایشی را از همان می‌ساخت. این یک
- *   «مرجع دومِ رتبه‌بندی» بود: موتور بر اساس درخواست→بهره‌وری→عدالت→نقص→
+ *   «مرجع دومِ رتبه‌بندی» بود: موتور بر اساس درخواست ضروری→درخواست عادی→بهره‌وری→عدالت→نقص→
  *   روتین→شباهت انتخاب می‌کرد، اما کاربر رتبه‌ای شباهت‌محور می‌دید و این دو
  *   می‌توانستند دقیقاً برعکس هم باشند. رتبه‌بندی نمایشی اکنون از همین تابع
  *   خالص و قابل‌تست می‌آید تا با مسیر انتخابِ موتور یکی بماند.
@@ -199,11 +241,21 @@ export function evaluateScenarioQuality(
  *
  * @pure
  */
-export function orderScenariosByObjective<T extends Pick<ScoredSchedule, 'objective'>>(
-  scenarios: ReadonlyArray<T>
-): T[] {
-  const everyScenarioHasObjective = scenarios.every(scenario => !!scenario.objective);
-  if (!everyScenarioHasObjective) return [...scenarios];
+export function orderScenariosByObjective<
+  T extends {
+    objective?: ScenarioObjective;
+    objectiveVersion?: string;
+    requestQualityStatus?: ScoredSchedule['requestQualityStatus'];
+  }
+>(scenarios: ReadonlyArray<T>): T[] {
+  const allCurrent = scenarios.every(scenario =>
+    scenario.objective?.version === SCENARIO_OBJECTIVE_VERSION
+    && (scenario.objectiveVersion === undefined || scenario.objectiveVersion === SCENARIO_OBJECTIVE_VERSION)
+    && (scenario.requestQualityStatus === undefined || scenario.requestQualityStatus === 'CURRENT')
+  );
+  if (!allCurrent) return [...scenarios];
+  const fingerprints = new Set(scenarios.map(scenario => scenario.objective!.requestSetFingerprint));
+  if (fingerprints.size > 1) return [...scenarios];
   return [...scenarios].sort((left, right) =>
     compareByObjective(left.objective!.quality, right.objective!.quality)
   );

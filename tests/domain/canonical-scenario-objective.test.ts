@@ -42,15 +42,23 @@ import { CAL_MONTH, CAL_YEAR, makePerson, makeRequest, makeSettings } from '../f
 
 const TOTAL_DAYS = 31;
 
-function quality(overrides: Partial<ScenarioObjectiveQuality>): ScenarioObjectiveQuality {
+function quality(
+  overrides: Partial<ScenarioObjectiveQuality> & { requestSatisfactionPercent?: number }
+): ScenarioObjectiveQuality {
+  const { requestSatisfactionPercent = 80, ...remaining } = overrides;
   return {
-    requestSatisfactionPercent: 80,
+    requestQuality: {
+      version: 'request-quality/1',
+      essentialFulfillment: { numerator: BigInt(requestSatisfactionPercent), denominator: BigInt(100) },
+      normalFulfillment: { numerator: BigInt(requestSatisfactionPercent), denominator: BigInt(100) },
+      requestSatisfactionPercent,
+    },
     operationalEfficiencyScore: 80,
     fairnessScore: 80,
     warningDefectCount: 0,
     routineMismatchCount: 0,
     baselineSimilarityPercent: 80,
-    ...overrides,
+    ...remaining,
   };
 }
 
@@ -162,7 +170,7 @@ test('3b. productivity is measured without warning penalties mixed in', () => {
   const assignments = { [nurse.id]: { 1: 'M' as ShiftType }, [other.id]: { 1: 'OFF' as ShiftType } };
   const clean = evaluate(scheduleOf(assignments), scheduleOf(assignments), [nurse, other], [], settings);
   const withDefect = evaluate(
-    scheduleOf(assignments, ['Mismatched Request: نمونهٔ تخلف غیربحرانی']),
+    scheduleOf(assignments, ['Leave Continuity: نمونهٔ تخلف غیربحرانی']),
     scheduleOf(assignments), [nurse, other], [], settings
   );
 
@@ -190,7 +198,7 @@ test('4. the noncritical defect count is authoritative and excludes critical war
 
   const evaluated = evaluate(
     scheduleOf(assignments, [
-      'Mismatched Request: تخلف غیربحرانی ۱',
+      'Leave Continuity: تخلف غیربحرانی ۱',
       'Mandatory Rest: یادآور مرزی',
       'Coverage Shortage: کمبود نیرو (پرستار) در روز 9 شیفت N',
     ]),
@@ -233,7 +241,7 @@ test('10. informational auto-fix notices do not affect objective quality', () =>
 
 test('6. a candidate with a remaining critical violation is rejected regardless of quality', () => {
   const perfectQuality = {
-    requestSatisfactionPercent: 100,
+    requestQuality: quality({ requestSatisfactionPercent: 100 }).requestQuality,
     operationalEfficiencyScore: 100,
     fairnessScore: 100,
     warningDefectCount: 0,
@@ -250,6 +258,7 @@ test('6. a candidate with a remaining critical violation is rejected regardless 
     },
     maxBaselineDifferencePercent: MAX_BASELINE_DIFFERENCE_PERCENT,
     minBaselineDifferencePercent: MIN_DIFFERENCE_FROM_BASELINE_PERCENT,
+    requestSetFingerprint: 'sha256:test',
     ...perfectQuality,
   });
   assert.equal(isScenarioAcceptable(objective.gates), false);

@@ -14,6 +14,8 @@
  * PURE: بدون وابستگی به React، Next.js یا I/O.
  */
 
+import { compareExactRationalDescending } from '../math/exact-rational';
+import type { RequestQuality } from '../requests/request-domain';
 import type { JobGroup, MonthlySchedule, Personnel, ShiftRequest, ShiftType } from '../../lib/types';
 import {
   countHardConstraintWarnings,
@@ -250,13 +252,15 @@ export interface ScenarioObjectiveInput {
   maxBaselineDifferencePercent: number;
   /** حداقل فاصلهٔ لازم از مبنا (٪) — همان آستانهٔ پذیرش موجود. */
   minBaselineDifferencePercent: number;
-  /** Tier 3 — درصد رضایت درخواست‌ها. */
-  requestSatisfactionPercent: number;
-  /** Tier 4 — بهره‌وری عملیاتی خالص (بدون جریمهٔ هشدار). */
+  /** Tiers 1–2 — authoritative exact Essential/Normal fulfillment. */
+  requestQuality: RequestQuality;
+  /** SHA-256 identity of the request set under which quality was evaluated. */
+  requestSetFingerprint: string;
+  /** Tier 3 — بهره‌وری عملیاتی خالص (بدون جریمهٔ هشدار). */
   operationalEfficiencyScore: number;
-  /** Tier 5 — امتیاز عدالت. */
+  /** Tier 4 — امتیاز عدالت. */
   fairnessScore: number;
-  /** Tier 6 — تعداد نقص هشداری غیربحرانی (مرجع یکتا). */
+  /** Tier 5 — تعداد نقص هشداری غیربحرانی (مرجع یکتا). */
   warningDefectCount: number;
   /** Tier 6 — ناسازگاری روتین. */
   routineMismatchCount: number;
@@ -271,6 +275,7 @@ export function buildScenarioObjective(input: ScenarioObjectiveInput): ScenarioO
   const difference = input.baselineComponents.baselineDifferencePercent;
   return {
     version: SCENARIO_OBJECTIVE_VERSION,
+    requestSetFingerprint: input.requestSetFingerprint,
     gates: {
       criticalResolved: input.baselineComponents.criticalResolved,
       criticalWarningCount: input.baselineComponents.criticalWarningCount,
@@ -279,7 +284,7 @@ export function buildScenarioObjective(input: ScenarioObjectiveInput): ScenarioO
       meetsMinBaselineDifference: difference >= input.minBaselineDifferencePercent,
     },
     quality: {
-      requestSatisfactionPercent: input.requestSatisfactionPercent,
+      requestQuality: input.requestQuality,
       operationalEfficiencyScore: input.operationalEfficiencyScore,
       fairnessScore: input.fairnessScore,
       warningDefectCount: input.warningDefectCount,
@@ -377,7 +382,7 @@ export function areScenariosDistinctEnough(
 //   ۲) رتبه‌بندی واژه‌نگاشتی    → `ScenarioObjectiveQuality` / `compareByObjective`
 //
 // چرا واژه‌نگاشتی (lexicographic) و نه وزن‌دار؟
-//   معیارهای موجود (درصد رضایت درخواست، درصد بهره‌وری، درصد عدالت، شمارش نقص،
+//   معیارهای موجود (کسرهای دقیق درخواست، درصد بهره‌وری، درصد عدالت، شمارش نقص،
 //   درصد شباهت) واحدِ مشترک ندارند و هیچ نرخ تبدیلِ مستندی میان آن‌ها در سیاست‌های
 //   تأییدشدهٔ فازهای ۱ تا ۴ وجود ندارد. ساختن وزن برای رسیدن به یک عدد اسکالر،
 //   «اختراع سیاست محصول» بود؛ پس ترتیب اولویت صریح پیاده شده است.
@@ -388,13 +393,14 @@ export function areScenariosDistinctEnough(
  * قابل تفکیک باشند. هیچ تغییری در schema لازم نیست (payload سناریو در
  * lib/storageSchemas به‌صورت `z.any()` ذخیره می‌شود).
  */
-export const SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/2';
+export const SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/3-request-quality';
 
-/** نسخهٔ ضمنیِ سناریوهای ذخیره‌شدهٔ پیش از فاز ۵ (شباهت‌محور). */
-export const LEGACY_SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/1-similarity-first';
+/** Historical versions retain their original persisted meaning. */
+export const PHASE_5_SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/2' as const;
+export const LEGACY_SCENARIO_OBJECTIVE_VERSION = 'scenario-objective/1-similarity-first' as const;
 
 /**
- * آستانهٔ «معناداری» برای مقایسهٔ لایه‌های درصدیِ پیوسته (درخواست/بهره‌وری/عدالت).
+ * آستانهٔ «معناداری» برای مقایسهٔ لایه‌های درصدیِ پیوسته (بهره‌وری/عدالت).
  *
  * این یک وزن نیست و هیچ معیاری را به معیار دیگر تبدیل نمی‌کند؛ فقط تعیین می‌کند
  * که یک اختلافِ درصدی چه زمانی «واقعی» است و چه زمانی نوسانِ گردکردن (همهٔ این
@@ -488,24 +494,26 @@ export function isScenarioAcceptable(gates: ScenarioObjectiveGates): boolean {
  *       رقیب برای یک پدیده وجود نداشته باشد. سیاست فاز ۴ (`CONSECUTIVE_OFFS`)
  *       دست‌نخورده است.
  *
- *   Tier 3 — رضایت درخواست‌ها (نزولی)
- *   Tier 4 — بهره‌وری/کیفیت عملیاتی (نزولی)
- *   Tier 5 — عدالت (نزولی)
- *   Tier 6 — نقص‌های هشداری غیربحرانی (صعودی) + ناسازگاری روتین (صعودی)
+ *   Tier 1 — تحقق دقیق درخواست‌های ضروری (نزولی)
+ *   Tier 2 — تحقق دقیق درخواست‌های عادی (نزولی)
+ *   Tier 3 — بهره‌وری/کیفیت عملیاتی (نزولی)
+ *   Tier 4 — عدالت (نزولی)
+ *   Tier 5 — نقص‌های هشداری غیربحرانی (صعودی)
+ *   Tier 6 — ناسازگاری روتین (صعودی)
  *   Tier 7 — شباهت به مبنا (نزولی) — ترجیح پایانی، نه معیار نخست
  */
 export interface ScenarioObjectiveQuality {
-  /** Tier 3: درصد رعایت درخواست‌های پرسنل (سازوکار موجودِ ارزیابی درخواست). */
-  requestSatisfactionPercent: number;
+  /** Tiers 1–2: exact Essential fulfillment, then exact Normal fulfillment. */
+  requestQuality: RequestQuality;
   /**
-   * Tier 4: کیفیت عملیاتی خالص — فقط انحراف از ساعت موظفی، بدون جریمهٔ هشدار.
+   * Tier 3: کیفیت عملیاتی خالص — فقط انحراف از ساعت موظفی، بدون جریمهٔ هشدار.
    * (تا فاز ۴، `optimizationScore` این دو را با هم مخلوط می‌کرد.)
    */
   operationalEfficiencyScore: number;
-  /** Tier 5: امتیاز عدالت موجود (ساعت/شیفت/تعطیلات/انحراف موظفی). */
+  /** Tier 4: امتیاز عدالت موجود (ساعت/شیفت/تعطیلات/انحراف موظفی). */
   fairnessScore: number;
   /**
-   * Tier 6: تعداد نقص‌های هشداریِ غیربحرانی — مرجع یکتا.
+   * Tier 5: تعداد نقص‌های هشداریِ غیربحرانی — مرجع یکتا.
    * هشدارهای صرفاً اطلاع‌رسانی هرگز در آن شمرده نمی‌شوند و هشدارهای بحرانی هم
    * نه (آن‌ها دروازهٔ سخت‌اند و نباید دوبار جریمه شوند).
    */
@@ -522,6 +530,7 @@ export interface ScenarioObjectiveQuality {
  */
 export interface ScenarioObjective {
   version: typeof SCENARIO_OBJECTIVE_VERSION;
+  requestSetFingerprint: string;
   gates: ScenarioObjectiveGates;
   quality: ScenarioObjectiveQuality;
 }
@@ -543,24 +552,33 @@ export function compareByObjective(
   left: ScenarioObjectiveQuality,
   right: ScenarioObjectiveQuality
 ): number {
-  // لایه‌های درصدیِ پیوسته با «سطل معناداری» مقایسه می‌شوند تا هم تحملِ ۰٫۵
-  // درصدی حفظ شود و هم مقایسه‌کننده متعدی و قطعی بماند (نه اپسیلونِ دوتایی).
+  // Only the existing productivity/fairness percentage tiers use material
+  // buckets. RequestQuality above them is always exact rational arithmetic.
 
-  // Tier 3 — رضایت درخواست‌ها
-  const requestBucket = materialBucket(right.requestSatisfactionPercent)
-    - materialBucket(left.requestSatisfactionPercent);
-  if (requestBucket !== 0) return requestBucket;
+  // Tier 1 — Essential fulfillment (exact rational; no buckets/floats).
+  const essentialComparison = compareExactRationalDescending(
+    left.requestQuality.essentialFulfillment,
+    right.requestQuality.essentialFulfillment
+  );
+  if (essentialComparison !== 0) return essentialComparison;
 
-  // Tier 4 — بهره‌وری عملیاتی
+  // Tier 2 — Normal fulfillment (exact rational; no buckets/floats).
+  const normalComparison = compareExactRationalDescending(
+    left.requestQuality.normalFulfillment,
+    right.requestQuality.normalFulfillment
+  );
+  if (normalComparison !== 0) return normalComparison;
+
+  // Tier 3 — بهره‌وری عملیاتی
   const efficiencyBucket = materialBucket(right.operationalEfficiencyScore)
     - materialBucket(left.operationalEfficiencyScore);
   if (efficiencyBucket !== 0) return efficiencyBucket;
 
-  // Tier 5 — عدالت
+  // Tier 4 — عدالت
   const fairnessBucket = materialBucket(right.fairnessScore) - materialBucket(left.fairnessScore);
   if (fairnessBucket !== 0) return fairnessBucket;
 
-  // Tier 6 — نقص‌های هشداری غیربحرانی، سپس ناسازگاری روتین
+  // Tiers 5–6 — نقص‌های هشداری غیربحرانی، سپس ناسازگاری روتین
   // (شمارش‌های صحیح‌اند؛ تحملِ درصدی برایشان بی‌معناست.)
   if (left.warningDefectCount !== right.warningDefectCount) {
     return left.warningDefectCount - right.warningDefectCount;
