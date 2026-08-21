@@ -16,8 +16,17 @@ This repository contains everything you need to run the app locally.
 3. Configure the environment-specific S3 variables described in [`docs/STORAGE_ARCHITECTURE.md`](docs/STORAGE_ARCHITECTURE.md).
 4. Run the S3 conditional-write compatibility test:
    `npm run storage:test-conditional`
-5. Run the app:
+5. Inspect the S3 bucket / recover legacy data (no console access needed):
+   - `STORAGE_ENV=<env> npm run storage:check` — read-only health report of the bucket
+   - `STORAGE_ENV=<env> npm run storage:migrate:s3` — migrate a legacy whole-state
+     snapshot found inside the bucket into granular documents
+6. Run the app:
    `npm run dev`
+
+> اگر بعد از ورود صفحه خالی است (پرسنل لود نمی‌شود): بنر قرمز بالای داشبورد
+> علت را نشان می‌دهد؛ `STORAGE_ENV=<env> npm run storage:check` جزئیات سطل را
+> چاپ می‌کند. داده‌های نوشته‌شده توسط نسخه‌های قدیمی به‌صورت خودکار و امن
+> (create-only) قابل خواندن/مهاجرت هستند — بدون دست‌زدن در کنسول S3.
 
 ## Storage architecture
 

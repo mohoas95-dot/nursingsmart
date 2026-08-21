@@ -11,13 +11,16 @@
     "clean": "next clean",
     "storage:test-conditional": "tsx scripts/test-s3-conditional-writes.ts",
     "storage:migrate": "tsx scripts/migrate-granular-storage.ts",
+    "storage:migrate:s3": "tsx scripts/migrate-legacy-from-s3.ts",
+    "storage:check": "tsx scripts/check-storage.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
     "db:seed": "prisma db seed",
     "test": "tsx --test \"tests/**/*.test.ts\"",
     "test:auth": "tsx --test tests/auth-validation.test.ts",
-    "test:storage": "tsx --test tests/storage-conflict-resolution.test.ts"
+    "test:storage": "tsx --test tests/storage-conflict-resolution.test.ts",
+    "test:storage-route": "node --import tsx --experimental-test-module-mocks --test tests/storage-route-failure-modes.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",

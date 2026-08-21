@@ -78,10 +78,41 @@ Migration is create-only and writes `departments/index.json` last. It never read
 5. Repeat for staging, then production, using separate buckets and credentials.
 6. Retain the legacy object read-only until the retention period expires.
 
+## Legacy compatibility (data written by older versions)
+
+Older releases stored documents with fewer/different fields (personnel without
+`employmentType`/`position`, requests without `scope`, unknown extra keys,
+numeric strings, …) and, even earlier, kept the whole state in a single JSON
+object. The current strict schemas alone would reject that data with 503 —
+producing the "logged in but empty dashboard" symptom. Two mechanisms keep old
+data readable without touching the bucket console:
+
+1. **Lenient read + normalization** (`lib/legacy-compat.ts`): `readDocument`
+   first validates strictly; on failure it strips unknown keys, fills missing
+   new fields with conservative defaults, and coerces common type drift. The
+   normalized document is served and reported in `legacyNormalizedResources`
+   (UI shows a mild notice). Writes stay strict, so the next save upgrades the
+   document to the current format in place.
+2. **In-bucket legacy snapshot recovery** (`lib/legacy-recovery.ts`): when
+   `departments/index.json` is missing, `GET /api/storage` scans the bucket for
+   a legacy whole-state JSON object, converts it in place to granular documents
+   (create-only writes, index published last) and retries the read once. No
+   ArvanCloud/console access is required. This is idempotent and safe under
+   concurrent instances (create-only + conflict-skip).
+
+Diagnostics and manual migration:
+
+```bash
+STORAGE_ENV=production npm run storage:check        # read-only inspection of the bucket
+STORAGE_ENV=production npm run storage:migrate:s3   # migrate legacy snapshot found inside the bucket
+STORAGE_ENV=production MIGRATION_SOURCE_FILE=./legacy.json npm run storage:migrate  # migrate from a local file
+```
+
 ## Failure policy
 
 * Missing, malformed, empty, inaccessible, or schema-invalid required objects result in HTTP 503.
-* There is no initial-state fallback and no automatic seed.
+* There is no fabricated-data fallback and no automatic seed: legacy reads only
+  succeed when a real document can be normalized from real stored data.
 * Three storage failures open a process-local circuit for 30 seconds. Responses include `Retry-After` while open.
 * `Cache-Control: no-store` prevents personnel snapshots from being cached by browsers/CDNs.
 * The obsolete whole-state POST endpoint returns HTTP 410.
