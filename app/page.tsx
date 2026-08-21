@@ -2942,7 +2942,7 @@ export default function Home() {
 
   const parseNumberInput = (val: string): any => val === '' ? '' : Number(val);
 
-  const normalizeSettings = (s?: SystemSettings | any): SystemSettings => {
+  function normalizeSettings(s?: SystemSettings | any): SystemSettings {
     if (!s) return INITIAL_SETTINGS;
     const dh = s.dutyHours || {};
     const wd = s.demand?.weekday || {};
@@ -2979,7 +2979,7 @@ export default function Home() {
         },
       },
     };
-  };
+  }
 
   const saveState = async (
     updatedP: Personnel[],
