@@ -12,7 +12,9 @@ import {
   writeResource,
   readResourceIfExists,
   writeResourceResolvingConflict,
+  type DatabaseReadResult,
 } from '../../../lib/s3Storage';
+import { migrateLegacySnapshotInPlace } from '../../../lib/legacy-recovery';
 import { StorageResourceSchema, type StorageResource } from '../../../lib/storageSchemas';
 import {
   AuthenticationError,
@@ -143,10 +145,32 @@ export async function GET(req: NextRequest) {
     }
 
     const { bucket, environment } = getS3Client();
-    const result = await readDatabaseState({
+    const readOptions = {
       ...(actor.role === 'ADMIN' ? {} : { departmentIds: [actor.departmentId!] }),
       ...(monthKeys ? { monthKeys } : {}),
-    });
+    };
+
+    let result: DatabaseReadResult;
+    try {
+      result = await readDatabaseState(readOptions);
+    } catch (error) {
+      // ── بازیابی خودکار از snapshot قدیمی ─────────────────────────────────
+      // اگر اسناد دانه‌ای هنوز ساخته نشده باشند (استقرار جدید روی سطل نسخهٔ
+      // قدیمی)، snapshot تک‌فایلهٔ داخل همان سطل پیدا و درجا مهاجرت می‌شود؛
+      // سپس یک بار دیگر خواندن عادی انجام می‌شود. اگر مهاجرتی ممکن نبود،
+      // همان خطای اصلی برگردانده می‌شود (سیاست شکستِ بسته حفظ می‌شود).
+      if (!(error instanceof StorageUnavailableError)) throw error;
+      let outcome: Awaited<ReturnType<typeof migrateLegacySnapshotInPlace>>;
+      try {
+        outcome = await migrateLegacySnapshotInPlace();
+      } catch (recoveryError) {
+        console.error('[storage] بازیابی snapshot قدیمی ناموفق بود:', recoveryError);
+        throw error;
+      }
+      if (outcome.status !== 'migrated') throw error;
+      result = await readDatabaseState(readOptions);
+    }
+
     return noStoreJson({
       success: true,
       isConfigured: true,
@@ -157,6 +181,11 @@ export async function GET(req: NextRequest) {
       versions: result.versions,
       availableMonths: result.availableMonths,
       loadedMonths: result.loadedMonths,
+      // اسنادی که با قالب قدیمی خوانده و نرمال‌سازی شدند؛ UI یک اطلاع‌رسانی
+      // ملایم نشان می‌دهد (ذخیرهٔ بعدی خودش آن‌ها را ارتقا می‌دهد).
+      ...(result.legacyNormalizedResources?.length
+        ? { legacyNormalizedResources: result.legacyNormalizedResources }
+        : {}),
     });
   } catch (error) {
     return errorResponse(error);

@@ -21,6 +21,7 @@ import {
   schemaForResource,
   type AppDatabaseState,
 } from './storageSchemas';
+import { normalizeDocumentFor } from './legacy-compat';
 
 export type { AppDatabaseState } from './storageSchemas';
 
@@ -204,7 +205,19 @@ export function resourceObjectKey(resource: StorageResource): string {
   }
 }
 
-async function readDocument<T>(resource: StorageResource, schema: ZodType<T>): Promise<{ data: T; etag: string }> {
+/**
+ * خواندن یک سند با پشتیبانی از قالب‌های قدیمی.
+ *
+ * ابتدا اعتبارسنجی سخت‌گیرانه انجام می‌شود؛ اگر سندِ موجود در سطل با اسکیمای
+ * فعلی ناسازگار بود (فیلدهای جدیدِ نسخه‌های بعد، کلیدهای ناشناخته و…)، یک بار
+ * نرمال‌سازی legacy امتحان می‌شود. نرمال‌سازی فقط «خواندن» را سازگار می‌کند؛
+ * نوشتن همچنان سخت‌گیرانه است، پس ذخیرهٔ بعدی خودش سند را به قالب جدید ارتقا
+ * می‌دهد. اگر هر دو شکست بخورند، همان خطای قبلی (۵۰۳) برمی‌گردد.
+ */
+async function readDocument<T>(
+  resource: StorageResource,
+  schema: ZodType<T>,
+): Promise<{ data: T; etag: string; legacyNormalized?: boolean }> {
   beforeStorageCall();
   const { client, bucket } = getS3Client();
   try {
@@ -219,7 +232,18 @@ async function readDocument<T>(resource: StorageResource, schema: ZodType<T>): P
     const raw = await response.Body.transformToString();
     const json: unknown = JSON.parse(raw);
     const parsed = schema.safeParse(json);
-    if (!parsed.success) throw new StorageValidationError(parsed.error.issues);
+    if (!parsed.success) {
+      // ── سازگاری با دادهٔ قدیمی ──
+      const normalized = normalizeDocumentFor(resource, json);
+      if (!normalized.ok) throw new StorageValidationError(parsed.error.issues);
+      const reparsed = schema.safeParse(normalized.data);
+      if (!reparsed.success) throw new StorageValidationError(reparsed.error.issues);
+      if (normalized.notes.length > 0) {
+        console.warn(`[storage] ${resourceVersionId(resource)} به قالب جدید نرمال‌سازی شد:`, normalized.notes);
+      }
+      recordStorageSuccess();
+      return { data: reparsed.data, etag: response.ETag, legacyNormalized: true };
+    }
 
     recordStorageSuccess();
     return { data: parsed.data, etag: response.ETag };
@@ -272,6 +296,12 @@ export interface DatabaseReadResult {
   availableMonths: Record<string, string[]>;
   /** ماه‌هایی که واقعاً در این پاسخ بارگذاری شده‌اند، به تفکیک بخش. */
   loadedMonths: Record<string, string[]>;
+  /**
+   * اسنادی که با قالب قدیمی (پیش از اسکیمای فعلی) خوانده و نرمال‌سازی شده‌اند.
+   * کلاینت می‌تواند به کاربر اطلاع دهد که داده با موفقیت بارگذاری شده و ذخیرهٔ
+   * بعدی آن را به قالب جدید ارتقا می‌دهد.
+   */
+  legacyNormalizedResources?: string[];
 }
 
 export interface ReadDatabaseOptions {
@@ -288,15 +318,27 @@ export interface ReadDatabaseOptions {
   monthKeys?: string[];
 }
 
-async function readDepartmentIndexOptional(): Promise<{ data: Array<{ id: string; name: string; username?: string; password?: string }>; etag: string } | null> {
+export async function readDepartmentIndexOptional(): Promise<{ data: Array<{ id: string; name: string; username?: string; password?: string }>; etag: string } | null> {
   beforeStorageCall();
   const resource = { type: 'departments' } as const;
   const { client, bucket } = getS3Client();
   try {
     const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: resourceObjectKey(resource) }));
     if (!response.Body || !response.ETag) throw new Error('S3 response is missing Body or ETag');
-    const parsed = DepartmentsSchema.safeParse(JSON.parse(await response.Body.transformToString()));
-    if (!parsed.success) throw new StorageValidationError(parsed.error.issues);
+    const json: unknown = JSON.parse(await response.Body.transformToString());
+    const parsed = DepartmentsSchema.safeParse(json);
+    if (!parsed.success) {
+      // سازگاری با قالب قدیمی فهرست بخش‌ها (کلیدهای اضافه/ناشناخته).
+      const normalized = normalizeDocumentFor(resource, json);
+      if (normalized.ok) {
+        const reparsed = DepartmentsSchema.safeParse(normalized.data);
+        if (reparsed.success) {
+          recordStorageSuccess();
+          return { data: reparsed.data, etag: response.ETag };
+        }
+      }
+      throw new StorageValidationError(parsed.error.issues);
+    }
     recordStorageSuccess();
     return { data: parsed.data, etag: response.ETag };
   } catch (error) {
@@ -433,6 +475,7 @@ export async function readDatabaseState(options?: ReadDatabaseOptions): Promise<
   const versions: Record<string, string> = {};
   const availableMonths: Record<string, string[]> = {};
   const loadedMonths: Record<string, string[]> = {};
+  const legacyNormalizedResources: string[] = [];
   const requestedMonths = options?.monthKeys ? new Set(options.monthKeys) : null;
   const indexResource = { type: 'departments' } as const;
   const index = await readDocument(indexResource, DepartmentsSchema);
@@ -481,6 +524,11 @@ export async function readDatabaseState(options?: ReadDatabaseOptions): Promise<
     versions[resourceVersionId(settingsResource)] = settings.etag;
     versions[resourceVersionId(holidaysResource)] = holidays.etag;
     versions[resourceVersionId(firstDayResource)] = firstDayOfWeek.etag;
+    if (personnel.legacyNormalized) legacyNormalizedResources.push(resourceVersionId(personnelResource));
+    if (requests.legacyNormalized) legacyNormalizedResources.push(resourceVersionId(requestsResource));
+    if (settings.legacyNormalized) legacyNormalizedResources.push(resourceVersionId(settingsResource));
+    if (holidays.legacyNormalized) legacyNormalizedResources.push(resourceVersionId(holidaysResource));
+    if (firstDayOfWeek.legacyNormalized) legacyNormalizedResources.push(resourceVersionId(firstDayResource));
 
     // activeScenarios and scenarioVotes are optional granular docs — may not exist for old departments; treat missing as undefined so first write uses If-None-Match
     let activeScenariosData: any = undefined;
@@ -520,6 +568,7 @@ export async function readDatabaseState(options?: ReadDatabaseOptions): Promise<
         throw new StorageUnavailableError(`Schedule key/content mismatch for ${departmentId}/${monthKey}`);
       }
       versions[resourceVersionId(resource)] = schedule.etag;
+      if (schedule.legacyNormalized) legacyNormalizedResources.push(resourceVersionId(resource));
       return [monthKey, schedule.data] as const;
     }));
 
@@ -544,7 +593,14 @@ export async function readDatabaseState(options?: ReadDatabaseOptions): Promise<
       cause: new StorageValidationError(state.error.issues),
     });
   }
-  return { state: state.data, versions, source: 's3-granular', availableMonths, loadedMonths };
+  return {
+    state: state.data,
+    versions,
+    source: 's3-granular',
+    availableMonths,
+    loadedMonths,
+    ...(legacyNormalizedResources.length > 0 ? { legacyNormalizedResources } : {}),
+  };
 }
 
 export async function writeResource(
@@ -759,4 +815,13 @@ export function getCircuitBreakerStatus() {
       ? Math.max(0, CIRCUIT_RESET_TIMEOUT_MS - (Date.now() - circuit.openedAt))
       : 0,
   };
+}
+
+/**
+ * فقط برای تست‌ها: بستن مجدد مدارشکن. در محیط اجرا هرگز صدا زده نمی‌شود.
+ */
+export function __resetCircuitBreakerForTests() {
+  circuit.state = 'closed';
+  circuit.failures = 0;
+  circuit.openedAt = 0;
 }

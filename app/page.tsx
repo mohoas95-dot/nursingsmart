@@ -463,6 +463,22 @@ export default function Home() {
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [storageInfo, setStorageInfo] = useState<{ isConfigured: boolean; bucket: string; environment: string; source: string } | null>(null);
+  /**
+   * خطای بارگذاری اولیه از ذخیره‌سازی ابری.
+   *
+   * پیش‌تر خطای بارگذاری فقط در کنسول لاگ می‌شد و رابط کاربری «عادی ولی خالی»
+   * نشان می‌داد: کاربر وارد می‌شد ولی هیچ پرسنل/برنامه‌ای لود نمی‌شد و هیچ پیامی
+   * نمی‌دید. این state خطا را به کاربر نشان می‌دهد تا مشکل (مثلاً تنظیم‌نبودن
+   * S3 روی سرور) پنهان نماند.
+   */
+  const [storageLoadError, setStorageLoadError] = useState<{ message: string; code?: string; retryable?: boolean } | null>(null);
+  /** با هر افزایش، بارگذاری اولیه دوباره اجرا می‌شود (دکمهٔ «تلاش دوباره»). */
+  const [storageReloadToken, setStorageReloadToken] = useState(0);
+  /**
+   * اسنادی که با قالب قدیمی خوانده و نرمال‌سازی شدند. داده سالم بارگذاری شده؛
+   * ذخیرهٔ بعدی خودش آن‌ها را به قالب جدید ارتقا می‌دهد.
+   */
+  const [storageLegacyNotice, setStorageLegacyNotice] = useState<string[]>([]);
 
   // ETags are deliberately kept outside render state. Writes are serialized and a
   // failed/conflicting queue is blocked until a successful reload refreshes all ETags.
@@ -1809,7 +1825,12 @@ export default function Home() {
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success || !data.state || !data.versions) {
-          throw new Error(data.error || 'خواندن امن دیتابیس ناموفق بود.');
+          // کد و پرچم retryable از پاسخ API روی خطا نگهداری می‌شود تا در catch
+          // پیام دقیق‌تری به کاربر نمایش داده شود (مثلاً STORAGE_UNAVAILABLE).
+          const loadError = new Error(data.error || 'خواندن امن دیتابیس ناموفق بود.');
+          (loadError as { code?: string; retryable?: boolean }).code = data.code;
+          (loadError as { code?: string; retryable?: boolean }).retryable = data.retryable === true;
+          throw loadError;
         }
         if (generation !== storageLoadGenerationRef.current) return;
 
@@ -1843,6 +1864,13 @@ export default function Home() {
           environment: data.environment,
           source: data.source
         });
+        // بارگذاری موفق: هر خطای قبلی پاک می‌شود.
+        setStorageLoadError(null);
+        // اسنادی که با قالب قدیمی نرمال‌سازی شده‌اند (اطلاع‌رسانی ملایم؛ داده
+        // سالم است و ذخیرهٔ بعدی آن‌ها را به قالب جدید ارتقا می‌دهد).
+        setStorageLegacyNotice(
+          Array.isArray(data.legacyNormalizedResources) ? data.legacyNormalizedResources : [],
+        );
         setDepartments(updatedDb.departments);
 
         const requestedDeptId = selectedDepartmentId || 'sepehr';
@@ -1926,6 +1954,13 @@ export default function Home() {
         if (generation === storageLoadGenerationRef.current) {
           storageWriteBlockedRef.current = true;
           console.error("Error loading database from Iranian Object Storage S3:", err);
+          // شکست بارگذاری نباید بی‌صدا بماند: بدون این خط، کاربر «داشبورد خالی» می‌دید
+          // و هیچ‌جا نمی‌فهمید علت، نبودِ تنظیمات/دسترسی ذخیره‌سازی ابری است.
+          setStorageLoadError({
+            message: toErrorMessage(err),
+            code: (err as { code?: string } | null)?.code,
+            retryable: (err as { retryable?: boolean } | null)?.retryable === true,
+          });
         }
       } finally {
         storageLoadCountRef.current = Math.max(0, storageLoadCountRef.current - 1);
@@ -1940,7 +1975,7 @@ export default function Home() {
     };
 
     loadDatabase();
-  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading, buildMonthWindow]);
+  }, [selectedDepartmentId, currentYear, currentMonth, authenticatedUser, isAuthLoading, buildMonthWindow, storageReloadToken]);
 
   const extractWarningDay = (warningText: string) => {
     const dayMatch = warningText.match(/روز (\d+)/);
@@ -6185,7 +6220,7 @@ export default function Home() {
               </div>
             )}
             <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-black text-blue-700 bg-blue-50 px-2.5 py-1.5 rounded-full border border-blue-100">
-              <span className={`w-2 h-2 rounded-full ${isSavingDb ? 'bg-orange-500 animate-pulse' : (isLoadingDb ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500')}`} />
+              <span className={`w-2 h-2 rounded-full ${storageLoadError ? 'bg-red-500 animate-pulse' : (isSavingDb ? 'bg-orange-500 animate-pulse' : (isLoadingDb ? 'bg-blue-400 animate-pulse' : 'bg-emerald-500'))}`} />
               <span>پشتیبان‌گیری ابری:</span>
               <span className="font-mono text-[9px] text-blue-600 bg-blue-100/60 px-1.5 py-0.5 rounded-md">Arvan S3</span>
             </div>
@@ -6219,6 +6254,75 @@ export default function Home() {
         </header>
 
         <div className="flex-1 p-6 space-y-6 overflow-y-auto bg-slate-50 print:p-0 print:bg-white text-slate-800">
+        {/* ===== هشدار شکست بارگذاری از ذخیره‌سازی ابری ===== */}
+        {storageLoadError && (
+          <section
+            role="alert"
+            aria-label="خطای بارگذاری اطلاعات"
+            className="print:hidden rounded-2xl border-2 border-red-200 bg-red-50 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-3 shadow-sm animate-fade-in"
+          >
+            <div className="shrink-0 w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center">
+              <ShieldAlert className="w-5 h-5 text-red-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-black text-red-800">
+                بارگذاری اطلاعات از فضای ابری ناموفق بود
+              </p>
+              <p className="text-xs font-semibold text-red-600 mt-1 leading-6">
+                نام و برنامهٔ پرسنل از سرور دریافت نشد. علت:
+                <span className="mx-1">{storageLoadError.message}</span>
+                {storageLoadError.code && (
+                  <span className="font-mono text-[10px] bg-red-100 px-1.5 py-0.5 rounded-md mx-1" dir="ltr">
+                    {storageLoadError.code}
+                  </span>
+                )}
+              </p>
+              <p className="text-[11px] font-medium text-red-500 mt-1 leading-5">
+                {storageLoadError.code === 'STORAGE_UNAVAILABLE'
+                  ? 'تنظیمات فضای ذخیره‌سازی (S3) روی سرور را بررسی کنید؛ متغیرهای STORAGE_ENV و S3_* باید در محیط سرور تعریف شده باشند. در صورت ادامهٔ مشکل با مدیر سامانه تماس بگیرید.'
+                  : 'لطفاً دوباره تلاش کنید؛ اگر مشکل ادامه داشت با مدیر سامانه تماس بگیرید.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStorageReloadToken(token => token + 1)}
+              className="shrink-0 flex items-center justify-center gap-1.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-slate-300 px-4 py-2.5 text-xs font-black text-white shadow-md transition-all cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" /> تلاش دوباره
+            </button>
+          </section>
+        )}
+
+        {/* ===== اطلاع‌رسانی قالب قدیمی (داده سالم؛ ذخیرهٔ بعدی ارتقا می‌دهد) ===== */}
+        {storageLegacyNotice.length > 0 && (
+          <section
+            role="status"
+            aria-label="سازگاری با دادهٔ قدیمی"
+            className="print:hidden rounded-2xl border-2 border-amber-200 bg-amber-50 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-3 shadow-sm animate-fade-in"
+          >
+            <div className="shrink-0 w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+              <RefreshCw className="w-5 h-5 text-amber-700" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-black text-amber-800">
+                داده‌ها با قالب قدیمی بارگذاری شدند — همه‌چیز سالم است
+              </p>
+              <p className="text-xs font-semibold text-amber-700 mt-1 leading-6">
+                نام و برنامهٔ پرسنل با موفقیت خوانده شد. این اسناد هنوز در قالب
+                نسخه‌های قبلی هستند؛ با اولین ذخیره‌سازی (ثبت هر تغییری) خودکار
+                به قالب جدید ارتقا می‌یابند و این پیام دیگر نمایش داده نمی‌شود.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStorageLegacyNotice([])}
+              className="shrink-0 rounded-xl bg-amber-600 hover:bg-amber-700 px-4 py-2.5 text-xs font-black text-white shadow-md transition-all cursor-pointer"
+            >
+              متوجه شدم
+            </button>
+          </section>
+        )}
+
         {/* ========== کارت پریمیوم انتخاب بازه برنامه‌ریزی (فقط UI) ========== */}
         <div className="print:hidden" dir="rtl">
           <section
