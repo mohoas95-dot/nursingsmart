@@ -49,6 +49,7 @@ import {
   INITIAL_SETTINGS,
   INITIAL_REQUESTS
 } from '../lib/mockData';
+import { normalizeSystemSettings } from '../lib/settings-normalizer';
 import {
   solveNursingSchedule,
   generatePersonnelReports,
@@ -859,7 +860,7 @@ export default function Home() {
       baseline: schedule || hydratedSchedule,
       personnelList: personnel,
       requests,
-      settings: normalizeSettings(settings),
+      settings: normalizeSystemSettings(settings),
       year: currentYear,
       month: currentMonth,
       customHolidays,
@@ -2942,44 +2943,7 @@ export default function Home() {
 
   const parseNumberInput = (val: string): any => val === '' ? '' : Number(val);
 
-  function normalizeSettings(s?: SystemSettings | any): SystemSettings {
-    if (!s) return INITIAL_SETTINGS;
-    const dh = s.dutyHours || {};
-    const wd = s.demand?.weekday || {};
-    const hd = s.demand?.holiday || {};
-    return {
-      ...s,
-      autoCalculateDutyHours: s.autoCalculateDutyHours,
-      dutyHours: {
-        official: Number(dh.official) || 0,
-        contract: Number(dh.contract) || 0,
-        conscript: Number(dh.conscript) || 0,
-        overtime: Number(dh.overtime) || 0,
-      },
-      demand: {
-        weekday: {
-          morningNurse: Number(wd.morningNurse) || 0,
-          morningAssistant: Number(wd.morningAssistant) || 0,
-          afternoonNurse: Number(wd.afternoonNurse) || 0,
-          afternoonAssistant: Number(wd.afternoonAssistant) || 0,
-          afternoonLeader: Number(wd.afternoonLeader) || 0,
-          nightNurse: Number(wd.nightNurse) || 0,
-          nightAssistant: Number(wd.nightAssistant) || 0,
-          nightLeader: Number(wd.nightLeader) || 0,
-        },
-        holiday: {
-          morningNurse: Number(hd.morningNurse) || 0,
-          morningAssistant: Number(hd.morningAssistant) || 0,
-          afternoonNurse: Number(hd.afternoonNurse) || 0,
-          afternoonAssistant: Number(hd.afternoonAssistant) || 0,
-          afternoonLeader: Number(hd.afternoonLeader) || 0,
-          nightNurse: Number(hd.nightNurse) || 0,
-          nightAssistant: Number(hd.nightAssistant) || 0,
-          nightLeader: Number(hd.nightLeader) || 0,
-        },
-      },
-    };
-  }
+
 
   const saveState = async (
     updatedP: Personnel[],
@@ -2990,7 +2954,7 @@ export default function Home() {
     strategy?: ScheduleUpdateStrategy
   ) => {
     try {
-      const cleanUpdatedS = normalizeSettings(updatedS);
+      const cleanUpdatedS = normalizeSystemSettings(updatedS);
       let activeFd: number;
       let finalStrategy: ScheduleUpdateStrategy = { mode: 'preserve_current' };
 
@@ -3278,7 +3242,7 @@ export default function Home() {
       baseline: scheduleRef.current || normalizedSchedule,
       personnelList: personnelRef.current,
       requests: requestsRef.current,
-      settings: normalizeSettings(settingsRef.current),
+      settings: normalizeSystemSettings(settingsRef.current),
       year: currentYear,
       month: currentMonth,
       customHolidays: holidaysRef.current,
@@ -3427,7 +3391,7 @@ export default function Home() {
     // The committed department settings are the source of truth. Unsaved edits in
     // the settings form must not silently change staffing rules during regeneration.
     const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
-    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const optimizerSettings = normalizeSystemSettings(persistedSettings || settingsRef.current);
     const optimizerPersonnel = personnelRef.current;
     const optimizerRequests = requestsRef.current;
     const optimizerHolidays = holidaysRef.current;
@@ -3562,7 +3526,7 @@ export default function Home() {
 
     const deptId = selectedDepartmentId || 'sepehr';
     const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
-    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const optimizerSettings = normalizeSystemSettings(persistedSettings || settingsRef.current);
     const optimizerPersonnel = personnelRef.current;
     const optimizerRequests = requestsRef.current;
     const optimizerHolidays = holidaysRef.current;
@@ -8835,7 +8799,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, normalizeSettings(updated), customHolidays, { mode: 'full_resolve' });
+                            saveState(personnel, requests, normalizeSystemSettings(updated), customHolidays, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />
