@@ -211,6 +211,7 @@ export {
   projectRequestWarningsFromLedger,
   replaceRequestWarningsFromLedger,
 } from './requests/request-warning-projection';
+export { formatRequestGenerationIssues } from './requests/request-issue-presentation';
 
 // ============================================================================
 // Schedule Operations

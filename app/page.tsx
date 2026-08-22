@@ -84,6 +84,7 @@ import { buildRequestSetFingerprint } from '../domain/requests/request-set-finge
 import { buildRequestOutcomeLedger } from '../domain/requests/request-outcome-ledger';
 import { buildRequestQualityFromLedger } from '../domain/requests/request-quality';
 import { replaceRequestWarningsFromLedger } from '../domain/requests/request-warning-projection';
+import { formatRequestGenerationIssues } from '../domain/requests/request-issue-presentation';
 import { warningMessages } from '../domain/warnings/schedule-warning';
 import { serializeMonthlyRequestArtifacts } from '../domain/requests/request-persistence';
 import { hydrateStoredScheduleRequestArtifacts } from '../lib/schedule-request-hydration';
@@ -3381,6 +3382,34 @@ export default function Home() {
     const optimizerFirstDay = firstDayRef.current;
     const optimizerDutyHours = monthlyDutyHoursRef.current;
 
+    // Canonical request validation is a generation gate. Surface actionable
+    // records here instead of collapsing it into the generic scenario error.
+    const requestPreflight = canonicalizeRequestDaysForMonth(optimizerRequests, {
+      year: currentYear,
+      month: currentMonth,
+      calendarDays: generateJalaliMonthCalendar(
+        currentYear,
+        currentMonth,
+        optimizerHolidays,
+        optimizerFirstDay === -1 ? undefined : optimizerFirstDay
+      ),
+      personnel: optimizerPersonnel,
+    });
+    if (requestPreflight.generationBlocked) {
+      const issueMessage = formatRequestGenerationIssues(
+        requestPreflight.issues,
+        new Map(optimizerPersonnel.map(person => [person.id, `${person.firstName} ${person.lastName}`]))
+      );
+      alert(issueMessage);
+      logEvent({
+        category: 'requests',
+        severity: 'warning',
+        title: `بازتولید ${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} به‌دلیل درخواست نامعتبر متوقف شد`,
+        detail: issueMessage,
+      });
+      return;
+    }
+
     // -------------------------------------------------------------
     // Scenario Generation Phase (New Feature)
     // -------------------------------------------------------------
@@ -3395,6 +3424,7 @@ export default function Home() {
 
     const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
     const monthLabel = `${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`;
+    let scenarioGenerationStage: 'generation' | 'persistence' | 'logging' = 'generation';
 
     try {
       const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
@@ -3443,6 +3473,7 @@ export default function Home() {
         alert(`هیچ سناریوی مناسبی برای این گروه تولید نشد. در معماری مبنامحور، سناریو تنها وقتی نمایش داده می‌شود که تمام هشدارهای سطح A (بحرانی) آن واقعاً رفع شده و فاصله‌اش از برنامهٔ مبنا در بازهٔ مجاز باشد.${joined}`);
       }
 
+      scenarioGenerationStage = 'persistence';
       progress.beginPhase('persist');
 
       const scenariosWithDiff = buildPairwiseDifferences(top3, jobGroup);
@@ -3456,6 +3487,7 @@ export default function Home() {
 
       // گزارش کامل این اجرای solver در «لاگ‌ها و اتفاقات» ثبت می‌شود:
       // چند برنامه تولید شد، چقدر طول کشید، هشدارها و دلیل کنار گذاشته شدن‌ها.
+      scenarioGenerationStage = 'logging';
       await recordEvents(
         buildSolverRunEvents({
           jobGroup,
@@ -3497,7 +3529,12 @@ export default function Home() {
         title: `پردازش موتور هوشمند برای ${groupTitle} با خطا متوقف شد`,
         detail: `ماه ${monthLabel} — ${toErrorMessage(err)}`,
       });
-      alert('خطا در تولید سناریوها');
+      const stageLabel = scenarioGenerationStage === 'generation'
+        ? 'محاسبهٔ سناریوها'
+        : scenarioGenerationStage === 'persistence'
+          ? 'ذخیرهٔ سناریوها'
+          : 'ثبت گزارش اجرا';
+      alert(`خطا در مرحلهٔ ${stageLabel}:\n${toErrorMessage(err)}`);
       setSolvingTarget(null);
       return;
     }
