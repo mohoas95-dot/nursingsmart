@@ -85,10 +85,8 @@ import { buildRequestOutcomeLedger } from '../domain/requests/request-outcome-le
 import { buildRequestQualityFromLedger } from '../domain/requests/request-quality';
 import { replaceRequestWarningsFromLedger } from '../domain/requests/request-warning-projection';
 import { warningMessages } from '../domain/warnings/schedule-warning';
-import {
-  deserializeMonthlyRequestArtifacts,
-  serializeMonthlyRequestArtifacts,
-} from '../domain/requests/request-persistence';
+import { serializeMonthlyRequestArtifacts } from '../domain/requests/request-persistence';
+import { hydrateStoredScheduleRequestArtifacts } from '../lib/schedule-request-hydration';
 import {
   hydrateScenarioObjective,
   serializeCurrentScenarioForPersistence,
@@ -789,9 +787,10 @@ export default function Home() {
   }, [personnel]);
 
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
-    const rawSchedule: MonthlySchedule = rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] };
-    const scenarioSchedule = preserveLockedRowsInScenarioSchedule(rawSchedule);
-    const rawWarns = rawSchedule.warnings || rawScenario?.warnings || [];
+    const persistedSchedule: MonthlySchedule = rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] };
+    const runtimeSchedule = hydrateStoredScheduleRequestArtifacts(persistedSchedule);
+    const scenarioSchedule = preserveLockedRowsInScenarioSchedule(runtimeSchedule);
+    const rawWarns = runtimeSchedule.warnings || rawScenario?.warnings || [];
     const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group, lockedRows);
     // هشدارهای نادیده‌گرفته‌شده می‌تواند هم در لیست سراسری (مبنا) و هم در خود سناریو ذخیره شده باشد.
     const scenarioDismissed: string[] = rawScenario?.schedule?.dismissedWarnings || [];
@@ -816,15 +815,6 @@ export default function Home() {
         rawScenario.objectiveVersion,
         expectedFingerprint
       );
-      let requestArtifacts: ReturnType<typeof deserializeMonthlyRequestArtifacts> = {};
-      if (objectiveHydration.status === 'CURRENT' || objectiveHydration.status === 'STALE') {
-        try {
-          requestArtifacts = deserializeMonthlyRequestArtifacts(rawSchedule as any);
-        } catch {
-          requestArtifacts = {};
-        }
-      }
-
       // Versions 1/2 retain their historical payload and order. Version 3 is
       // hydrated exactly; a fingerprint mismatch is marked STALE, never rescored.
       return {
@@ -840,7 +830,6 @@ export default function Home() {
         relevantHardWarningCount: countHardConstraintWarnings(activeWarnings),
         schedule: {
           ...scenarioSchedule,
-          ...requestArtifacts,
           warnings: activeWarnings,
           dismissedWarnings: scenarioDismissed,
         },
@@ -1411,18 +1400,9 @@ export default function Home() {
     setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
 
     const storedSchedule = deptInfo.schedules?.[hKey] || null;
-    let sched: MonthlySchedule | null = storedSchedule as MonthlySchedule | null;
-    if (storedSchedule?.requestQuality || storedSchedule?.requestOutcomeLedger) {
-      try {
-        sched = {
-          ...storedSchedule,
-          ...deserializeMonthlyRequestArtifacts(storedSchedule),
-        } as MonthlySchedule;
-      } catch {
-        // Malformed legacy/current artifacts remain readable but never become authority.
-        sched = { ...storedSchedule, requestQuality: undefined, requestOutcomeLedger: undefined } as MonthlySchedule;
-      }
-    }
+    const sched = storedSchedule
+      ? hydrateStoredScheduleRequestArtifacts(storedSchedule)
+      : null;
     setSchedule(sched);
     if (sched) {
       // هشدارهای رفع‌شده نباید در حالتِ «نادیده‌گرفته‌شده» باقی بمانند؛ در غیر این‌صورت
@@ -1941,7 +1921,10 @@ export default function Home() {
           const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
           setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
 
-          const sched = deptInfo.schedules?.[hKey] || null;
+          const storedSchedule = deptInfo.schedules?.[hKey] || null;
+          const sched = storedSchedule
+            ? hydrateStoredScheduleRequestArtifacts(storedSchedule)
+            : null;
           setSchedule(sched);
           if (sched) {
             // هم‌ترازسازی وضعیت نادیده‌گرفتن با هشدارهای فعلی (هشدار رفع‌شده = حذف کامل).
