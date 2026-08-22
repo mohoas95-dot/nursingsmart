@@ -154,6 +154,32 @@ const SystemEventLogSchema = z.object({
   actor: z.string().max(120).optional(),
 }).strict();
 
+export const CanonicalUnsignedDecimalSchema = z.string().regex(/^(0|[1-9]\d*)$/);
+export const SerializedExactRationalSchema = z.object({
+  numerator: CanonicalUnsignedDecimalSchema,
+  denominator: CanonicalUnsignedDecimalSchema.refine(value => value !== '0', {
+    message: 'denominator must be positive',
+  }),
+}).strict();
+export const SerializedRequestQualitySchema = z.object({
+  version: z.literal('request-quality/1'),
+  essentialFulfillment: SerializedExactRationalSchema,
+  normalFulfillment: SerializedExactRationalSchema,
+  requestSatisfactionPercent: z.number().finite().min(0).max(100),
+}).strict();
+export const SerializedRequestOutcomeLedgerSchema = z.object({
+  version: z.literal('request-outcome-ledger/1'),
+  year: z.number().int(),
+  month: z.number().int(),
+  requestSetFingerprint: z.string().min(1).max(100),
+  // Storage validation deliberately does not duplicate semantic outcome rules.
+  outcomes: z.array(z.object({
+    version: z.literal('request-day-outcome/1'),
+    includedInQuality: z.literal(true),
+    credit: SerializedExactRationalSchema,
+  }).passthrough()),
+  requestIssues: z.array(z.unknown()),
+}).strict();
 export const MonthlyScheduleSchema = z.object({
   year: z.number().int().min(1300).max(1500),
   month: z.number().int().min(1).max(12),
@@ -174,6 +200,12 @@ export const MonthlyScheduleSchema = z.object({
   eventLogs: z.array(SystemEventLogSchema).max(MAX_STORED_EVENT_LOGS).optional(),
   lockedRows: z.array(nonEmptyId).optional(),
   autoSubstitutions: z.array(AutoSubstitutionSchema).optional(),
+  // Persisted request artifacts are hydrated and semantically validated by the
+  // domain boundary; keeping these permissive preserves legacy readability.
+  requestResolutionProvenance: z.any().optional(),
+  requestOutcomeLedger: z.any().optional(),
+  requestQuality: z.any().optional(),
+  requestSetFingerprint: z.string().min(1).max(100).optional(),
 }).strict();
 
 export const SchedulesSchema = z.record(monthKey, MonthlyScheduleSchema);

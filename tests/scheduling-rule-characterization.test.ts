@@ -585,7 +585,10 @@ test('characterizes_current_OFF_after_leave_postprocessor_as_choosing_M_when_cov
     requestType: 'pattern',
     patternSteps: ['OFF'],
     isEssential: false,
-    scope: 'all',
+    // Keep this characterization focused on day-2 OFF post-processing. An
+    // all-month pattern would now correctly conflict with regular leave on day 1.
+    scope: 'custom_days',
+    selectedDays: [2],
   };
 
   const solved = solveNursingSchedule(

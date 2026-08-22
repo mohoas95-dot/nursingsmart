@@ -6,6 +6,7 @@ import type { ScoredSchedule } from '../../../lib/scoring';
 import { getShiftLabel, toPersianDigits } from '../../../lib/persian-vocabulary';
 import { computeBaselineCellDiffs } from '../../../domain/scenarios/objective';
 import { buildObjectiveRankMap } from '../../../domain/scenarios/scenario-quality';
+import { exactRationalToNumberForDisplay } from '../../../domain/math/exact-rational';
 import {
   Activity,
   BarChart3,
@@ -347,6 +348,28 @@ function ManagePanel(props: ManagePanelProps) {
     ),
     [options]
   );
+  const requestExplanation = React.useMemo(() => {
+    const quality = activeOption?.schedule?.requestQuality;
+    const ledger = activeOption?.schedule?.requestOutcomeLedger;
+    if (!quality || !ledger) return null;
+    const counts = new Map<string, number>();
+    for (const outcome of ledger.outcomes) {
+      counts.set(outcome.kind, (counts.get(outcome.kind) || 0) + 1);
+    }
+    const essential = exactRationalToNumberForDisplay(quality.essentialFulfillment) * 100;
+    const normal = exactRationalToNumberForDisplay(quality.normalFulfillment) * 100;
+    return {
+      label: `درخواست‌های ضروری: ${toPersianDigits(essential.toFixed(1))}٪ · عادی: ${toPersianDigits(normal.toFixed(1))}٪`,
+      detail: [
+        `دقیق ${counts.get('EXACT') || 0}`,
+        `سازگار ${counts.get('COMPATIBLE') || 0}`,
+        `جزئی ${counts.get('PARTIAL') || 0}`,
+        `مسدود ${counts.get('BLOCKED') || 0}`,
+        `اجرانشده ${counts.get('UNSATISFIED') || 0}`,
+        `نامعتبر/متعارض ${ledger.requestIssues.length}`,
+      ].join(' · '),
+    };
+  }, [activeOption]);
 
   if (!activeOption) return null;
 
@@ -390,6 +413,16 @@ function ManagePanel(props: ManagePanelProps) {
         <span className="font-black text-slate-700">{activeOption.isBaseline ? 'برنامه مبنا' : activeOption.scenario?.title}</span>
         {!activeOption.isBaseline && (
           <span className="font-bold text-slate-500">شباهت به مبنا: {toPersianDigits(activeSimilarity.toFixed(1))}٪</span>
+        )}
+        {requestExplanation && (
+          <span className="font-bold text-indigo-700" title={requestExplanation.detail}>
+            {requestExplanation.label}
+          </span>
+        )}
+        {activeOption.scenario?.requestQualityStatus === 'STALE' && (
+          <span className="font-black text-amber-700" title="درخواست‌ها پس از ذخیرهٔ این سناریو تغییر کرده‌اند؛ کیفیت تاریخی دوباره محاسبه نشده است.">
+            کیفیت درخواست‌ها قدیمی است
+          </span>
         )}
         {workflow.comparisonStartedAt && activeRank > 0 && (
           <span className="font-black text-amber-700 inline-flex items-center gap-1"><Trophy className="w-3 h-3" /> رتبه {toPersianDigits(activeRank)}</span>

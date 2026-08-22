@@ -270,7 +270,7 @@ test('informational auto-fix notices do not reduce the warning-defect ranking', 
 
   // A genuine noncritical violation still lowers the score.
   const genuineViolation = evaluate([
-    'Mismatched Request: برای n2 test در روز 2 درخواست OFF ثبت شده اما شیفت M تخصیص یافته است',
+    'Leave Continuity: تخلف غیربحرانی واقعی',
   ]);
   assert.ok(
     genuineViolation.metrics.optimizationScore < noWarnings.metrics.optimizationScore,

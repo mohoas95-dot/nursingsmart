@@ -1,6 +1,11 @@
 // lib/types.ts - نسخه به‌روز‌شده با فیلدهای جدید
 
 import type { SystemEventLog } from '../domain/logging/system-events';
+import type {
+  RequestOutcomeLedger,
+  RequestQuality,
+  RequestResolutionProvenance,
+} from '../domain/requests/request-domain';
 
 export type {
   SystemEventLog,
@@ -135,6 +140,11 @@ export interface MonthlySchedule {
   eventLogs?: SystemEventLog[];
   lockedRows?: string[];
   autoSubstitutions?: AutoSubstitutionRecord[]; // فیلد جدید برای ثبت جایگزینی‌های خودکار
+  /** Runtime/request-audit sidecar; JSON serialization is added by objective v3. */
+  requestResolutionProvenance?: RequestResolutionProvenance[];
+  requestOutcomeLedger?: RequestOutcomeLedger;
+  requestQuality?: RequestQuality;
+  requestSetFingerprint?: string;
 }
 
 export interface AutoSubstitutionRecord {

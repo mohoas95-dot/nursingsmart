@@ -32,21 +32,30 @@ import { generateAndScoreScenarios } from '../../lib/scenarioGenerator';
 import { solveNursingSchedule } from '../../lib/solver';
 import { CAL_MONTH, CAL_YEAR, makePerson, makeSettings } from '../fixtures/realistic';
 
-function quality(overrides: Partial<ScenarioObjectiveQuality>): ScenarioObjectiveQuality {
+function quality(
+  overrides: Partial<ScenarioObjectiveQuality> & { requestSatisfactionPercent?: number }
+): ScenarioObjectiveQuality {
+  const { requestSatisfactionPercent = 80, ...remaining } = overrides;
   return {
-    requestSatisfactionPercent: 80,
+    requestQuality: {
+      version: 'request-quality/1',
+      essentialFulfillment: { numerator: BigInt(requestSatisfactionPercent), denominator: BigInt(100) },
+      normalFulfillment: { numerator: BigInt(requestSatisfactionPercent), denominator: BigInt(100) },
+      requestSatisfactionPercent,
+    },
     operationalEfficiencyScore: 80,
     fairnessScore: 80,
     warningDefectCount: 0,
     routineMismatchCount: 0,
     baselineSimilarityPercent: 80,
-    ...overrides,
+    ...remaining,
   };
 }
 
 function objective(overrides: Partial<ScenarioObjectiveQuality>): ScenarioObjective {
   return {
-    version: 'scenario-objective/2',
+    version: 'scenario-objective/3-request-quality',
+    requestSetFingerprint: 'sha256:test',
     gates: {
       criticalResolved: true,
       criticalWarningCount: 0,

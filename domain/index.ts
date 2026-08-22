@@ -74,6 +74,27 @@ export {
 } from './guards/shift-edit-guards';
 
 // ============================================================================
+// Exact Rational Arithmetic
+// ============================================================================
+
+export {
+  EXACT_RATIONAL_ONE,
+  EXACT_RATIONAL_ZERO,
+  addExactRational,
+  compareExactRationalDescending,
+  createExactRational,
+  deserializeExactRational,
+  divideExactRationalByInteger,
+  exactRationalEquals,
+  exactRationalToNumberForDisplay,
+  serializeExactRational,
+} from './math/exact-rational';
+export type {
+  ExactRational,
+  SerializedExactRational,
+} from './math/exact-rational';
+
+// ============================================================================
 // Requests
 // ============================================================================
 
@@ -82,6 +103,115 @@ export {
   patternStepForDay,
 } from './requests/request-scope-matcher';
 export type { PatternScopeRequest } from './requests/request-scope-matcher';
+
+export {
+  CANONICAL_REQUEST_DAY_VERSION,
+  CANONICAL_REQUEST_VALUES,
+  REQUEST_COMPONENTS,
+  REQUEST_CONFLICT_REASONS,
+  REQUEST_DAY_OUTCOME_VERSION,
+  REQUEST_INTENTS,
+  REQUEST_INVALID_REASONS,
+  REQUEST_OUTCOME_KINDS,
+  REQUEST_OUTCOME_LEDGER_VERSION,
+  REQUEST_OUTCOME_REASONS,
+  REQUEST_POLARITIES,
+  REQUEST_QUALITY_VERSION,
+  REQUEST_RESOLUTION_PROVENANCE_VERSION,
+  REQUEST_RESOLUTION_STAGES,
+  REQUEST_VALIDATION_ISSUE_VERSION,
+  deserializeRequestQuality,
+  serializeRequestQuality,
+} from './requests/request-domain';
+export type {
+  BlockedRequestDayOutcome,
+  CanonicalRequestDay,
+  CanonicalRequestValue,
+  CompatibleRequestDayOutcome,
+  ConflictRequestDayOutcome,
+  ConflictRequestValidationIssue,
+  ExactRequestDayOutcome,
+  InvalidRequestDayOutcome,
+  InvalidRequestValidationIssue,
+  NonEmptyRequestResolutionProvenance,
+  PartialRequestDayOutcome,
+  QualityEligibleRequestDayOutcome,
+  RequestComponent,
+  RequestConflictReason,
+  RequestDayOutcome,
+  RequestIntent,
+  RequestInvalidReason,
+  RequestOutcomeKind,
+  RequestOutcomeLedger,
+  RequestOutcomeReason,
+  RequestPolarity,
+  RequestQuality,
+  RequestResolutionProvenance,
+  RequestResolutionStage,
+  RequestValidationIssue,
+  SerializedRequestQuality,
+  UnsatisfiedRequestDayOutcome,
+} from './requests/request-domain';
+
+export {
+  SEMANTIC_PATTERN_STEP_VALUES,
+  SEMANTIC_REQUEST_SCOPES,
+  SEMANTIC_REQUEST_TYPES,
+  SEMANTIC_WORK_SHIFT_VALUES,
+  validateRequestsSemantically,
+} from './requests/request-semantic-validator';
+export type {
+  RequestSemanticValidationCalendarDay,
+  RequestSemanticValidationContext,
+  RequestSemanticValidationResult,
+  SemanticPatternStepValue,
+  SemanticRequestScope,
+  SemanticWorkShiftValue,
+} from './requests/request-semantic-validator';
+
+export {
+  CANONICAL_REQUEST_MONTH_VERSION,
+  canonicalizeRequestDaysForMonth,
+} from './requests/request-canonicalizer';
+export type {
+  CanonicalRequestMonthResult,
+} from './requests/request-canonicalizer';
+
+export {
+  REQUEST_GENERATION_BLOCKED_ERROR_NAME,
+  RequestGenerationBlockedError,
+  adaptCanonicalRequestMonthForSolver,
+} from './requests/solver-request-adapter';
+export type {
+  SolverRequestView,
+} from './requests/solver-request-adapter';
+
+export { evaluateCanonicalRequestDay } from './requests/request-outcome-evaluator';
+export {
+  buildRequestOutcomeLedger,
+  prioritizeRequestDeficienciesForCandidate,
+} from './requests/request-outcome-ledger';
+export { buildRequestQualityFromLedger } from './requests/request-quality';
+export {
+  REQUEST_SET_FINGERPRINT_CONTRACT_VERSION,
+  buildRequestSetFingerprint,
+  serializeCanonicalRequestSet,
+} from './requests/request-set-fingerprint';
+export {
+  deserializeMonthlyRequestArtifacts,
+  deserializeRequestOutcomeLedger,
+  serializeMonthlyRequestArtifacts,
+  serializeRequestOutcomeLedger,
+} from './requests/request-persistence';
+export type {
+  SerializedMonthlyRequestArtifacts,
+  SerializedRequestOutcomeLedger,
+} from './requests/request-persistence';
+export {
+  projectRequestWarningsFromLedger,
+  replaceRequestWarningsFromLedger,
+} from './requests/request-warning-projection';
+export { formatRequestGenerationIssues } from './requests/request-issue-presentation';
 
 // ============================================================================
 // Schedule Operations

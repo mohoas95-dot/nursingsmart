@@ -49,6 +49,7 @@ import {
   INITIAL_SETTINGS,
   INITIAL_REQUESTS
 } from '../lib/mockData';
+import { normalizeSystemSettings } from '../lib/settings-normalizer';
 import {
   solveNursingSchedule,
   generatePersonnelReports,
@@ -78,6 +79,19 @@ import {
   type ScoredSchedule,
 } from '../lib/scoring';
 import { evaluateScenarioQuality } from '../domain/scenarios/scenario-quality';
+import { canonicalizeRequestDaysForMonth } from '../domain/requests/request-canonicalizer';
+import { buildRequestSetFingerprint } from '../domain/requests/request-set-fingerprint';
+import { buildRequestOutcomeLedger } from '../domain/requests/request-outcome-ledger';
+import { buildRequestQualityFromLedger } from '../domain/requests/request-quality';
+import { replaceRequestWarningsFromLedger } from '../domain/requests/request-warning-projection';
+import { formatRequestGenerationIssues } from '../domain/requests/request-issue-presentation';
+import { warningMessages } from '../domain/warnings/schedule-warning';
+import { serializeMonthlyRequestArtifacts } from '../domain/requests/request-persistence';
+import { hydrateStoredScheduleRequestArtifacts } from '../lib/schedule-request-hydration';
+import {
+  hydrateScenarioObjective,
+  serializeCurrentScenarioForPersistence,
+} from '../domain/scenarios/objective-persistence';
 import { LEGACY_SCENARIO_OBJECTIVE_VERSION } from '../domain/scenarios/objective';
 import { canEditShiftCell, isPersonnelOptimizationTarget } from '../domain/guards/shift-edit-guards';
 import {
@@ -790,9 +804,10 @@ export default function Home() {
   }, [personnel]);
 
   const hydrateStoredScenario = React.useCallback((rawScenario: any, group: JobGroup, index: number): ScoredSchedule => {
-    const rawSchedule: MonthlySchedule = rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] };
-    const scenarioSchedule = preserveLockedRowsInScenarioSchedule(rawSchedule);
-    const rawWarns = rawSchedule.warnings || rawScenario?.warnings || [];
+    const persistedSchedule: MonthlySchedule = rawScenario?.schedule || { year: currentYear, month: currentMonth, assignments: {}, shiftLeaders: {}, warnings: [] };
+    const runtimeSchedule = hydrateStoredScheduleRequestArtifacts(persistedSchedule);
+    const scenarioSchedule = preserveLockedRowsInScenarioSchedule(runtimeSchedule);
+    const rawWarns = runtimeSchedule.warnings || rawScenario?.warnings || [];
     const filteredGroup = filterWarningsForScenarioGroup(rawWarns, personnel, group, lockedRows);
     // هشدارهای نادیده‌گرفته‌شده می‌تواند هم در لیست سراسری (مبنا) و هم در خود سناریو ذخیره شده باشد.
     const scenarioDismissed: string[] = rawScenario?.schedule?.dismissedWarnings || [];
@@ -800,14 +815,33 @@ export default function Home() {
     const activeWarnings = filterActiveWarnings(filteredGroup, combinedDismissed);
 
     if (rawScenario?.metrics && rawScenario?.scenarioKey && rawScenario?.shortTitle && rawScenario?.title) {
-      // سناریوهای ذخیره‌شده بازنویسی نمی‌شوند (بدون بازنویسی تاریخیِ امتیازها).
-      // فقط نسخهٔ تابع هدفشان صریح می‌شود: اگر پیش از فاز ۵ ذخیره شده‌اند،
-      // `objective` ندارند و با نسخهٔ legacy برچسب می‌خورند تا امتیازشان با
-      // معنای کانونی فاز ۵ اشتباه گرفته نشود.
+      const canonicalMonth = canonicalizeRequestDaysForMonth(requests, {
+        year: currentYear,
+        month: currentMonth,
+        calendarDays: generateJalaliMonthCalendar(
+          currentYear,
+          currentMonth,
+          customHolidays,
+          firstDayOfWeekIndex
+        ),
+        personnel,
+      });
+      const expectedFingerprint = buildRequestSetFingerprint(canonicalMonth);
+      const objectiveHydration = hydrateScenarioObjective(
+        rawScenario.objective,
+        rawScenario.objectiveVersion,
+        expectedFingerprint
+      );
+      // Versions 1/2 retain their historical payload and order. Version 3 is
+      // hydrated exactly; a fingerprint mismatch is marked STALE, never rescored.
       return {
         ...rawScenario,
-        objectiveVersion: rawScenario?.objectiveVersion
-          ?? (rawScenario?.objective ? undefined : LEGACY_SCENARIO_OBJECTIVE_VERSION),
+        objective: objectiveHydration.objective ?? rawScenario.objective,
+        objectiveVersion: objectiveHydration.objective?.version
+          ?? objectiveHydration.historicalVersion
+          ?? rawScenario.objectiveVersion
+          ?? LEGACY_SCENARIO_OBJECTIVE_VERSION,
+        requestQualityStatus: objectiveHydration.status,
         warnings: activeWarnings,
         relevantWarningCount: activeWarnings.length,
         relevantHardWarningCount: countHardConstraintWarnings(activeWarnings),
@@ -832,7 +866,7 @@ export default function Home() {
       baseline: schedule || hydratedSchedule,
       personnelList: personnel,
       requests,
-      settings: normalizeSettings(settings),
+      settings: normalizeSystemSettings(settings),
       year: currentYear,
       month: currentMonth,
       customHolidays,
@@ -1382,7 +1416,10 @@ export default function Home() {
     const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
     setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
 
-    const sched = deptInfo.schedules?.[hKey] || null;
+    const storedSchedule = deptInfo.schedules?.[hKey] || null;
+    const sched = storedSchedule
+      ? hydrateStoredScheduleRequestArtifacts(storedSchedule)
+      : null;
     setSchedule(sched);
     if (sched) {
       // هشدارهای رفع‌شده نباید در حالتِ «نادیده‌گرفته‌شده» باقی بمانند؛ در غیر این‌صورت
@@ -1509,20 +1546,37 @@ export default function Home() {
     return next;
   };
 
+  const serializeScheduleArtifactsInDb = (source: AppDatabaseState): AppDatabaseState => ({
+    ...source,
+    deptData: Object.fromEntries(Object.entries(source.deptData).map(([departmentId, department]) => [
+      departmentId,
+      {
+        ...department,
+        schedules: Object.fromEntries(Object.entries(department.schedules || {}).map(([key, stored]) => [
+          key,
+          stored?.requestQuality && typeof stored.requestQuality.essentialFulfillment?.numerator === 'bigint'
+            ? { ...stored, ...serializeMonthlyRequestArtifacts(stored as any) }
+            : stored,
+        ])),
+      },
+    ])) as AppDatabaseState['deptData'],
+  });
+
   const saveDbState = async (
     updatedDb: AppDatabaseState,
     options: { showBusyOverlay?: boolean } = {}
   ) => {
     const { showBusyOverlay = true } = options;
+    const persistableDb = serializeScheduleArtifactsInDb(updatedDb);
     const baseDb = optimisticDbRef.current;
     if (!baseDb || storageWriteBlockedRef.current || storageLoadCountRef.current > 0) {
       throw new Error('ذخیره‌سازی هنگام بارگذاری یا پس از خطای هم‌زمانی متوقف است؛ صفحه را تازه‌سازی کنید.');
     }
 
-    const mutations = buildStorageMutations(baseDb, updatedDb);
-    optimisticDbRef.current = updatedDb;
-    setFullDbState(updatedDb);
-    syncLocalStateFromDb(updatedDb);
+    const mutations = buildStorageMutations(baseDb, persistableDb);
+    optimisticDbRef.current = persistableDb;
+    setFullDbState(persistableDb);
+    syncLocalStateFromDb(persistableDb);
 
     // پیشرفت واقعی ذخیره‌سازی = نسبت منابع نوشته‌شده به کل منابع تغییر‌یافته.
     const totalMutations = Math.max(1, mutations.length);
@@ -1896,7 +1950,10 @@ export default function Home() {
           const fdIdx = deptInfo.firstDayOfWeek?.[hKey];
           setFirstDayOfWeekIndex(fdIdx === -1 ? undefined : fdIdx);
 
-          const sched = deptInfo.schedules?.[hKey] || null;
+          const storedSchedule = deptInfo.schedules?.[hKey] || null;
+          const sched = storedSchedule
+            ? hydrateStoredScheduleRequestArtifacts(storedSchedule)
+            : null;
           setSchedule(sched);
           if (sched) {
             // هم‌ترازسازی وضعیت نادیده‌گرفتن با هشدارهای فعلی (هشدار رفع‌شده = حذف کامل).
@@ -2495,7 +2552,31 @@ export default function Home() {
       monthlyDutyHoursRef.current
     );
 
-    const freshWarnings = verification.warnings;
+    const canonicalRequestMonth = canonicalizeRequestDaysForMonth(currentRequests, {
+      year: currentYear,
+      month: currentMonth,
+      calendarDays: generateJalaliMonthCalendar(
+        currentYear,
+        currentMonth,
+        currentHolidays,
+        currentFirstDay === -1 ? undefined : currentFirstDay
+      ),
+      personnel: currentPersonnel,
+    });
+    const requestSetFingerprint = buildRequestSetFingerprint(canonicalRequestMonth);
+    const requestOutcomeLedger = buildRequestOutcomeLedger({
+      canonicalMonth: canonicalRequestMonth,
+      assignments: effectiveAssignments,
+      provenance: schedule.requestResolutionProvenance,
+      requestSetFingerprint,
+    });
+    const requestQuality = buildRequestQualityFromLedger(requestOutcomeLedger);
+    const projectedWarnings = replaceRequestWarningsFromLedger(
+      verification.structuredWarnings,
+      requestOutcomeLedger,
+      new Map(currentPersonnel.map(person => [person.id, `${person.firstName} ${person.lastName}`]))
+    );
+    const freshWarnings = warningMessages(projectedWarnings);
     const currentWarnings = schedule.warnings || [];
 
     const freshKey = [...freshWarnings].sort().join('|||');
@@ -2504,13 +2585,18 @@ export default function Home() {
 
     const assignmentsActuallyChanged = reconciledAssignmentsKey !== JSON.stringify(schedule.assignments);
     const warningsActuallyChanged = freshKey !== currentKey;
+    const requestArtifactsActuallyChanged = JSON.stringify(serializeMonthlyRequestArtifacts({
+      requestOutcomeLedger,
+      requestQuality,
+      requestSetFingerprint,
+    })) !== JSON.stringify(serializeMonthlyRequestArtifacts(schedule));
 
-    if (!assignmentsActuallyChanged && !warningsActuallyChanged) {
+    if (!assignmentsActuallyChanged && !warningsActuallyChanged && !requestArtifactsActuallyChanged) {
       previousWarningsKeyRef.current = freshKey;
       return;
     }
 
-    if (!assignmentsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
+    if (!assignmentsActuallyChanged && !requestArtifactsActuallyChanged && freshKey === previousWarningsKeyRef.current) return;
     previousWarningsKeyRef.current = freshKey;
 
     isReevaluatingRef.current = true;
@@ -2520,6 +2606,9 @@ export default function Home() {
       assignments: effectiveAssignments,
       warnings: freshWarnings,
       shiftLeaders: verification.shiftLeaders,
+      requestOutcomeLedger,
+      requestQuality,
+      requestSetFingerprint,
       dismissedWarnings: pruneDismissedWarnings(freshWarnings, schedule.dismissedWarnings || []),
     };
 
@@ -2539,8 +2628,9 @@ export default function Home() {
           ...oldDept.schedules,
           [key]: {
             ...updatedSchedule,
+            ...serializeMonthlyRequestArtifacts(updatedSchedule),
             lockedRows: currentLocked,
-          },
+          } as any,
         },
       };
       void saveDbState(nextDb, { showBusyOverlay: false }).catch(error => {
@@ -2872,44 +2962,7 @@ export default function Home() {
 
   const parseNumberInput = (val: string): any => val === '' ? '' : Number(val);
 
-  const normalizeSettings = (s?: SystemSettings | any): SystemSettings => {
-    if (!s) return INITIAL_SETTINGS;
-    const dh = s.dutyHours || {};
-    const wd = s.demand?.weekday || {};
-    const hd = s.demand?.holiday || {};
-    return {
-      ...s,
-      autoCalculateDutyHours: s.autoCalculateDutyHours,
-      dutyHours: {
-        official: Number(dh.official) || 0,
-        contract: Number(dh.contract) || 0,
-        conscript: Number(dh.conscript) || 0,
-        overtime: Number(dh.overtime) || 0,
-      },
-      demand: {
-        weekday: {
-          morningNurse: Number(wd.morningNurse) || 0,
-          morningAssistant: Number(wd.morningAssistant) || 0,
-          afternoonNurse: Number(wd.afternoonNurse) || 0,
-          afternoonAssistant: Number(wd.afternoonAssistant) || 0,
-          afternoonLeader: Number(wd.afternoonLeader) || 0,
-          nightNurse: Number(wd.nightNurse) || 0,
-          nightAssistant: Number(wd.nightAssistant) || 0,
-          nightLeader: Number(wd.nightLeader) || 0,
-        },
-        holiday: {
-          morningNurse: Number(hd.morningNurse) || 0,
-          morningAssistant: Number(hd.morningAssistant) || 0,
-          afternoonNurse: Number(hd.afternoonNurse) || 0,
-          afternoonAssistant: Number(hd.afternoonAssistant) || 0,
-          afternoonLeader: Number(hd.afternoonLeader) || 0,
-          nightNurse: Number(hd.nightNurse) || 0,
-          nightAssistant: Number(hd.nightAssistant) || 0,
-          nightLeader: Number(hd.nightLeader) || 0,
-        },
-      },
-    };
-  };
+
 
   const saveState = async (
     updatedP: Personnel[],
@@ -2920,7 +2973,7 @@ export default function Home() {
     strategy?: ScheduleUpdateStrategy
   ) => {
     try {
-      const cleanUpdatedS = normalizeSettings(updatedS);
+      const cleanUpdatedS = normalizeSystemSettings(updatedS);
       let activeFd: number;
       let finalStrategy: ScheduleUpdateStrategy = { mode: 'preserve_current' };
 
@@ -3208,7 +3261,7 @@ export default function Home() {
       baseline: scheduleRef.current || normalizedSchedule,
       personnelList: personnelRef.current,
       requests: requestsRef.current,
-      settings: normalizeSettings(settingsRef.current),
+      settings: normalizeSystemSettings(settingsRef.current),
       year: currentYear,
       month: currentMonth,
       customHolidays: holidaysRef.current,
@@ -3253,8 +3306,16 @@ export default function Home() {
 
     const monthScenarios = normalizeScenarioMonthRecord((oldDept.activeScenarios || {})[monthKey]);
     const nextGroup = updater((monthScenarios[group] || null) as ScenarioWorkflowGroup | null);
+    const persistedNextGroup = nextGroup
+      ? {
+          ...nextGroup,
+          scenarios: nextGroup.scenarios.map(scenario =>
+            serializeCurrentScenarioForPersistence(scenario as any)
+          ),
+        }
+      : null;
     const updatedMonthScenarios = { ...monthScenarios } as any;
-    if (nextGroup) updatedMonthScenarios[group] = nextGroup;
+    if (persistedNextGroup) updatedMonthScenarios[group] = persistedNextGroup;
     else delete updatedMonthScenarios[group];
 
     const rawVotesMonth = (oldDept.scenarioVotes || {})[monthKey] as any;
@@ -3349,12 +3410,40 @@ export default function Home() {
     // The committed department settings are the source of truth. Unsaved edits in
     // the settings form must not silently change staffing rules during regeneration.
     const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
-    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const optimizerSettings = normalizeSystemSettings(persistedSettings || settingsRef.current);
     const optimizerPersonnel = personnelRef.current;
     const optimizerRequests = requestsRef.current;
     const optimizerHolidays = holidaysRef.current;
     const optimizerFirstDay = firstDayRef.current;
     const optimizerDutyHours = monthlyDutyHoursRef.current;
+
+    // Canonical request validation is a generation gate. Surface actionable
+    // records here instead of collapsing it into the generic scenario error.
+    const requestPreflight = canonicalizeRequestDaysForMonth(optimizerRequests, {
+      year: currentYear,
+      month: currentMonth,
+      calendarDays: generateJalaliMonthCalendar(
+        currentYear,
+        currentMonth,
+        optimizerHolidays,
+        optimizerFirstDay === -1 ? undefined : optimizerFirstDay
+      ),
+      personnel: optimizerPersonnel,
+    });
+    if (requestPreflight.generationBlocked) {
+      const issueMessage = formatRequestGenerationIssues(
+        requestPreflight.issues,
+        new Map(optimizerPersonnel.map(person => [person.id, `${person.firstName} ${person.lastName}`]))
+      );
+      alert(issueMessage);
+      logEvent({
+        category: 'requests',
+        severity: 'warning',
+        title: `بازتولید ${jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران'} به‌دلیل درخواست نامعتبر متوقف شد`,
+        detail: issueMessage,
+      });
+      return;
+    }
 
     // -------------------------------------------------------------
     // Scenario Generation Phase (New Feature)
@@ -3370,6 +3459,7 @@ export default function Home() {
 
     const groupTitle = jobGroup === 'nurse' ? 'پرستاران' : 'کمک‌بهیاران';
     const monthLabel = `${JALALI_MONTH_NAMES[currentMonth - 1]} ${currentYear}`;
+    let scenarioGenerationStage: 'generation' | 'persistence' | 'logging' = 'generation';
 
     try {
       const currentAssignmentsForMerge = schedule?.assignments || optimisticDbRef.current?.deptData?.[deptId]?.schedules?.[`${currentYear}_${currentMonth}`]?.assignments || null;
@@ -3387,6 +3477,8 @@ export default function Home() {
         targetJobGroup: jobGroup,
         currentAssignments: currentAssignmentsForMerge as any,
         lockedRows: lockedRowsRef.current,
+        requestResolutionProvenance: schedule?.requestResolutionProvenance,
+
         // هر مرحلهٔ واقعی موتور، مرحلهٔ متناظر نوار پیشرفت را فعال می‌کند تا درصد
         // نمایش‌داده‌شده هرگز از پردازش واقعی جلو یا عقب نیفتد.
         // beginPhase خودش در برابر فراخوانی تکراری برای همان مرحله ایمن است
@@ -3416,6 +3508,7 @@ export default function Home() {
         alert(`هیچ سناریوی مناسبی برای این گروه تولید نشد. در معماری مبنامحور، سناریو تنها وقتی نمایش داده می‌شود که تمام هشدارهای سطح A (بحرانی) آن واقعاً رفع شده و فاصله‌اش از برنامهٔ مبنا در بازهٔ مجاز باشد.${joined}`);
       }
 
+      scenarioGenerationStage = 'persistence';
       progress.beginPhase('persist');
 
       const scenariosWithDiff = buildPairwiseDifferences(top3, jobGroup);
@@ -3429,6 +3522,7 @@ export default function Home() {
 
       // گزارش کامل این اجرای solver در «لاگ‌ها و اتفاقات» ثبت می‌شود:
       // چند برنامه تولید شد، چقدر طول کشید، هشدارها و دلیل کنار گذاشته شدن‌ها.
+      scenarioGenerationStage = 'logging';
       await recordEvents(
         buildSolverRunEvents({
           jobGroup,
@@ -3470,7 +3564,12 @@ export default function Home() {
         title: `پردازش موتور هوشمند برای ${groupTitle} با خطا متوقف شد`,
         detail: `ماه ${monthLabel} — ${toErrorMessage(err)}`,
       });
-      alert('خطا در تولید سناریوها');
+      const stageLabel = scenarioGenerationStage === 'generation'
+        ? 'محاسبهٔ سناریوها'
+        : scenarioGenerationStage === 'persistence'
+          ? 'ذخیرهٔ سناریوها'
+          : 'ثبت گزارش اجرا';
+      alert(`خطا در مرحلهٔ ${stageLabel}:\n${toErrorMessage(err)}`);
       setSolvingTarget(null);
       return;
     }
@@ -3482,7 +3581,7 @@ export default function Home() {
 
     const deptId = selectedDepartmentId || 'sepehr';
     const persistedSettings = optimisticDbRef.current?.deptData?.[deptId]?.settings_system;
-    const optimizerSettings = normalizeSettings(persistedSettings || settingsRef.current);
+    const optimizerSettings = normalizeSystemSettings(persistedSettings || settingsRef.current);
     const optimizerPersonnel = personnelRef.current;
     const optimizerRequests = requestsRef.current;
     const optimizerHolidays = holidaysRef.current;
@@ -8824,7 +8923,7 @@ export default function Home() {
                               }
                             };
                             setSettings(updated);
-                            saveState(personnel, requests, normalizeSettings(updated), customHolidays, { mode: 'full_resolve' });
+                            saveState(personnel, requests, normalizeSystemSettings(updated), customHolidays, { mode: 'full_resolve' });
                           }}
                           className="w-full text-xs font-black bg-white border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-xl px-2.5 py-2 text-center text-slate-800 font-mono focus:outline-none transition-all"
                         />

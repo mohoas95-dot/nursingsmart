@@ -4,6 +4,11 @@
  */
 
 import type { SystemEventLog } from '../logging/system-events';
+import type {
+  RequestOutcomeLedger,
+  RequestQuality,
+  RequestResolutionProvenance,
+} from '../requests/request-domain';
 
 export type { SystemEventLog } from '../logging/system-events';
 
@@ -83,6 +88,10 @@ export interface MonthlySchedule {
   eventLogs?: SystemEventLog[];
   lockedRows?: string[];
   autoSubstitutions?: AutoSubstitutionRecord[];
+  requestResolutionProvenance?: RequestResolutionProvenance[];
+  requestOutcomeLedger?: RequestOutcomeLedger;
+  requestQuality?: RequestQuality;
+  requestSetFingerprint?: string;
 }
 
 // ============================================================================

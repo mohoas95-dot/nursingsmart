@@ -32,8 +32,23 @@ import {
   COVERAGE_FILL_HARD_RULES,
   evaluateHardConstraintLegality,
 } from '../domain/scheduling/hard-constraints';
-import { shiftSatisfiesRequestedShift } from '../domain/scheduling/workload';
-import { isDayInRequestScope } from '../domain/requests/request-scope-matcher';
+import {
+  canonicalizeRequestDaysForMonth,
+  type CanonicalRequestMonthResult,
+} from '../domain/requests/request-canonicalizer';
+import { adaptCanonicalRequestMonthForSolver } from '../domain/requests/solver-request-adapter';
+import {
+  buildRequestOutcomeLedger,
+  prioritizeRequestDeficienciesForCandidate,
+} from '../domain/requests/request-outcome-ledger';
+import { evaluateCanonicalRequestDay } from '../domain/requests/request-outcome-evaluator';
+import { buildRequestQualityFromLedger } from '../domain/requests/request-quality';
+import { buildRequestSetFingerprint } from '../domain/requests/request-set-fingerprint';
+import { replaceRequestWarningsFromLedger } from '../domain/requests/request-warning-projection';
+import type {
+  CanonicalRequestDay,
+  RequestResolutionProvenance,
+} from '../domain/requests/request-domain';
 import {
   JobGroup,
   MonthlySchedule,
@@ -112,6 +127,8 @@ export interface ScenarioGenerationOptions {
   yieldToUi?: () => Promise<void>;
   /** بودجهٔ نامزدها (پیش‌فرض ۳۶، سقف ۵۰۰). */
   candidateBudget?: number;
+  /** Canonical hard-degradation evidence from the source solver, when available. */
+  requestResolutionProvenance?: ReadonlyArray<RequestResolutionProvenance>;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +153,11 @@ interface ScenarioContext {
   year: number;
   month: number;
   personnelList: readonly Personnel[];
+  /** Canonical one-day compatibility projection for unchanged legality/verification APIs. */
   requests: readonly ShiftRequest[];
+  canonicalRequestDays: ReadonlyArray<CanonicalRequestDay>;
+  canonicalRequestMonth: CanonicalRequestMonthResult;
+  requestSetFingerprint: string;
   settings: SystemSettings;
   customHolidays: Readonly<Record<number, string>>;
   firstDayOfWeekIndex?: number;
@@ -144,6 +165,7 @@ interface ScenarioContext {
   targetJobGroup?: JobGroup;
   currentAssignments?: Record<string, Record<number, ShiftType>> | null;
   lockedRows: string[];
+  requestResolutionProvenance: ReadonlyArray<RequestResolutionProvenance>;
   totalDays: number;
   targetPersonnel: Personnel[];
   targetPersonnelIds: string[];
@@ -231,10 +253,22 @@ function verifyScenarioSchedule(
     context.customHolidays, context.firstDayOfWeekIndex, context.requests, context.monthlyDutyHours
   );
 
-  // همان معیار فیلترِ تاریخی، اما روی نمای ساخت‌یافته تا فراداده حفظ شود و
-  // مصرف‌کننده‌های پایین‌دستی (تعمیر بحرانی/طبقه‌بندی) متن را تجزیه نکنند.
-  const relevantStructuredWarnings = filterStructuredWarningsForScenarioGroup(
+  const requestOutcomeLedger = buildRequestOutcomeLedger({
+    canonicalMonth: context.canonicalRequestMonth,
+    assignments: reconciled,
+    provenance: context.requestResolutionProvenance,
+    requestSetFingerprint: context.requestSetFingerprint,
+  });
+  const requestQuality = buildRequestQualityFromLedger(requestOutcomeLedger);
+  // Generic verifier mismatches are replaced, not duplicated. The ledger is the
+  // only request-warning authority; all non-request warning severities stay intact.
+  const projectedWarnings = replaceRequestWarningsFromLedger(
     verification.structuredWarnings,
+    requestOutcomeLedger,
+    new Map(context.personnelList.map(person => [person.id, `${person.firstName} ${person.lastName}`]))
+  );
+  const relevantStructuredWarnings = filterStructuredWarningsForScenarioGroup(
+    projectedWarnings,
     context.personnelList,
     context.targetJobGroup,
     context.lockedIdSet
@@ -245,6 +279,10 @@ function verifyScenarioSchedule(
     shiftLeaders: verification.shiftLeaders,
     warnings: warningMessages(relevantStructuredWarnings),
     structuredWarnings: relevantStructuredWarnings,
+    requestResolutionProvenance: [...context.requestResolutionProvenance],
+    requestOutcomeLedger,
+    requestQuality,
+    requestSetFingerprint: requestOutcomeLedger.requestSetFingerprint,
   };
 }
 
@@ -256,6 +294,10 @@ function toMonthlySchedule(schedule: VerifiedSchedule): MonthlySchedule {
     assignments: schedule.assignments,
     shiftLeaders: schedule.shiftLeaders,
     warnings: schedule.warnings,
+    requestResolutionProvenance: schedule.requestResolutionProvenance,
+    requestOutcomeLedger: schedule.requestOutcomeLedger,
+    requestQuality: schedule.requestQuality,
+    requestSetFingerprint: schedule.requestSetFingerprint,
   };
 }
 
@@ -299,16 +341,37 @@ function evaluateScenario(
 
 function buildScenarioContext(options: ScenarioGenerationOptions): ScenarioContext {
   const { year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex,
-    monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows = [] } = options;
+    monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows = [],
+    requestResolutionProvenance = [] } = options;
   const calendar = generateJalaliMonthCalendar(year, month, customHolidays, firstDayOfWeekIndex);
+  const canonicalMonth = canonicalizeRequestDaysForMonth(requests, {
+    year,
+    month,
+    calendarDays: calendar,
+    personnel: personnelList,
+  });
+  const solverRequests = adaptCanonicalRequestMonthForSolver(canonicalMonth);
   const lockedIdSet = new Set(lockedRows);
   const targetPersonnel = personnelList.filter(person =>
     person.active
     && !lockedIdSet.has(person.id)
     && (!targetJobGroup || person.jobGroup === targetJobGroup));
   return {
-    year, month, personnelList, requests, settings, customHolidays, firstDayOfWeekIndex,
-    monthlyDutyHours, targetJobGroup, currentAssignments, lockedRows,
+    year,
+    month,
+    personnelList,
+    requests: solverRequests.compatibilityRequests,
+    canonicalRequestDays: solverRequests.requestDays,
+    canonicalRequestMonth: canonicalMonth,
+    requestSetFingerprint: buildRequestSetFingerprint(canonicalMonth),
+    settings,
+    customHolidays,
+    firstDayOfWeekIndex,
+    monthlyDutyHours,
+    targetJobGroup,
+    currentAssignments,
+    lockedRows,
+    requestResolutionProvenance,
     totalDays: calendar.length,
     targetPersonnel,
     targetPersonnelIds: targetPersonnel.map(person => person.id),
@@ -399,24 +462,12 @@ function buildDiversityCandidate(
 
 // ---- نامزد درخواست‌محور: تعویض برای بهبود رعایت درخواست پرسنل ----------------
 
-function shiftCovers(shift: ShiftType, preferred: string): boolean {
-  return shiftSatisfiesRequestedShift(shift, preferred);
-}
-
-function isRequestSatisfiedForDay(request: ShiftRequest, shift: ShiftType, day: number, context: ScenarioContext): boolean {
-  if (request.requestType === 'OFF') return shift === 'OFF' || shift.startsWith('L');
-  if (request.requestType === 'leave') return shift.startsWith('L');
-  if (request.requestType === 'shift') return !!request.preferredShift && shiftCovers(shift, request.preferredShift);
-  if (request.requestType === 'avoid_shift') return !request.preferredShift || !shiftCovers(shift, request.preferredShift);
-  if (request.requestType === 'pattern') {
-    const steps = request.patternSteps && request.patternSteps.length > 0
-      ? request.patternSteps[(day - 1) % request.patternSteps.length] : undefined;
-    if (!steps) return true;
-    if (steps === 'OFF') return shift === 'OFF';
-    if (steps.startsWith('L')) return shift.startsWith('L');
-    return shiftCovers(shift, steps);
-  }
-  return true;
+function candidateFullySatisfiesRequestDay(
+  requestDay: CanonicalRequestDay,
+  shift: ShiftType
+): boolean {
+  const outcome = evaluateCanonicalRequestDay(requestDay, shift);
+  return outcome.kind === 'EXACT' || outcome.kind === 'COMPATIBLE';
 }
 
 /**
@@ -427,29 +478,32 @@ function isRequestSatisfiedForDay(request: ShiftRequest, shift: ShiftType, day: 
 function buildRequestBiasedCandidate(
   baseline: MonthlySchedule, seed: number, context: ScenarioContext
 ): VerifiedSchedule | null {
-  if (context.freeTargetIds.length < 2 || context.requests.length === 0) return null;
-  const random = createSeededRandom(seed * 40503 + 7);
-  const eligibleRequests = context.requests.filter(r => context.freeTargetIds.includes(r.personnelId));
-  if (eligibleRequests.length === 0) return null;
-  const request = eligibleRequests[Math.floor(random() * eligibleRequests.length)];
-  const ownerId = request.personnelId;
+  if (context.freeTargetIds.length < 2) return null;
+  const ledger = baseline.requestOutcomeLedger;
+  if (!ledger) return null;
+  const priorityPool = prioritizeRequestDeficienciesForCandidate(
+    ledger,
+    new Set(context.freeTargetIds)
+  );
+  if (priorityPool.length === 0) return null;
 
-  // روزهای نقضِ درخواستِ صاحبِ درخواست.
-  const violationDays: number[] = [];
-  for (let day = 1; day <= context.totalDays; day += 1) {
-    const dayOfWeek = context.calendar[day - 1]?.dayOfWeek ?? 0;
-    if (!isDayInRequestScope(day, dayOfWeek, request)) continue;
-    const current = getAssignedShift(baseline, ownerId, day);
-    if (!isRequestSatisfiedForDay(request, current, day, context)) violationDays.push(day);
-  }
-  if (violationDays.length === 0) return null;
+  const random = createSeededRandom(seed * 40503 + 7);
+  const eligibleRequestIds = [...new Set(priorityPool.map(outcome => outcome.requestDay.requestId))];
+  const requestId = eligibleRequestIds[Math.floor(random() * eligibleRequestIds.length)];
+  const violatedRequestDays = priorityPool
+    .filter(outcome => outcome.requestDay.requestId === requestId)
+    .map(outcome => outcome.requestDay);
+  const ownerId = violatedRequestDays[0].personnelId;
+  const violationDays = violatedRequestDays.map(requestDay => requestDay.day);
+  const requestDayByDay = new Map(violatedRequestDays.map(requestDay => [requestDay.day, requestDay]));
 
   // همگروهیِ Q که شیفتش در روزهای نقض، درخواستِ P را برآورده می‌کند (و با P قابل‌تعویض است).
   const partnerId = context.freeTargetIds.find(id => {
     if (id === ownerId) return false;
     return violationDays.some(day => {
       const partnerShift = getAssignedShift(baseline, id, day);
-      return !partnerShift.startsWith('L') && isRequestSatisfiedForDay(request, partnerShift, day, context);
+      const requestDay = requestDayByDay.get(day)!;
+      return !partnerShift.startsWith('L') && candidateFullySatisfiesRequestDay(requestDay, partnerShift);
     });
   });
   if (!partnerId) return null;
